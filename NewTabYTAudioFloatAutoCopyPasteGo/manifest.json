@@ -1,0 +1,64 @@
+{
+  "manifest_version": 3,
+  "name": "Unified Toolkit",
+  "version": "1",
+  "description": "Auto Copy on select, Paste & Go (Alt+Z), Custom New Tab page, YT Music Minimal Audio, and YT Floating Search.",
+  "permissions": [
+    "scripting", 
+    "clipboardRead", 
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://suggestqueries.google.com/*"
+  ],
+  "background": {
+    "service_worker": "bg.js"
+  },
+  "chrome_url_overrides": {
+    "newtab": "index.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
+  "icons": {
+    "16": "Images/icon16.png",
+    "48": "Images/icon48.png",
+    "128": "Images/icon128.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "Images/icon16.png",
+      "48": "Images/icon48.png",
+      "128": "Images/icon128.png"
+    },
+    "default_title": "Unified Toolkit"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"]
+    },
+    {
+      "matches": ["*://music.youtube.com/*"],
+      "js": ["ytmusic.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"],
+      "css": ["yt-float.css"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"],
+      "js": ["yt-float.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "commands": {
+    "run": {
+      "suggested_key": {"default": "Alt+Z"},
+      "description": "Paste and go"
+    }
+  }
+}
