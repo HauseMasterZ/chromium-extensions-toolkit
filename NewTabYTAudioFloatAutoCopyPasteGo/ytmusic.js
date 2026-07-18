@@ -34,23 +34,24 @@ const style = document.createElement('style');
 style.textContent = '#song-video, canvas, ytmusic-cinematic-video-renderer {display:none!important} #song-image {display:block!important;opacity:1!important;z-index:99!important}';
 document.documentElement.appendChild(style);
 
-let initialRepeatSet = false;
+let lastList;
 
 document.addEventListener('loadeddata', () => {
-    if (!initialRepeatSet) {
-        let rep = document.querySelector('ytmusic-player-bar .repeat');
-        if (rep) {
-            if (!/(one|1)/i.test(rep.title + rep.getAttribute('aria-label')) && !/repeat[-_]one/i.test(rep.innerHTML)) {
-                rep.click();
-                rep.click();
-            }
-            initialRepeatSet = true; 
-        }
-    }
-    
+    // 1. Always update background image
     setTimeout(() => {
-        let arts = navigator.mediaSession?.metadata?.artwork;
-        let bg = arts?.find(a => a.sizes?.includes('512'))?.src || arts?.at(1)?.src || arts?.at(0)?.src;
+        let art = navigator.mediaSession?.metadata?.artwork;
+        let bg = art?.at(-1)?.src || art?.at(0)?.src;
         if (bg) document.getElementById('song-image').style.background = `url('${bg}') center/contain no-repeat #000`;
     }, 150);
+
+    // 2. Repeat logic
+    let list = new URLSearchParams(location.search).get('list');
+    if (!list || list === lastList) return; // Ignores URL flickers and same-playlist tracks
+    lastList = list;
+
+    let rep = document.querySelector('.repeat');
+    if (rep && !rep.title.includes('one')) {
+        rep.click();
+        if (!rep.title.includes('one')) setTimeout(() => rep.click(), 50);
+    }
 }, true);
