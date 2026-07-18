@@ -10,3 +10,9 @@ Bundles
 
 Into single bundle
 
+
+# INSTALLATION
+- Download zip by using [this link](https://github.com/HauseMasterZ/paste-go/archive/refs/heads/main.zip)
+- Extract zip to any folder
+- Enable Developer mode in extension setting at ```chrome://extensions```
+- Select load Unpacked Extension and select the extracted folder.
