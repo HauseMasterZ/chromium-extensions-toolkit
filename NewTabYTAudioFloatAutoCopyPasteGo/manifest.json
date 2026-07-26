@@ -6,7 +6,8 @@
   "permissions": [
     "scripting", 
     "clipboardRead", 
-    "activeTab"
+    "activeTab",
+    "contextMenus"
   ],
   "host_permissions": [
     "https://suggestqueries.google.com/*"
@@ -59,6 +60,10 @@
     "run": {
       "suggested_key": {"default": "Alt+Z"},
       "description": "Paste and go"
+    },
+    "run_yt": {
+      "suggested_key": {"default": "Alt+X"},
+      "description": "Paste and search YouTube"
     }
   }
 }
