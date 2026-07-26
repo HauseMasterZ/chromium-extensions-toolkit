@@ -64,6 +64,10 @@
     "run_yt": {
       "suggested_key": {"default": "Alt+X"},
       "description": "Paste and search YouTube"
+    },
+    "run_incognito": {
+      "suggested_key": {"default": "Alt+A"},
+      "description": "Paste and search in Incognito"
     }
   }
 }

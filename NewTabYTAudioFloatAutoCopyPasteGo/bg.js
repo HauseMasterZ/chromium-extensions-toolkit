@@ -1,5 +1,5 @@
 chrome.commands.onCommand.addListener(async c => {
-  if (c !== 'run' && c !== 'run_yt') return;
+  if (c !== 'run' && c !== 'run_yt' && c !== 'run_incognito') return;
   let [{ id }] = await chrome.tabs.query({ active: true, currentWindow: true });
   try {
     let [{ result }] = await chrome.scripting.executeScript({ target: { tabId: id }, func: () => navigator.clipboard.readText() });
@@ -8,6 +8,8 @@ chrome.commands.onCommand.addListener(async c => {
         chrome.tabs.create({ url: /^https?:\/\//i.test(result) ? result : `https://google.com/search?q=${encodeURIComponent(result)}` });
       } else if (c === 'run_yt') {
         chrome.tabs.create({ url: `https://www.youtube.com/results?search_query=${encodeURIComponent(result)}` });
+      } else if (c === 'run_incognito') {
+        chrome.windows.create({ url: /^https?:\/\//i.test(result) ? result : `https://google.com/search?q=${encodeURIComponent(result)}`, incognito: true });
       }
     }
   } catch {}
