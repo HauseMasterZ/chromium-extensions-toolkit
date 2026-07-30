@@ -12,11 +12,36 @@ document.getElementById('link-r').addEventListener('click', () => openTabs(['htt
 const timeEl = document.getElementById('time');
 const weatherEl = document.getElementById('weather');
 
-setInterval(() => {
+function timeToWords(hours, minutes) {
+    const nums = ["", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"];
+    const tens = ["", "", "twenty", "thirty", "forty", "fifty"];
+
+    function numToWord(n) {
+        if (n < 20) return nums[n];
+        return tens[Math.floor(n / 10)] + (n % 10 !== 0 ? " " + nums[n % 10] : "");
+    }
+
+    let h = hours % 12;
+    if (h === 0) h = 12;
+    
+    let hourStr = nums[h];
+    
+    if (minutes === 0) {
+        return `It's ${hourStr} o'clock`;
+    } else if (minutes < 10) {
+        return `It's ${hourStr} o' ${nums[minutes]}`;
+    } else {
+        return `It's ${hourStr} ${numToWord(minutes)}`;
+    }
+}
+
+function updateTime() {
     const now = new Date();
-    timeEl.textContent = now.toLocaleTimeString('en-US', { hour12: false });
-}, 1000);
-timeEl.textContent = new Date().toLocaleTimeString('en-US', { hour12: false });
+    timeEl.textContent = timeToWords(now.getHours(), now.getMinutes());
+}
+
+setInterval(updateTime, 1000);
+updateTime();
 
 async function fetchWeather() {
     try {
