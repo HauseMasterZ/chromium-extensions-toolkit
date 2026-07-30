@@ -5,7 +5,14 @@
     <title>New Tab</title>
     <link rel="icon" href="Images/icon16.png" sizes="16x16">
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; font-family: Arial, sans-serif; }
+        @font-face {
+            font-family: 'Open Sans';
+            font-style: normal;
+            font-weight: 400 600;
+            font-display: swap;
+            src: url('Fonts/OpenSans.woff2') format('woff2');
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Open Sans', sans-serif; }
         body { background: #000; color: #fff; height: 100vh; overflow: hidden; }
         .links { position: absolute; top: 20px; display: flex; gap: 11px; }
         .left { left: 10px; } .right { right: 10px; gap: 11px }
