@@ -4,8 +4,11 @@
     <meta charset="UTF-8">
     <title>New Tab</title>
     <link rel="icon" href="Images/icon16.png" sizes="16x16">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600&display=swap" rel="stylesheet">
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; font-family: Arial, sans-serif; }
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Open Sans', sans-serif; }
         body { background: #000; color: #fff; height: 100vh; overflow: hidden; }
         .links { position: absolute; top: 20px; display: flex; gap: 11px; }
         .left { left: 10px; } .right { right: 10px; }
@@ -17,6 +20,9 @@
         .search-container input { width: 100%; background: transparent; border: none; color: #fff; font-size: 16px; outline: none; }
         .search-container input::placeholder { color: rgba(255, 255, 255, 0.5); }
         .search-icon { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); opacity: 0.6; pointer-events: none; }
+        .info-panel { margin-top: 25px; text-align: center; opacity: 0.9; color: #00e5ff; }
+        #time { font-size: 32px; font-weight: 600; margin-bottom: 5px; letter-spacing: 2px; }
+        #weather { font-size: 15px; font-weight: 400; }
     </style>
 </head>
 <body>
@@ -24,7 +30,7 @@
         <a id="link-l">L</a> <a id="link-m">M</a> <a id="link-r">R</a>
     </div>
     <div class="links right">
-        <a href="https://music.youtube.com/playlist?list=PLK5tc6FSo175xc8zNBMrUZJIY9Q_K9I4w">YTMusic</a>
+        <a href="https://hausemasterz.github.io/youtube/">Music</a>
         <a href="https://app.notesnook.com/notes">Notesnook</a>
         <a href="https://v3-hub.atk.store/">ATK</a>
         <a href="https://www.mchose.com.cn/#/connectDevice">Mchose</a>
@@ -36,6 +42,10 @@
             <input type="text" name="q" placeholder="Search..." autocomplete="off">
             <span class="search-icon"><img src="Images/search.svg" alt="Search"></span>
         </form>
+        <div class="info-panel" id="info-panel">
+            <div id="time"></div>
+            <div id="weather">Loading weather...</div>
+        </div>
     </div>
     <script src="script.js"></script>
 </body>
