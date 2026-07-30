@@ -62,6 +62,8 @@ async function fetchWeather() {
         return;
     }
 
+    weatherEl.textContent = 'Loading weather...';
+
     try {
         const res = await fetch('https://api.open-meteo.com/v1/forecast?latitude=17.3850&longitude=78.4867&current=temperature_2m,wind_speed_10m&hourly=precipitation_probability&timezone=auto&forecast_days=1');
         const data = await res.json();
