@@ -30,12 +30,12 @@ function timeToWords(hours, minutes) {
     if (minutes === 0) {
         minuteStr = "O'clock";
     } else if (minutes < 10) {
-        minuteStr = `O' ${nums[minutes]}`;
+        minuteStr = `Oh ${nums[minutes]}`;
     } else {
         minuteStr = numToWord(minutes);
     }
     
-    return `<div class="time-its">It's</div><div class="time-hour">${hourStr}</div><div class="time-minute">${minuteStr}</div>`;
+    return `<span class="time-its">It's</span> <span class="time-hour">${hourStr}</span> <span class="time-minute">${minuteStr}</span>`;
 }
 
 function updateTime() {
