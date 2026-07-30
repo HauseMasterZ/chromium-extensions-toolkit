@@ -13,8 +13,8 @@ const timeEl = document.getElementById('time');
 const weatherEl = document.getElementById('weather');
 
 function timeToWords(hours, minutes) {
-    const nums = ["", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"];
-    const tens = ["", "", "twenty", "thirty", "forty", "fifty"];
+    const nums = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+    const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty"];
 
     function numToWord(n) {
         if (n < 20) return nums[n];
@@ -26,18 +26,21 @@ function timeToWords(hours, minutes) {
     
     let hourStr = nums[h];
     
+    let minuteStr = "";
     if (minutes === 0) {
-        return `It's ${hourStr} o'clock`;
+        minuteStr = "O'clock";
     } else if (minutes < 10) {
-        return `It's ${hourStr} o' ${nums[minutes]}`;
+        minuteStr = `O' ${nums[minutes]}`;
     } else {
-        return `It's ${hourStr} ${numToWord(minutes)}`;
+        minuteStr = numToWord(minutes);
     }
+    
+    return `<div class="time-its">It's</div><div class="time-hour">${hourStr}</div><div class="time-minute">${minuteStr}</div>`;
 }
 
 function updateTime() {
     const now = new Date();
-    timeEl.textContent = timeToWords(now.getHours(), now.getMinutes());
+    timeEl.innerHTML = timeToWords(now.getHours(), now.getMinutes());
 }
 
 setInterval(updateTime, 1000);
