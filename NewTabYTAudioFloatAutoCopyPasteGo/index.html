@@ -12,12 +12,12 @@
         a { color: red; text-decoration: none; font-size: 17px; opacity: 0.8; cursor: pointer; }
         a:hover { opacity: 1; } a:active { color: blue; }
         .center { height: 80vh; display: flex; flex-direction: column; justify-content: center; align-items: center; }
-        .logo { max-width: 500px; width: 80%; margin-bottom: 10px; }
+        .logo { max-width: 500px; width: 80%; margin-bottom: 10px; aspect-ratio: 16 / 9; object-fit: contain; }
         .search-container { position: relative; width: 50rem; max-width: 80%; }
         .search-container input { width: 100%; background: transparent; border: none; color: #fff; font-size: 16px; outline: none; }
         .search-container input::placeholder { color: rgba(255, 255, 255, 0.5); }
         .search-icon { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); opacity: 0.6; pointer-events: none; }
-        .info-panel { margin-top: 35px; text-align: center; opacity: 0.9; }
+        .info-panel { margin-top: 35px; text-align: center; opacity: 0.9; min-height: 70px; }
         #time { font-size: 38px; font-weight: 400; margin-bottom: 12px; word-spacing: -2px; }
         .time-its { color: #ff3333; font-weight: 600; }
         .time-hour, .time-minute { color: #fff; }
