@@ -5,22 +5,110 @@
     <title>New Tab</title>
     <link rel="icon" href="Images/icon16.png" sizes="16x16">
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; font-family: Arial, Helvetica, sans-serif; }
-        body { background-color: #000; color: #fff; height: 100vh; overflow: hidden; }
-        .top-left-links { position: absolute; top: 20px; left: 10px; display: flex; gap: 11px; }
-        .top-left-links a { color: red; text-decoration: none; font-size: 17px; opacity: 0.8; cursor: pointer; }
-        .top-left-links a:active { color: blue; }
-        .top-left-links a:hover { opacity: 1; }
-        .top-links { position: absolute; top: 20px; right: 10px; display: flex; gap: 11px; }
-        .top-links a { color: red; text-decoration: none; font-size: 17px; opacity: 0.8; }
-        .top-links a:active { color: blue; }
-        .top-links a:hover { opacity: 1; }
-        .center { height: 80vh; display: flex; flex-direction: column; justify-content: center; align-items: center; }
-        .logo { max-width: 500px; width: 80%; margin-bottom: 10px; }
-        .search-container { position: relative; width: 50rem; max-width: 80%; }
-        .search-container input { width: 100%; background: transparent; border: 0px solid rgba(255, 255, 255, 0.4); color: #fff; font-size: 16px; outline: none; }
-        .search-container input::placeholder { color: rgba(255, 255, 255, 0.5); }
-        .search-icon { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); font-size: 16px; opacity: 0.6; pointer-events: none; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: Arial, Helvetica, sans-serif;
+        }
+
+        body {
+            background-color: #000;
+            color: #fff;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .top-left-links {
+            position: absolute;
+            top: 20px;
+            left: 10px;
+            display: flex;
+            gap: 11px;
+        }
+
+        .top-left-links a {
+            color: red;
+            text-decoration: none;
+            font-size: 17px;
+            opacity: 0.8;
+            cursor: pointer;
+        }
+
+        .top-left-links a:active {
+            color: blue;
+        }
+
+        .top-left-links a:hover {
+            opacity: 1;
+        }
+
+        .top-links {
+            position: absolute;
+            top: 20px;
+            right: 10px;
+            display: flex;
+            gap: 11px;
+        }
+
+        .top-links a {
+            color: red;
+            text-decoration: none;
+            font-size: 17px;
+            opacity: 0.8;
+        }
+
+        .top-links a:active {
+            color: blue;
+        }
+
+        .top-links a:hover {
+            opacity: 1;
+        }
+
+        .center {
+            height: 80vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .logo {
+            max-width: 500px;
+            width: 80%;
+            margin-bottom: 10px;
+        }
+
+        .search-container {
+            position: relative;
+            width: 50rem;
+            max-width: 80%;
+        }
+
+        .search-container input {
+            width: 100%;
+            background: transparent;
+            border: 0px solid rgba(255, 255, 255, 0.4);
+            color: #fff;
+            font-size: 16px;
+            outline: none;
+        }
+
+        .search-container input::placeholder {
+            color: rgba(255, 255, 255, 0.5);
+        }
+
+        .search-icon {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 16px;
+            opacity: 0.6;
+            pointer-events: none;
+        }
+
         .info-panel { margin-top: 35px; text-align: center; opacity: 0.9; }
         #time { font-size: 38px; font-weight: 400; margin-bottom: 12px; word-spacing: -2px; }
         .time-its { color: #ff3333; font-weight: 600; }
@@ -29,6 +117,7 @@
     </style>
 </head>
 <body>
+
     <div class="top-left-links">
         <a href="#" id="link-l">L</a>
         <a href="#" id="link-m">M</a>
@@ -42,17 +131,33 @@
         <a href="https://www.mchose.com.cn/#/connectDevice">Mchose</a>
         <a href="https://youtube.com">YouTube</a>
     </div>
+
     <div class="center">
-        <img class="logo" src="Images/rogreflect.jpg" alt="Logo">
+        <img 
+            class="logo" 
+            src="Images/rogreflect.jpg" 
+            alt="Logo"
+        >
+
         <form class="search-container" action="https://www.google.com/search" method="GET">
-            <input type="text" name="q" placeholder="Search..." autocomplete="off">
-            <span class="search-icon"><img src="Images/search.svg" alt="Search"></span>
+            <input 
+                type="text" 
+                name="q" 
+                placeholder="Search..." 
+                autocomplete="off"
+            >
+            <span class="search-icon">
+                <img class="search-logo" src="Images/search.svg" alt="Search">
+            </span>
         </form>
+
         <div class="info-panel" id="info-panel">
             <div id="time"></div>
             <div id="weather"></div>
         </div>
     </div>
+
     <script src="script.js"></script>
+
 </body>
 </html>
