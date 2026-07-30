@@ -41,12 +41,27 @@ function timeToWords(hours, minutes) {
 function updateTime() {
     const now = new Date();
     timeEl.innerHTML = timeToWords(now.getHours(), now.getMinutes());
+    
+    // Optimize: Schedule next update exactly when the minute changes instead of every second
+    const msUntilNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
+    setTimeout(updateTime, msUntilNextMinute);
 }
-
-setInterval(updateTime, 1000);
 updateTime();
 
 async function fetchWeather() {
+    const cacheKey = 'weatherCache';
+    const cacheTimeKey = 'weatherCacheTime';
+    const now = Date.now();
+    
+    // Optimize: Check if we have weather data from the last 30 minutes to prevent API spam
+    const cachedData = localStorage.getItem(cacheKey);
+    const cachedTime = localStorage.getItem(cacheTimeKey);
+    
+    if (cachedData && cachedTime && (now - parseInt(cachedTime)) < 30 * 60 * 1000) {
+        weatherEl.innerHTML = cachedData;
+        return;
+    }
+
     try {
         const res = await fetch('https://api.open-meteo.com/v1/forecast?latitude=17.3850&longitude=78.4867&current=temperature_2m,wind_speed_10m&hourly=precipitation_probability&timezone=auto&forecast_days=1');
         const data = await res.json();
@@ -56,10 +71,17 @@ async function fetchWeather() {
         const hourIndex = new Date().getHours();
         const rain = data.hourly.precipitation_probability[hourIndex];
         
-        weatherEl.innerHTML = `${temp}°C &nbsp;|&nbsp; 🌧️ ${rain}% &nbsp;|&nbsp; 💨 ${wind} km/h`;
+        const weatherString = `${temp}°C &nbsp;|&nbsp; Rain ${rain}% &nbsp;|&nbsp; Wind ${wind} km/h`;
+        weatherEl.innerHTML = weatherString;
+        
+        localStorage.setItem(cacheKey, weatherString);
+        localStorage.setItem(cacheTimeKey, now.toString());
     } catch (e) {
-        weatherEl.textContent = 'Weather unavailable';
+        if (cachedData) {
+            weatherEl.innerHTML = cachedData;
+        } else {
+            weatherEl.textContent = 'Weather unavailable';
+        }
     }
 }
 fetchWeather();
-setInterval(fetchWeather, 30 * 60 * 1000);
