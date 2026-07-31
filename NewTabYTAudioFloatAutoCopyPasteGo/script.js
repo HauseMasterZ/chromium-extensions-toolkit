@@ -28,7 +28,7 @@ function timeToWords(hours, minutes) {
     
     let minuteStr = "";
     if (minutes === 0) {
-        minuteStr = "O'clock";
+        minuteStr = "Oh clock";
     } else if (minutes < 10) {
         minuteStr = `Oh ${nums[minutes]}`;
     } else {

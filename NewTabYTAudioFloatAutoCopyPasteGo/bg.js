@@ -4,6 +4,7 @@ chrome.commands.onCommand.addListener(async c => {
   try {
     let [{ result }] = await chrome.scripting.executeScript({ target: { tabId: id }, func: () => navigator.clipboard.readText() });
     if (result) {
+      result = result.trim();
       if (c === 'run') {
         chrome.tabs.create({ url: /^https?:\/\//i.test(result) ? result : `https://google.com/search?q=${encodeURIComponent(result)}` });
       } else if (c === 'run_yt') {
