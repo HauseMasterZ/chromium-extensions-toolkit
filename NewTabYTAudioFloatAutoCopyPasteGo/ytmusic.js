@@ -31,7 +31,7 @@ window.fetch = async (req, opts) => {
 };
 
 const style = document.createElement('style');
-style.textContent = '#song-video, canvas, ytmusic-cinematic-video-renderer {display:none!important} #song-image {display:block!important;opacity:1!important;z-index:99!important}';
+style.textContent = '#song-video, canvas, ytmusic-cinematic-video-renderer {display:none!important} #song-image {display:block!important;opacity:1!important;z-index:99!important} ytmusic-player-bar img, ytmusic-player-bar .thumbnail-image-wrapper { border-radius: 50% !important; padding: 3px !important; box-sizing: border-box !important; object-fit: cover !important; }';
 document.documentElement.appendChild(style);
 
 let lastList;
