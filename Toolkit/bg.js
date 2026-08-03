@@ -1,16 +1,40 @@
 chrome.commands.onCommand.addListener(async c => {
+  if (c === 'duplicate_tab') {
+    let [{ id }] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (id) chrome.tabs.duplicate(id);
+    return;
+  }
+  
   if (c !== 'run' && c !== 'run_yt' && c !== 'run_incognito') return;
-  let [{ id }] = await chrome.tabs.query({ active: true, currentWindow: true });
+  let [{ id, url }] = await chrome.tabs.query({ active: true, currentWindow: true });
   try {
-    let [{ result }] = await chrome.scripting.executeScript({ target: { tabId: id }, func: () => navigator.clipboard.readText() });
+    let result = null;
+    let isExtensionPage = false;
+
+    try {
+      let res = await chrome.scripting.executeScript({ target: { tabId: id }, func: () => navigator.clipboard.readText() });
+      result = res && res[0] ? res[0].result : null;
+    } catch (e) {
+      isExtensionPage = true;
+      try {
+        result = await chrome.tabs.sendMessage(id, { action: 'read_clipboard' });
+      } catch (e2) {}
+    }
+
     if (result) {
       result = result.trim();
+      let isUrl = /^https?:\/\//i.test(result);
+      
       if (c === 'run') {
-        chrome.tabs.create({ url: /^https?:\/\//i.test(result) ? result : `https://google.com/search?q=${encodeURIComponent(result)}` });
+        let finalUrl = isUrl ? result : `https://google.com/search?q=${encodeURIComponent(result)}`;
+        if (isExtensionPage) chrome.tabs.update(id, { url: finalUrl });
+        else chrome.tabs.create({ url: finalUrl });
       } else if (c === 'run_yt') {
-        chrome.tabs.create({ url: `https://www.youtube.com/results?search_query=${encodeURIComponent(result)}` });
+        let finalUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(result)}`;
+        if (isExtensionPage) chrome.tabs.update(id, { url: finalUrl });
+        else chrome.tabs.create({ url: finalUrl });
       } else if (c === 'run_incognito') {
-        chrome.windows.create({ url: /^https?:\/\//i.test(result) ? result : `https://google.com/search?q=${encodeURIComponent(result)}`, incognito: true });
+        chrome.windows.create({ url: isUrl ? result : `https://google.com/search?q=${encodeURIComponent(result)}`, incognito: true });
       }
     }
   } catch {}

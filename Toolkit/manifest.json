@@ -68,6 +68,10 @@
     "run_incognito": {
       "suggested_key": {"default": "Alt+A"},
       "description": "Paste and search in Incognito"
+    },
+    "duplicate_tab": {
+      "suggested_key": {"default": "Ctrl+Shift+K"},
+      "description": "Duplicate current tab"
     }
   }
 }

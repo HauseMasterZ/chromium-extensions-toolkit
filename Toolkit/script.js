@@ -87,3 +87,28 @@ async function fetchWeather() {
     }
 }
 fetchWeather();
+
+const logoEl = document.querySelector('.logo');
+if (logoEl && weatherEl) {
+    logoEl.addEventListener('click', () => {
+        weatherEl.style.visibility = weatherEl.style.visibility === 'hidden' ? 'visible' : 'hidden';
+    });
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg.action === 'read_clipboard') {
+        let text = '';
+        try {
+            let textarea = document.createElement('textarea');
+            document.body.appendChild(textarea);
+            textarea.focus();
+            document.execCommand('paste');
+            text = textarea.value;
+            document.body.removeChild(textarea);
+        } catch (e) {
+            console.error('Clipboard paste failed', e);
+        }
+        sendResponse(text);
+        return false;
+    }
+});
