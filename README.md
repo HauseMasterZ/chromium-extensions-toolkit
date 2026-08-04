@@ -7,6 +7,8 @@ Bundles
 - [CopyOnSelect](https://github.com/HauseMasterZ/copy-on-select)
 - [YTMusicAudio](https://github.com/HauseMasterZ/yt-music-audio)
 - [PasteGo](https://github.com/HauseMasterZ/paste-go)
+- [Whatsapp Wide Layout](https://github.com/HauseMasterZ/WhatsApp-Web-Style-Tweaks)
+- [Whatsapp Virtual Cam](https://github.com/HauseMasterZ/whatsapp-spoof-video)
 
 Into single bundle
 
