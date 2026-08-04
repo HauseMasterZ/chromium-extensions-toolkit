@@ -12,7 +12,9 @@
   ],
   "host_permissions": [
     "https://suggestqueries.google.com/*",
-    "*://music.youtube.com/*"
+    "*://music.youtube.com/*",
+    "https://www.youtube.com/*",
+    "https://m.youtube.com/*"
   ],
   "background": {
     "service_worker": "bg-service-worker.js"
@@ -41,16 +43,6 @@
     {
       "matches": ["<all_urls>"],
       "js": ["global-auto-copy.js"]
-    },
-    {
-      "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"],
-      "css": ["yt-float-search.css"],
-      "run_at": "document_start"
-    },
-    {
-      "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"],
-      "js": ["yt-float-search.js"],
-      "run_at": "document_end"
     },
     {
       "matches": ["*://web.whatsapp.com/*", "https://web.whatsapp.com/*"],

@@ -94,6 +94,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     chrome.storage.local.set({ [key]: e.target.checked });
                     if (key === 'featureYtMusic') {
                         chrome.runtime.sendMessage({ action: 'updateYtMusicScript', enabled: e.target.checked });
+                    } else if (key === 'featureYtFloatSearch') {
+                        chrome.runtime.sendMessage({ action: 'updateYtFloatSearchScript', enabled: e.target.checked });
                     }
                 });
             }

@@ -50,8 +50,9 @@ chrome.runtime.onInstalled.addListener(() => {
     contexts: ["image"]
   });
 
-  chrome.storage.local.get({ featureYtMusic: true }, (res) => {
+  chrome.storage.local.get({ featureYtMusic: true, featureYtFloatSearch: true }, (res) => {
     updateYtMusicScript(res.featureYtMusic);
+    updateYtFloatSearchScript(res.featureYtFloatSearch);
   });
 });
 
@@ -81,8 +82,28 @@ const updateYtMusicScript = async (enabled) => {
   }
 };
 
+const updateYtFloatSearchScript = async (enabled) => {
+  try {
+    await chrome.scripting.unregisterContentScripts({ ids: ["yt-float-search"] });
+  } catch (e) {}
+
+  if (enabled) {
+    try {
+      await chrome.scripting.registerContentScripts([{
+        id: "yt-float-search",
+        matches: ["https://www.youtube.com/*", "https://m.youtube.com/*"],
+        js: ["yt-float-search.js"],
+        css: ["yt-float-search.css"],
+        runAt: "document_start"
+      }]);
+    } catch (e) {}
+  }
+};
+
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.action === 'updateYtMusicScript') {
     updateYtMusicScript(msg.enabled);
+  } else if (msg.action === 'updateYtFloatSearchScript') {
+    updateYtFloatSearchScript(msg.enabled);
   }
 });

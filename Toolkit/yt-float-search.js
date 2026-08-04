@@ -190,9 +190,6 @@ const inject = () => {
   }
 };
 
-chrome.storage.local.get({ featureYtFloatSearch: true }, (res) => {
-  if (!res.featureYtFloatSearch) return;
   'requestIdleCallback' in window
     ? requestIdleCallback(inject, { timeout: 3000 })
     : window.addEventListener('load', inject, { once: true });
-});
