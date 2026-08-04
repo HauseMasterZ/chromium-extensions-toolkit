@@ -1,3 +1,6 @@
+chrome.storage.local.get({ featureWhatsapp: true }, (res) => {
+if (!res.featureWhatsapp) return;
+
 (function () {
   const STYLE_ID = 'wa-wide-layout-v7';
 
@@ -213,6 +216,11 @@
       [data-testid="search-container"] {
         background-color: #000000 !important;
       }
+
+      /* 19. Custom Margin Override */
+      .xevlxbw.x9f619.x1n2onr6.x5yr21d.x17dzmu4.x1i1dayz.x2ipvbc.xjdofhw.x78zum5.xdt5ytf.x570efc.x18dvir5.xxljpkc.x6ikm8r.x10wlt62.x1oy9qf3.xck4lzl.x1gluznb.xahwd2o.x10fiusa.x1a0bplq.xc995h1.xpilrb4.x1t7ytsu.x1vb5itz {
+        margin-left: 0px !important;
+      }
     `;
     document.head.appendChild(el);
   }
@@ -242,3 +250,4 @@
     document.addEventListener('DOMContentLoaded', waitForApp);
   }
 })();
+});

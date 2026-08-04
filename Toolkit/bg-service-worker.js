@@ -1,4 +1,7 @@
 chrome.commands.onCommand.addListener(async c => {
+  const { featurePasteGo = true } = await chrome.storage.local.get('featurePasteGo');
+  if (!featurePasteGo) return;
+
   if (c === 'duplicate_tab') {
     let [{ id }] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (id) chrome.tabs.duplicate(id);
@@ -46,11 +49,40 @@ chrome.runtime.onInstalled.addListener(() => {
     title: "Translate via Google Lens",
     contexts: ["image"]
   });
+
+  chrome.storage.local.get({ featureYtMusic: true }, (res) => {
+    updateYtMusicScript(res.featureYtMusic);
+  });
 });
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === "translate_image" && info.srcUrl) {
     let url = `https://lens.google.com/uploadbyurl?url=${encodeURIComponent(info.srcUrl)}`;
     chrome.tabs.create({ url: url });
+  }
+});
+
+// Manage dynamic content scripts
+const updateYtMusicScript = async (enabled) => {
+  try {
+    await chrome.scripting.unregisterContentScripts({ ids: ["yt-music-audio"] });
+  } catch (e) {}
+
+  if (enabled) {
+    try {
+      await chrome.scripting.registerContentScripts([{
+        id: "yt-music-audio",
+        matches: ["*://music.youtube.com/*"],
+        js: ["yt-music-audio.js"],
+        runAt: "document_start",
+        world: "MAIN"
+      }]);
+    } catch (e) {}
+  }
+};
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.action === 'updateYtMusicScript') {
+    updateYtMusicScript(msg.enabled);
   }
 });

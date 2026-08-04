@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tab Volume Control</title>
+    <style>
+        body {
+            width: 250px;
+            padding: 15px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .slider-container {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 16px;
+            width: 16px;
+            border-radius: 50%;
+            background: #ff3333;
+            cursor: pointer;
+            margin-top: -6px;
+        }
+        input[type="range"]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: #444;
+            border-radius: 2px;
+        }
+        .value-display {
+            text-align: center;
+            font-size: 24px;
+            font-weight: bold;
+            color: #ff3333;
+        }
+        .divider {
+            height: 1px;
+            background-color: #333;
+            margin: 5px 0;
+        }
+        .toggle-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 13px;
+            transition: opacity 0.2s;
+        }
+        .toggle-row.disabled {
+            opacity: 0.3;
+            pointer-events: none;
+        }
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 34px;
+            height: 20px;
+        }
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .slider-round {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #444;
+            transition: .2s;
+            border-radius: 20px;
+        }
+        .slider-round:before {
+            position: absolute;
+            content: "";
+            height: 14px;
+            width: 14px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .2s;
+            border-radius: 50%;
+        }
+        input:checked + .slider-round {
+            background-color: #ff3333;
+        }
+        input:checked + .slider-round:before {
+            transform: translateX(14px);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <span>Tab Volume</span>
+    </div>
+    <div class="slider-container">
+        <div class="value-display" id="volumeValue">100%</div>
+        <input type="range" id="volumeSlider" min="0" max="100" value="100">
+    </div>
+
+    <div class="divider"></div>
+    <div class="header">
+        <span>Features</span>
+    </div>
+
+    <div class="toggle-row">
+        <span>Auto Copy on Select</span>
+        <label class="switch">
+            <input type="checkbox" id="toggleAutoCopy" checked>
+            <span class="slider-round"></span>
+        </label>
+    </div>
+    
+    <div class="toggle-row">
+        <span>YouTube Float Search</span>
+        <label class="switch">
+            <input type="checkbox" id="toggleYtFloatSearch" checked>
+            <span class="slider-round"></span>
+        </label>
+    </div>
+
+    <div class="toggle-row">
+        <span>YouTube Music Audio-Only</span>
+        <label class="switch">
+            <input type="checkbox" id="toggleYtMusic" checked>
+            <span class="slider-round"></span>
+        </label>
+    </div>
+
+    <div class="toggle-row">
+        <span>WhatsApp Tweaks</span>
+        <label class="switch">
+            <input type="checkbox" id="toggleWhatsapp" checked>
+            <span class="slider-round"></span>
+        </label>
+    </div>
+
+    <div class="toggle-row">
+        <span>Paste & Go Shortcuts</span>
+        <label class="switch">
+            <input type="checkbox" id="togglePasteGo" checked>
+            <span class="slider-round"></span>
+        </label>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>
