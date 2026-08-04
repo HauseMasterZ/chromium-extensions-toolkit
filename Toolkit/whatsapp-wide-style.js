@@ -147,6 +147,12 @@
         box-shadow: none !important;
       }
 
+      /* 7b. Hide Profile Photos in Group Chats */
+      [data-testid="group-chat-profile-picture"],
+      div:has(> [data-testid="group-chat-profile-picture"]) {
+        display: none !important;
+      }
+
       /* 8. Cap Message Bubble Width */
       [data-testid="msg-container"] {
         max-width: 50vw !important;
