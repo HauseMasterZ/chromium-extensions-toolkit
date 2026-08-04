@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Unified Toolkit",
   "version": "1",
-  "description": "Auto Copy on select, Paste & Go (Alt+Z), Custom New Tab page, YT Music Minimal Audio, and YT Floating Search.",
+  "description": "Auto Copy, Paste & Go, New Tab, YT Music Audio, YT Float Search, and WhatsApp Web Tweaks (Styling & Virtual Camera).",
   "permissions": [
     "scripting", 
     "clipboardRead", 
@@ -13,10 +13,10 @@
     "https://suggestqueries.google.com/*"
   ],
   "background": {
-    "service_worker": "bg.js"
+    "service_worker": "bg-service-worker.js"
   },
   "chrome_url_overrides": {
-    "newtab": "index.html"
+    "newtab": "newtab-page.html"
   },
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'"
@@ -37,23 +37,34 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"]
+      "js": ["global-auto-copy.js"]
     },
     {
       "matches": ["*://music.youtube.com/*"],
-      "js": ["ytmusic.js"],
+      "js": ["yt-music-audio.js"],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
       "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"],
-      "css": ["yt-float.css"],
+      "css": ["yt-float-search.css"],
       "run_at": "document_start"
     },
     {
       "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"],
-      "js": ["yt-float.js"],
+      "js": ["yt-float-search.js"],
       "run_at": "document_end"
+    },
+    {
+      "matches": ["*://web.whatsapp.com/*", "https://web.whatsapp.com/*"],
+      "js": ["whatsapp-virtual-camera.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["*://web.whatsapp.com/*", "https://web.whatsapp.com/*"],
+      "js": ["whatsapp-wide-style.js"],
+      "run_at": "document_idle"
     }
   ],
   "commands": {
