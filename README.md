@@ -8,7 +8,7 @@ Bundles
 - [NewTab](https://github.com/HauseMasterZ/chromium-newtab-extension)
 - [CopyOnSelect](https://github.com/HauseMasterZ/copy-on-select)
 - [YTMusicAudio](https://github.com/HauseMasterZ/yt-music-audio)
-- [PasteGo](https://github.com/HauseMasterZ/paste-go)
+- [PasteGo](https://github.com/HauseMasterZ/paste-go) Note: Change default shortcuts by going to ```chrome://extensions/shortcuts```
 - [Whatsapp Wide Layout](https://github.com/HauseMasterZ/WhatsApp-Web-Style-Tweaks)
 - [Whatsapp Virtual Cam](https://github.com/HauseMasterZ/whatsapp-spoof-video)
 - Bonus: Add per tab volume controls
