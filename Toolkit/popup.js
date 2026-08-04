@@ -50,6 +50,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         'toggleAutoCopy': 'featureAutoCopy',
         'toggleYtFloatSearch': 'featureYtFloatSearch',
         'toggleYtMusic': 'featureYtMusic',
+        'toggleNewTabPage': 'featureNewTabPage',
         'toggleWhatsapp': 'featureWhatsapp',
         'togglePasteGo': 'featurePasteGo'
     };
