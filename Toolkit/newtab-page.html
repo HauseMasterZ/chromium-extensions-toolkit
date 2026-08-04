@@ -1,15 +1,7 @@
 <!DOCTYPE html>
 <html lang="en" style="display: none;">
 <head>
-    <script>
-      chrome.storage.local.get({ featureNewTabPage: true }, (res) => {
-        if (!res.featureNewTabPage) {
-          chrome.tabs.update({ url: 'chrome://new-tab-page/' });
-        } else {
-          document.documentElement.style.display = '';
-        }
-      });
-    </script>
+    <script src="newtab-redirect.js"></script>
     <meta charset="UTF-8">
     <title>New Tab</title>
     <link rel="icon" href="Images/icon16.png?v=2" sizes="16x16">
