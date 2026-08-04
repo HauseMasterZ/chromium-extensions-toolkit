@@ -83,6 +83,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         featureAutoCopy: true,
         featureYtFloatSearch: true,
         featureYtMusic: true,
+        featureNewTabPage: true,
         featureWhatsapp: true,
         featurePasteGo: true
     }, (res) => {
