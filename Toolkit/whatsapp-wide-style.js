@@ -220,6 +220,50 @@
       .xevlxbw.x9f619.x1n2onr6.x5yr21d.x17dzmu4.x1i1dayz.x2ipvbc.xjdofhw.x78zum5.xdt5ytf.x570efc.x18dvir5.xxljpkc.x6ikm8r.x10wlt62.x1oy9qf3.xck4lzl.x1gluznb.xahwd2o.x10fiusa.x1a0bplq.xc995h1.xpilrb4.x1t7ytsu.x1vb5itz {
         margin-left: 0px !important;
       }
+
+      /* 20. Custom Draggable Sidebar Width */
+      :root {
+        --custom-sidebar-width: 400px;
+      }
+      .two > div:has(#side),
+      .three > div:has(#side),
+      [data-testid="drawer-left"] {
+        flex: 0 0 var(--custom-sidebar-width) !important;
+        max-width: var(--custom-sidebar-width) !important;
+        min-width: var(--custom-sidebar-width) !important;
+      }
+      #wa-custom-resizer {
+        position: fixed;
+        top: 0;
+        bottom: 0;
+        left: calc(var(--custom-sidebar-width) - 3px);
+        width: 6px;
+        cursor: ew-resize;
+        z-index: 999999;
+        background-color: transparent;
+      }
+      #wa-custom-resizer::after {
+        content: '';
+        position: absolute;
+        top: 50%;
+        left: 2px;
+        width: 3px;
+        height: 40px;
+        background-color: transparent;
+        border-radius: 4px;
+        transform: translateY(-50%);
+        transition: transform 0.1s, background-color 0.2s, height 0.2s;
+      }
+      #wa-custom-resizer:hover::after, #wa-custom-resizer.dragging::after {
+        background-color: #00a884;
+        height: 50px;
+        transform: translateY(-50%) scaleX(1.5);
+      }
+
+      /* 21. Remove Right Padding from Chat List Rows */
+      div.x78zum5.xdl72j9.xdt5ytf.x1iyjqo2.xl56j7k.xeuugli.x1n1b19v {
+        padding-right: 0 !important;
+      }
     `;
     document.head.appendChild(el);
   }
@@ -234,10 +278,54 @@
     }, 500);
   }
 
+  function setupResizer() {
+    if (document.getElementById('wa-custom-resizer')) return;
+
+    const savedWidth = localStorage.getItem('wa-custom-sidebar-width') || '400';
+    document.documentElement.style.setProperty('--custom-sidebar-width', savedWidth + 'px');
+
+    const resizer = document.createElement('div');
+    resizer.id = 'wa-custom-resizer';
+    document.body.appendChild(resizer);
+
+    let isDragging = false;
+
+    resizer.addEventListener('mousedown', (e) => {
+      isDragging = true;
+      resizer.classList.add('dragging');
+      document.body.style.cursor = 'ew-resize';
+      document.body.style.userSelect = 'none';
+      document.body.style.pointerEvents = 'none';
+      e.stopPropagation();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      let newWidth = e.clientX;
+      if (newWidth < 250) newWidth = 250;
+      if (newWidth > 1200) newWidth = 1200;
+      document.documentElement.style.setProperty('--custom-sidebar-width', newWidth + 'px');
+    }, { capture: true });
+
+    window.addEventListener('mouseup', () => {
+      if (isDragging) {
+        isDragging = false;
+        resizer.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        document.body.style.pointerEvents = '';
+        
+        const currentWidth = document.documentElement.style.getPropertyValue('--custom-sidebar-width').replace('px', '');
+        localStorage.setItem('wa-custom-sidebar-width', currentWidth);
+      }
+    }, { capture: true });
+  }
+
   function waitForApp() {
     if (document.querySelector('[data-testid="navbar-primary-section"]')) {
       injectStyles();
       setupResponsiveTracker();
+      setupResizer();
     } else {
       setTimeout(waitForApp, 500);
     }
