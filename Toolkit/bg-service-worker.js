@@ -50,9 +50,10 @@ chrome.runtime.onInstalled.addListener(() => {
     contexts: ["image"]
   });
 
-  chrome.storage.local.get({ featureYtMusic: true, featureYtFloatSearch: true }, (res) => {
+  chrome.storage.local.get({ featureYtMusic: true, featureYtFloatSearch: true, featureWhatsapp: true }, (res) => {
     updateYtMusicScript(res.featureYtMusic);
     updateYtFloatSearchScript(res.featureYtFloatSearch);
+    updateWhatsappScript(res.featureWhatsapp);
   });
 });
 
@@ -100,10 +101,38 @@ const updateYtFloatSearchScript = async (enabled) => {
   }
 };
 
+const updateWhatsappScript = async (enabled) => {
+  try {
+    await chrome.scripting.unregisterContentScripts({ ids: ["whatsapp-virtual-camera", "whatsapp-wide-style"] });
+  } catch (e) {}
+
+  if (enabled) {
+    try {
+      await chrome.scripting.registerContentScripts([
+        {
+          id: "whatsapp-virtual-camera",
+          matches: ["*://web.whatsapp.com/*", "https://web.whatsapp.com/*"],
+          js: ["whatsapp-virtual-camera.js"],
+          runAt: "document_start",
+          world: "MAIN"
+        },
+        {
+          id: "whatsapp-wide-style",
+          matches: ["*://web.whatsapp.com/*", "https://web.whatsapp.com/*"],
+          js: ["whatsapp-wide-style.js"],
+          runAt: "document_idle"
+        }
+      ]);
+    } catch (e) {}
+  }
+};
+
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.action === 'updateYtMusicScript') {
     updateYtMusicScript(msg.enabled);
   } else if (msg.action === 'updateYtFloatSearchScript') {
     updateYtFloatSearchScript(msg.enabled);
+  } else if (msg.action === 'updateWhatsappScript') {
+    updateWhatsappScript(msg.enabled);
   }
 });

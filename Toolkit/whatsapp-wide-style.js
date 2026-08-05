@@ -1,5 +1,3 @@
-chrome.storage.local.get({ featureWhatsapp: true }, (res) => {
-if (!res.featureWhatsapp) return;
 
 (function () {
   const STYLE_ID = 'wa-wide-layout-v7';
@@ -196,7 +194,8 @@ if (!res.featureWhatsapp) return;
 
       /* 16. Pitch Black Background for Specific Parent Div's Children */
       div.x9f619.x1n2onr6.x5yr21d.x17dzmu4.x1i1dayz.x2ipvbc.xjdofhw.x78zum5.xdt5ytf.x12xzxwr.x1plvlek.xryxfnj.x570efc.x18dvir5.xxljpkc.x18pi947.xck4lzl.x1gluznb.xahwd2o.x10fiusa.x1a0bplq.xc995h1 div,
-      .xs1q97v.xh8yej3.x5yr21d.x2b8uid.x67bb7w.x6s0dn4.xl56j7k.x78zum5.xdt5ytf div {
+      .xs1q97v.xh8yej3.x5yr21d.x2b8uid.x67bb7w.x6s0dn4.xl56j7k.x78zum5.xdt5ytf div,
+      .x78zum5.xdt5ytf.x5yr21d.x1o0tod.x6ikm8r.x10wlt62.x67bb7w.x10l6tqk.x13vifvy.xh8yej3.x1280gxy.xnpuxes.copyable-area div {
         background-color: #000000 !important;
       }
 
@@ -250,4 +249,3 @@ if (!res.featureWhatsapp) return;
     document.addEventListener('DOMContentLoaded', waitForApp);
   }
 })();
-});

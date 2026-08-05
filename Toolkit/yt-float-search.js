@@ -190,6 +190,14 @@ const inject = () => {
   }
 };
 
-  'requestIdleCallback' in window
-    ? requestIdleCallback(inject, { timeout: 3000 })
-    : window.addEventListener('load', inject, { once: true });
+  const init = () => {
+    'requestIdleCallback' in window
+      ? requestIdleCallback(inject, { timeout: 3000 })
+      : window.addEventListener('load', inject, { once: true });
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }

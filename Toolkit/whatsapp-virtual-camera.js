@@ -1,5 +1,3 @@
-chrome.storage.local.get({ featureWhatsapp: true }, (res) => {
-if (!res.featureWhatsapp) return;
 
 (function() {
     console.log("[WA Virtual Cam] Stable Build Active: 30 FPS Text Priority.");
@@ -124,4 +122,3 @@ if (!res.featureWhatsapp) return;
         return new MediaStream([correctedVideoTrack]);
     };
 })();
-});

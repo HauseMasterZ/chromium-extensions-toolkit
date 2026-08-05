@@ -98,6 +98,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                         chrome.runtime.sendMessage({ action: 'updateYtMusicScript', enabled: e.target.checked });
                     } else if (key === 'featureYtFloatSearch') {
                         chrome.runtime.sendMessage({ action: 'updateYtFloatSearchScript', enabled: e.target.checked });
+                    } else if (key === 'featureWhatsapp') {
+                        chrome.runtime.sendMessage({ action: 'updateWhatsappScript', enabled: e.target.checked });
                     }
                 });
             }
