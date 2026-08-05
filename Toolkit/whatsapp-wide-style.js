@@ -10,7 +10,8 @@
     
     el.textContent = `
       /* 1. Transform Nav Rail into an Invisible Anchor Point */
-      .two > header:has([data-testid="navbar-primary-section"]) {
+      .two > header:has([data-testid="navbar-primary-section"]),
+      .three > header:has([data-testid="navbar-primary-section"]) {
         position: absolute !important;
         left: 0 !important;
         top: 0 !important;
@@ -54,6 +55,7 @@
 
       /* 2. Force App Container to Full Width */
       #app .two,
+      #app .three,
       #app > div > div {
         width: 100% !important;
         max-width: 100% !important;
@@ -61,6 +63,7 @@
 
       /* 3. Strip Native Border from Chat List and Main Panel */
       .two > div:has(#side),
+      .three > div:has(#side),
       [data-testid^="drawer-"],
       #side,
       #main {
@@ -72,12 +75,14 @@
       }
       
       /* Hide the phantom absolute-positioned resizer handle that draws the hairline */
-      .two > header:has([data-testid="navbar-primary-section"]) + div {
+      .two > header:has([data-testid="navbar-primary-section"]) + div,
+      .three > header:has([data-testid="navbar-primary-section"]) + div {
         display: none !important;
       }
 
       /* 4. Expand Main Conversation Area and Strip Border */
       .two > div:has(#main),
+      .three > div:has(#main),
       [data-testid="intro-panel"] {
         flex: 1 1 auto !important;
         min-width: 0 !important;
@@ -92,26 +97,19 @@
 
       /* Ensure intermediate wrappers don't clip the left shift */
       .two > div:has(#main) > div,
+      .three > div:has(#main) > div,
       .two > div:has(#main) > div > div,
+      .three > div:has(#main) > div > div,
       #main {
         overflow: visible !important;
       }
 
       /* Destroy Flex Gaps in Main Layout */
-      .two > div {
+      .two > div,
+      .three > div {
         gap: 0 !important;
       }
 
-      /* 5. Collapse Right Info Drawer */
-      [data-testid="drawer-fullscreen"],
-      [data-testid="chat-info-drawer"],
-      div:has(> div > [data-testid="chat-info-drawer"]) {
-        width: 10px !important;
-        min-width: 10px !important;
-        max-width: 10px !important;
-        overflow: hidden !important;
-        flex: 0 0 10px !important;
-      }
 
       /* 6. Destroy Padding, Max-Width, and Borders on Main Scrollable Chat Body */
       [data-testid="conversation-panel-body"],
@@ -149,8 +147,8 @@
       }
 
       /* 7b. Hide Profile Photos in Group Chats */
-      [data-testid="group-chat-profile-picture"],
-      div:has(> [data-testid="group-chat-profile-picture"]) {
+      #main [data-testid="group-chat-profile-picture"],
+      #main div:has(> [data-testid="group-chat-profile-picture"]) {
         display: none !important;
       }
 
@@ -181,7 +179,9 @@
 
       /* Destroy phantom pseudo-element borders between panes */
       .two > div::after,
+      .three > div::after,
       .two > div::before,
+      .three > div::before,
       #side::after,
       #side::before {
         display: none !important;
@@ -193,9 +193,9 @@
       }
 
       /* 16. Pitch Black Background for Specific Parent Div's Children */
-      div.x9f619.x1n2onr6.x5yr21d.x17dzmu4.x1i1dayz.x2ipvbc.xjdofhw.x78zum5.xdt5ytf.x12xzxwr.x1plvlek.xryxfnj.x570efc.x18dvir5.xxljpkc.x18pi947.xck4lzl.x1gluznb.xahwd2o.x10fiusa.x1a0bplq.xc995h1 div,
-      .xs1q97v.xh8yej3.x5yr21d.x2b8uid.x67bb7w.x6s0dn4.xl56j7k.x78zum5.xdt5ytf div,
-      .x78zum5.xdt5ytf.x5yr21d.x1o0tod.x6ikm8r.x10wlt62.x67bb7w.x10l6tqk.x13vifvy.xh8yej3.x1280gxy.xnpuxes.copyable-area div {
+      div.x9f619.x1n2onr6.x5yr21d.x17dzmu4.x1i1dayz.x2ipvbc.xjdofhw.x78zum5.xdt5ytf.x12xzxwr.x1plvlek.xryxfnj.x570efc.x18dvir5.xxljpkc.x18pi947.xck4lzl.x1gluznb.xahwd2o.x10fiusa.x1a0bplq.xc995h1 > div,
+      .xs1q97v.xh8yej3.x5yr21d.x2b8uid.x67bb7w.x6s0dn4.xl56j7k.x78zum5.xdt5ytf > div,
+      .x78zum5.xdt5ytf.x5yr21d.x1o0tod.x6ikm8r.x10wlt62.x67bb7w.x10l6tqk.x13vifvy.xh8yej3.x1280gxy.xnpuxes.copyable-area > div {
         background-color: #000000 !important;
       }
 
@@ -208,7 +208,7 @@
       }
 
       /* 18. Force Pitch Black on all Main WhatsApp Containers */
-      body, #app, .two, #side, #main, header, footer, 
+      body, #app, .two, .three, #side, #main, header, footer, 
       [data-testid="conversation-panel-wrapper"],
       [data-testid="conversation-panel-messages"],
       [data-testid="chatlist-header"],
