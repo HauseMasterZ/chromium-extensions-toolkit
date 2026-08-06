@@ -4,10 +4,8 @@
     <script src="newtab-redirect.js"></script>
     <meta charset="UTF-8">
     <title>New Tab</title>
-    <link rel="icon" href="Images/icon16.png?v=2" sizes="16x16">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@100&display=swap" rel="stylesheet">
+    <link rel="icon" href="Images/icon16.png?v=3" sizes="16x16">
+    <!-- Google Fonts removed for maximum performance -->
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: Arial, sans-serif; }
         body { background: #000; color: #fff; height: 100vh; overflow: hidden; }
@@ -22,7 +20,7 @@
         .search-container input::placeholder { color: rgba(255, 255, 255, 0.5); }
         .search-icon { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); opacity: 0.6; pointer-events: none; }
         .info-panel { margin-top: 35px; text-align: center; opacity: 0.9; min-height: 70px; }
-        #time { font-size: 38px; font-weight: 100; font-family: 'Roboto', sans-serif; margin-bottom: 12px; word-spacing: -2px; }
+        #time { font-size: 38px; font-weight: 100; font-family: "Segoe UI Light", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; margin-bottom: 12px; word-spacing: -2px; }
         .time-its { color: #ff3333; font-weight: 100; font-family: Arial, sans-serif; }
         .time-hour, .time-minute { color: #fff; }
         #weather { font-size: 15px; font-weight: 400; color: #ccc; }
@@ -40,10 +38,10 @@
         <a href="https://youtube.com">YouTube</a>
     </div>
     <div class="center">
-        <img class="logo" src="Images/rogreflect.jpg" alt="Logo">
+        <img class="logo" src="Images/rogreflect.jpg" alt="Logo" decoding="async">
         <form class="search-container" action="https://www.google.com/search" method="GET">
             <input type="text" name="q" placeholder="Search..." autocomplete="off">
-            <span class="search-icon"><img src="Images/search.svg" alt="Search"></span>
+            <span class="search-icon"><img src="Images/search.svg" alt="Search" decoding="async"></span>
         </form>
         <div class="info-panel" id="info-panel">
             <div id="time"></div>
