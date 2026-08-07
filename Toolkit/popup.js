@@ -129,4 +129,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         }
     });
+
+    // Handle Edit Shortcuts button
+    const btnEditShortcuts = document.getElementById('btnEditShortcuts');
+    if (btnEditShortcuts) {
+        btnEditShortcuts.addEventListener('click', () => {
+            chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
+        });
+    }
 });

@@ -38,6 +38,23 @@
             color: var(--text-secondary);
             margin-bottom: 8px;
             padding-left: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .edit-shortcuts-btn {
+            color: var(--accent-color);
+            text-decoration: none;
+            text-transform: none;
+            letter-spacing: normal;
+            font-size: 11px;
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+
+        .edit-shortcuts-btn:hover {
+            color: var(--accent-hover);
         }
 
         /* Sections */
@@ -189,7 +206,10 @@
 <body>
 
     <div>
-        <div class="section-header">Tab Volume</div>
+        <div class="section-header">
+            <span>Tab Volume</span>
+            <a id="btnEditShortcuts" class="edit-shortcuts-btn" title="Edit keyboard shortcuts">Edit Shortcuts</a>
+        </div>
         <div class="card">
             <div class="slider-wrapper">
                 <input type="range" id="volumeSlider" min="0" max="100" value="100">
