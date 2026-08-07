@@ -11,6 +11,7 @@ Bundles
 - [PasteGo](https://github.com/HauseMasterZ/paste-go) Note: Change default shortcuts by going to ```chrome://extensions/shortcuts```
 - [Whatsapp Wide Layout](https://github.com/HauseMasterZ/WhatsApp-Web-Style-Tweaks)
 - [Whatsapp Virtual Cam](https://github.com/HauseMasterZ/whatsapp-spoof-video)
+- [AutoDarkMode](https://github.com/HauseMasterZ/auto-dark-mode)
 - Bonus: Add per tab volume controls
 
 Into single bundle
