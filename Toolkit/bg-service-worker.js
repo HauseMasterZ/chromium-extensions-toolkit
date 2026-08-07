@@ -8,6 +8,12 @@ chrome.commands.onCommand.addListener(async c => {
     return;
   }
   
+  if (c === 'toggle_dark_mode') {
+    let [{ id }] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (id) toggleDarkMode(id);
+    return;
+  }
+  
   if (c !== 'run' && c !== 'run_yt' && c !== 'run_incognito') return;
   let [{ id, url }] = await chrome.tabs.query({ active: true, currentWindow: true });
   try {
@@ -127,12 +133,52 @@ const updateWhatsappScript = async (enabled) => {
   }
 };
 
-chrome.runtime.onMessage.addListener((msg) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'updateYtMusicScript') {
     updateYtMusicScript(msg.enabled);
   } else if (msg.action === 'updateYtFloatSearchScript') {
     updateYtFloatSearchScript(msg.enabled);
   } else if (msg.action === 'updateWhatsappScript') {
     updateWhatsappScript(msg.enabled);
+  } else if (msg.action === 'toggleDarkMode') {
+    if (msg.tabId) toggleDarkMode(msg.tabId);
+  } else if (msg.action === 'fetchCSS') {
+    fetch(msg.url)
+        .then(res => res.text())
+        .then(text => sendResponse({ text }))
+        .catch(err => sendResponse({ error: err.toString() }));
+    return true;
   }
 });
+
+function toggleDarkMode(tabId) {
+    if (!tabId) return;
+
+    chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        func: () => window.__DARK_MODE_INJECTED__
+    }).then(results => {
+        if (results && results[0] && results[0].result) {
+            chrome.scripting.executeScript({
+                target: { tabId: tabId },
+                func: () => window.__DARK_MODE_TOGGLE__()
+            });
+        } else {
+            chrome.scripting.executeScript({
+                target: { tabId: tabId },
+                func: () => {
+                    if (!document.getElementById('fast-inject-style')) {
+                        const s = document.createElement('style');
+                        s.id = 'fast-inject-style';
+                        s.textContent = 'html, body, .qsbWrapper, .qsb-header-container, #root, .ni-desktop-homepage-v2 { background-color: #000000 !important; background-image: none !important; color: #e8eaed !important; }';
+                        document.documentElement.appendChild(s);
+                    }
+                }
+            });
+            chrome.scripting.executeScript({
+                target: { tabId: tabId },
+                files: ['darkreader.js', 'autodark-init.js']
+            });
+        }
+    }).catch(console.error);
+}

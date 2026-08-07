@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Unified Toolkit",
-  "version": "1",
-  "description": "Auto Copy, Paste & Go, New Tab, YT Music Audio, YT Float Search, and WhatsApp Web Tweaks (Styling & Virtual Camera).",
+  "version": "2.0",
+  "description": "Auto Copy, Paste & Go, New Tab, YT Music Audio, YT Float Search, WhatsApp Web Tweaks, and On-Demand Dark Mode.",
   "permissions": [
     "scripting", 
     "clipboardRead", 
@@ -61,8 +61,11 @@
       "description": "Paste and search in Incognito"
     },
     "duplicate_tab": {
-      "suggested_key": {"default": "Ctrl+Shift+K"},
       "description": "Duplicate current tab"
+    },
+    "toggle_dark_mode": {
+      "suggested_key": {"default": "Alt+Shift+D"},
+      "description": "Toggle Dark Mode"
     }
   }
 }

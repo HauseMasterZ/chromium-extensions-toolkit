@@ -45,6 +45,30 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
+    // Check Dark Mode status
+    const darkModeToggle = document.getElementById('toggleDarkMode');
+    if (tab && !tab.url.startsWith("chrome://") && !tab.url.startsWith("https://chrome.google.com/webstore")) {
+        try {
+            const results = await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                func: () => !!(window.__DARK_MODE_INJECTED__ && window.__DARK_MODE_IS_ACTIVE__)
+            });
+            if (results && results[0]) {
+                darkModeToggle.checked = results[0].result;
+            }
+        } catch (e) {
+            console.error("Could not check dark mode status:", e);
+        }
+    } else {
+        darkModeToggle.closest('.toggle-row').classList.add('disabled');
+    }
+
+    darkModeToggle.addEventListener('change', (e) => {
+        if (tab && !tab.url.startsWith("chrome://") && !tab.url.startsWith("https://chrome.google.com/webstore")) {
+            chrome.runtime.sendMessage({ action: 'toggleDarkMode', tabId: tab.id });
+        }
+    });
+
     // Handle Settings Toggles
     const toggles = {
         'toggleAutoCopy': 'featureAutoCopy',
