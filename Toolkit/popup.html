@@ -3,179 +3,261 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tab Volume Control</title>
+    <title>Unified Toolkit</title>
     <style>
+        :root {
+            --bg-color: #121212;
+            --surface-color: #1c1c1e;
+            --border-color: #2c2c2e;
+            --text-main: #ffffff;
+            --text-secondary: #8e8e93;
+            --accent-color: #0a84ff;
+            --accent-hover: #409cff;
+            --toggle-bg: #3a3a3c;
+        }
+
         body {
-            width: 250px;
-            padding: 15px;
+            width: 280px;
+            padding: 16px;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background-color: #1a1a1a;
-            color: #ffffff;
+            background-color: var(--bg-color);
+            color: var(--text-main);
             margin: 0;
             display: flex;
             flex-direction: column;
-            gap: 15px;
+            gap: 20px;
+            user-select: none;
         }
-        .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            font-size: 14px;
+
+        /* Typography & Headers */
+        .section-header {
+            font-size: 11px;
             font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            padding-left: 4px;
         }
-        .slider-container {
+
+        /* Sections */
+        .card {
+            background-color: var(--surface-color);
+            border-radius: 12px;
+            padding: 12px 16px;
             display: flex;
             flex-direction: column;
-            gap: 10px;
+            gap: 16px;
         }
+
+        /* Volume Slider */
+        .slider-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        #volumeValue {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--accent-color);
+            min-width: 42px;
+            text-align: right;
+        }
+
         input[type="range"] {
             -webkit-appearance: none;
             width: 100%;
             background: transparent;
         }
+
+        input[type="range"]:focus {
+            outline: none;
+        }
+
+        input[type="range"]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: var(--toggle-bg);
+            border-radius: 2px;
+            transition: background 0.2s;
+        }
+
+        input[type="range"]:hover::-webkit-slider-runnable-track {
+            background: var(--border-color);
+        }
+
         input[type="range"]::-webkit-slider-thumb {
             -webkit-appearance: none;
             height: 16px;
             width: 16px;
             border-radius: 50%;
-            background: #ff3333;
+            background: var(--text-main);
             cursor: pointer;
             margin-top: -6px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+            transition: transform 0.1s;
         }
-        input[type="range"]::-webkit-slider-runnable-track {
-            width: 100%;
-            height: 4px;
-            cursor: pointer;
-            background: #444;
-            border-radius: 2px;
+
+        input[type="range"]:active::-webkit-slider-thumb {
+            transform: scale(1.1);
         }
-        .value-display {
-            text-align: center;
-            font-size: 24px;
-            font-weight: bold;
-            color: #ff3333;
+
+        /* Toggles */
+        .toggle-group {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+            background-color: var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
         }
-        .divider {
-            height: 1px;
-            background-color: #333;
-            margin: 5px 0;
-        }
+
         .toggle-row {
             display: flex;
             justify-content: space-between;
             align-items: center;
+            background-color: var(--surface-color);
+            padding: 12px 16px;
             font-size: 13px;
-            transition: opacity 0.2s;
+            font-weight: 500;
+            color: var(--text-main);
+            transition: opacity 0.2s ease, background-color 0.2s ease;
         }
+
+        .toggle-row:hover {
+            background-color: #222224;
+        }
+
         .toggle-row.disabled {
-            opacity: 0.3;
+            opacity: 0.4;
             pointer-events: none;
         }
+
+        /* Switch UI */
         .switch {
             position: relative;
             display: inline-block;
-            width: 34px;
-            height: 20px;
+            width: 40px;
+            height: 24px;
+            flex-shrink: 0;
         }
+
         .switch input {
             opacity: 0;
             width: 0;
             height: 0;
         }
+
         .slider-round {
             position: absolute;
             cursor: pointer;
             top: 0; left: 0; right: 0; bottom: 0;
-            background-color: #444;
-            transition: .2s;
-            border-radius: 20px;
+            background-color: var(--toggle-bg);
+            transition: 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
+            border-radius: 24px;
         }
+
         .slider-round:before {
             position: absolute;
             content: "";
-            height: 14px;
-            width: 14px;
+            height: 18px;
+            width: 18px;
             left: 3px;
             bottom: 3px;
-            background-color: white;
-            transition: .2s;
+            background-color: var(--text-main);
+            transition: 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
             border-radius: 50%;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
         }
+
         input:checked + .slider-round {
-            background-color: #ff3333;
+            background-color: var(--accent-color);
         }
+
         input:checked + .slider-round:before {
-            transform: translateX(14px);
+            transform: translateX(16px);
+        }
+
+        input:focus + .slider-round {
+            box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.3);
         }
     </style>
 </head>
 <body>
-    <div class="header">
-        <span>Tab Volume</span>
-    </div>
-    <div class="slider-container">
-        <div class="value-display" id="volumeValue">100%</div>
-        <input type="range" id="volumeSlider" min="0" max="100" value="100">
+
+    <div>
+        <div class="section-header">Tab Volume</div>
+        <div class="card">
+            <div class="slider-wrapper">
+                <input type="range" id="volumeSlider" min="0" max="100" value="100">
+                <div id="volumeValue">100%</div>
+            </div>
+        </div>
     </div>
 
-    <div class="divider"></div>
-    <div class="header">
-        <span>Features</span>
-    </div>
+    <div>
+        <div class="section-header">Features</div>
+        <div class="toggle-group">
+            
+            <div class="toggle-row">
+                <span>On-Demand Dark Mode</span>
+                <label class="switch">
+                    <input type="checkbox" id="toggleDarkMode">
+                    <span class="slider-round"></span>
+                </label>
+            </div>
 
-    <div class="toggle-row">
-        <span>On-Demand Dark Mode</span>
-        <label class="switch">
-            <input type="checkbox" id="toggleDarkMode">
-            <span class="slider-round"></span>
-        </label>
-    </div>
+            <div class="toggle-row">
+                <span>Auto Copy on Select</span>
+                <label class="switch">
+                    <input type="checkbox" id="toggleAutoCopy" checked>
+                    <span class="slider-round"></span>
+                </label>
+            </div>
+            
+            <div class="toggle-row">
+                <span>YouTube Float Search</span>
+                <label class="switch">
+                    <input type="checkbox" id="toggleYtFloatSearch" checked>
+                    <span class="slider-round"></span>
+                </label>
+            </div>
 
-    <div class="toggle-row">
-        <span>Auto Copy on Select</span>
-        <label class="switch">
-            <input type="checkbox" id="toggleAutoCopy" checked>
-            <span class="slider-round"></span>
-        </label>
-    </div>
-    
-    <div class="toggle-row">
-        <span>YouTube Float Search</span>
-        <label class="switch">
-            <input type="checkbox" id="toggleYtFloatSearch" checked>
-            <span class="slider-round"></span>
-        </label>
-    </div>
+            <div class="toggle-row">
+                <span>YouTube Music Audio-Only</span>
+                <label class="switch">
+                    <input type="checkbox" id="toggleYtMusic" checked>
+                    <span class="slider-round"></span>
+                </label>
+            </div>
 
-    <div class="toggle-row">
-        <span>YouTube Music Audio-Only</span>
-        <label class="switch">
-            <input type="checkbox" id="toggleYtMusic" checked>
-            <span class="slider-round"></span>
-        </label>
-    </div>
-    <div class="toggle-row">
-        <span>Custom New Tab Page</span>
-        <label class="switch">
-            <input type="checkbox" id="toggleNewTabPage" checked>
-            <span class="slider-round"></span>
-        </label>
-    </div>
+            <div class="toggle-row">
+                <span>Custom New Tab Page</span>
+                <label class="switch">
+                    <input type="checkbox" id="toggleNewTabPage" checked>
+                    <span class="slider-round"></span>
+                </label>
+            </div>
 
-    <div class="toggle-row">
-        <span>WhatsApp Tweaks</span>
-        <label class="switch">
-            <input type="checkbox" id="toggleWhatsapp" checked>
-            <span class="slider-round"></span>
-        </label>
-    </div>
+            <div class="toggle-row">
+                <span>WhatsApp Tweaks</span>
+                <label class="switch">
+                    <input type="checkbox" id="toggleWhatsapp" checked>
+                    <span class="slider-round"></span>
+                </label>
+            </div>
 
-    <div class="toggle-row">
-        <span>Paste & Go Shortcuts</span>
-        <label class="switch">
-            <input type="checkbox" id="togglePasteGo" checked>
-            <span class="slider-round"></span>
-        </label>
+            <div class="toggle-row">
+                <span>Paste & Go Shortcuts</span>
+                <label class="switch">
+                    <input type="checkbox" id="togglePasteGo" checked>
+                    <span class="slider-round"></span>
+                </label>
+            </div>
+
+        </div>
     </div>
 
     <script src="popup.js"></script>
