@@ -1,1 +1,1 @@
-html, body, .qsbWrapper, .qsb-header-container, #root, .ni-desktop-homepage-v2 { background-color: #000000 !important; background-image: none !important; color: #e8eaed !important; }
+html.fast-dark-active, html.fast-dark-active body, html.fast-dark-active .qsbWrapper, html.fast-dark-active .qsb-header-container, html.fast-dark-active #root, html.fast-dark-active .ni-desktop-homepage-v2 { background-color: #000000 !important; background-image: none !important; color: #e8eaed !important; }

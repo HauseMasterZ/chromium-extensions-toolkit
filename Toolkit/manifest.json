@@ -11,6 +11,7 @@
     "storage"
   ],
   "host_permissions": [
+    "<all_urls>",
     "https://suggestqueries.google.com/*",
     "*://music.youtube.com/*",
     "https://www.youtube.com/*",

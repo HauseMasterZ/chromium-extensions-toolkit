@@ -61,6 +61,7 @@ chrome.runtime.onInstalled.addListener(() => {
     updateYtFloatSearchScript(res.featureYtFloatSearch);
     updateWhatsappScript(res.featureWhatsapp);
   });
+  rehydrateDarkScripts();
 });
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
@@ -157,28 +158,94 @@ function toggleDarkMode(tabId) {
     chrome.scripting.executeScript({
         target: { tabId: tabId },
         func: () => window.__DARK_MODE_INJECTED__
-    }).then(results => {
+    }).then(async results => {
         if (results && results[0] && results[0].result) {
-            chrome.scripting.executeScript({
+            let res = await chrome.scripting.executeScript({
                 target: { tabId: tabId },
                 func: () => window.__DARK_MODE_TOGGLE__()
             });
+            if (res && res[0]) updateDomainMemory(tabId, res[0].result);
         } else {
-            chrome.scripting.executeScript({
-                target: { tabId: tabId },
-                func: () => {
-                    if (!document.getElementById('fast-inject-style')) {
-                        const s = document.createElement('style');
-                        s.id = 'fast-inject-style';
-                        s.textContent = 'html, body, .qsbWrapper, .qsb-header-container, #root, .ni-desktop-homepage-v2 { background-color: #000000 !important; background-image: none !important; color: #e8eaed !important; }';
-                        document.documentElement.appendChild(s);
-                    }
-                }
-            });
-            chrome.scripting.executeScript({
-                target: { tabId: tabId },
-                files: ['darkreader.js', 'autodark-init.js']
-            });
+            injectDarkMode(tabId);
+            updateDomainMemory(tabId, true);
         }
     }).catch(console.error);
 }
+
+function injectDarkMode(tabId) {
+    chrome.scripting.insertCSS({
+        target: { tabId: tabId },
+        files: ['fast-inject.css']
+    });
+    chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        files: ['fast-inject-class.js']
+    });
+    chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        files: ['darkreader.js', 'autodark-init.js']
+    });
+}
+
+async function updateDomainMemory(tabId, isEnabled) {
+    try {
+        let tab = await chrome.tabs.get(tabId);
+        if (!tab || !tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('https://chrome.google.com/webstore')) return;
+        let hostname = new URL(tab.url).hostname;
+        if (!hostname) return;
+
+        let { darkmode_domains = [] } = await chrome.storage.local.get('darkmode_domains');
+        let index = darkmode_domains.indexOf(hostname);
+        let changed = false;
+
+        if (isEnabled && index === -1) {
+            darkmode_domains.push(hostname);
+            changed = true;
+        } else if (!isEnabled && index !== -1) {
+            darkmode_domains.splice(index, 1);
+            changed = true;
+        }
+
+        if (changed) {
+            await chrome.storage.local.set({ darkmode_domains });
+            updateRegisteredDarkModeScript(darkmode_domains);
+        }
+    } catch(e) {}
+}
+
+async function updateRegisteredDarkModeScript(domains) {
+    try { await chrome.scripting.unregisterContentScripts({ ids: ["dynamic-dark-mode-css", "dynamic-dark-mode-js"] }); } catch(e) {}
+    
+    if (domains && domains.length > 0) {
+        let matches = domains.flatMap(d => {
+            let base = d.replace(/^www\./, '');
+            return [`*://${base}/*`, `*://*.${base}/*`];
+        });
+        
+        try {
+            await chrome.scripting.registerContentScripts([
+                {
+                    id: "dynamic-dark-mode-css",
+                    matches: matches,
+                    css: ["fast-inject.css"],
+                    js: ["fast-inject-class.js"],
+                    runAt: "document_start"
+                },
+                {
+                    id: "dynamic-dark-mode-js",
+                    matches: matches,
+                    js: ["darkreader.js", "autodark-init.js"],
+                    runAt: "document_idle"
+                }
+            ]);
+        } catch(e) { console.error("Failed to register dynamic dark mode script:", e); }
+    }
+}
+
+function rehydrateDarkScripts() {
+    chrome.storage.local.get('darkmode_domains', (res) => {
+        if (res.darkmode_domains) updateRegisteredDarkModeScript(res.darkmode_domains);
+    });
+}
+
+chrome.runtime.onStartup.addListener(rehydrateDarkScripts);

@@ -2,6 +2,8 @@
 // Intelligently delays the official Dark Reader to maximize Lighthouse scores
 
 (function() {
+// Removed manual fast-inject style block. Now handled by Chrome's native CSS injection + fast-inject-class.js
+
     if (window.__DARK_MODE_INJECTED__) {
         window.__DARK_MODE_TOGGLE__();
         return;
@@ -24,10 +26,9 @@
             });
 
             window.__DARK_MODE_TOGGLE__ = function() {
-                const fastStyle = document.getElementById('fast-inject-style');
                 if (enabled) {
                     DarkReader.disable();
-                    if (fastStyle) fastStyle.disabled = true;
+                    document.documentElement.classList.remove('fast-dark-active');
                     enabled = false;
                 } else {
                     DarkReader.enable({
@@ -39,10 +40,11 @@
                         lightSchemeBackgroundColor: '#000000',
                         lightSchemeTextColor: '#e8eaed',
                     });
-                    if (fastStyle) fastStyle.disabled = false;
+                    document.documentElement.classList.add('fast-dark-active');
                     enabled = true;
                 }
                 window.__DARK_MODE_IS_ACTIVE__ = enabled;
+                return enabled;
             };
             
             // Enable immediately on first injection
