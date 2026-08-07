@@ -1,6 +1,6 @@
 # Chromium Toolkit
 <p align="center">
-  <img width="275" height="333" alt="image" src="https://github.com/user-attachments/assets/731fdb81-16ce-4d21-a4d1-11a20176bf74" />
+  <img width="307" height="472" alt="image" src="https://github.com/user-attachments/assets/2caabf39-e401-491c-aaa0-f59275514db6" />
 </p>
 
 Bundles
@@ -11,7 +11,7 @@ Bundles
 - [PasteGo](https://github.com/HauseMasterZ/paste-go) Note: Change default shortcuts by going to ```chrome://extensions/shortcuts```
 - [Whatsapp Wide Layout](https://github.com/HauseMasterZ/WhatsApp-Web-Style-Tweaks)
 - [Whatsapp Virtual Cam](https://github.com/HauseMasterZ/whatsapp-spoof-video)
-- [AutoDarkMode](https://github.com/HauseMasterZ/auto-dark-mode)
+- [AutoDarkMode](https://github.com/HauseMasterZ/auto-dark-mode) Note: Change default shortcuts by going to ```chrome://extensions/shortcuts```
 - Bonus: Add per tab volume controls
 
 Into single bundle
