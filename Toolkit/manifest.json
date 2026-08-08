@@ -9,7 +9,8 @@
     "clipboardWrite",
     "activeTab",
     "storage",
-    "browsingData"
+    "browsingData",
+    "offscreen"
   ],
   "host_permissions": [
     "<all_urls>",

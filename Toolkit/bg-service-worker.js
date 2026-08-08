@@ -1,3 +1,23 @@
+async function getClipboardData() {
+    try {
+        const existingContexts = await chrome.runtime.getContexts({
+            contextTypes: ['OFFSCREEN_DOCUMENT'],
+        });
+        if (existingContexts.length === 0) {
+            await chrome.offscreen.createDocument({
+                url: 'offscreen.html',
+                reasons: ['CLIPBOARD'],
+                justification: 'Read clipboard for Paste and Go'
+            });
+        }
+        let response = await chrome.runtime.sendMessage({ action: 'read_clipboard' });
+        return response ? response.result : null;
+    } catch (e) {
+        console.error("Offscreen clipboard error:", e);
+        return null;
+    }
+}
+
 chrome.commands.onCommand.addListener(async c => {
   const { featurePasteGo = true } = await chrome.storage.local.get('featurePasteGo');
   if (!featurePasteGo) return;
@@ -64,7 +84,7 @@ chrome.commands.onCommand.addListener(async c => {
   if (c !== 'run' && c !== 'run_yt' && c !== 'run_incognito') return;
   let [{ id, url }] = await chrome.tabs.query({ active: true, currentWindow: true });
   try {
-    let result = await navigator.clipboard.readText();
+    let result = await getClipboardData();
 
     if (result) {
       result = result.trim();
