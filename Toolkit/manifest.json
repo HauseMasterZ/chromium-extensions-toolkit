@@ -8,7 +8,8 @@
     "clipboardRead", 
     "activeTab",
     "contextMenus",
-    "storage"
+    "storage",
+    "browsingData"
   ],
   "host_permissions": [
     "<all_urls>",
@@ -67,6 +68,14 @@
     "toggle_dark_mode": {
       "suggested_key": {"default": "Alt+Shift+D"},
       "description": "Toggle Dark Mode"
+    },
+    "close_other_tabs": {
+      "suggested_key": {"default": "Alt+W"},
+      "description": "Close other tabs"
+    },
+    "copy_clean_url": {
+      "suggested_key": {"default": "Alt+C"},
+      "description": "Copy clean URL"
     }
   }
 }

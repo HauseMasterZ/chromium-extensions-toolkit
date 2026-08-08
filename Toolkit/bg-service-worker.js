@@ -14,6 +14,34 @@ chrome.commands.onCommand.addListener(async c => {
     return;
   }
   
+  if (c === 'close_other_tabs') {
+    let [{ windowId, id }] = await chrome.tabs.query({ active: true, currentWindow: true });
+    let allTabs = await chrome.tabs.query({ windowId });
+    let tabsToRemove = allTabs.filter(t => t.id !== id).map(t => t.id);
+    if (tabsToRemove.length) chrome.tabs.remove(tabsToRemove);
+    return;
+  }
+
+  if (c === 'copy_clean_url') {
+    let [{ id, url }] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (id && url) {
+      try {
+        let parsed = new URL(url);
+        let params = new URLSearchParams(parsed.search);
+        ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'fbclid', 'gclid', 'si', 'igshid', '_ga'].forEach(t => params.delete(t));
+        parsed.search = params.toString();
+        let cleanUrl = parsed.toString();
+        
+        await chrome.scripting.executeScript({
+          target: { tabId: id },
+          func: (cleanUrl) => navigator.clipboard.writeText(cleanUrl),
+          args: [cleanUrl]
+        });
+      } catch (e) {}
+    }
+    return;
+  }
+  
   if (c !== 'run' && c !== 'run_yt' && c !== 'run_incognito') return;
   let [{ id, url }] = await chrome.tabs.query({ active: true, currentWindow: true });
   try {
@@ -257,3 +285,20 @@ function rehydrateDarkScripts() {
 }
 
 chrome.runtime.onStartup.addListener(rehydrateDarkScripts);
+
+chrome.windows.onRemoved.addListener(async (windowId) => {
+  let windows = await chrome.windows.getAll();
+  // If this was the last window, clear browsing data (excluding cookies/site data)
+  if (windows.length === 0) {
+    chrome.browsingData.remove({
+      "since": 0
+    }, {
+      "history": true,
+      "cache": true,
+      "cacheStorage": true,
+      "downloads": true,
+      "formData": true,
+      "passwords": true
+    }, () => {});
+  }
+});
