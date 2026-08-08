@@ -22,6 +22,29 @@ chrome.commands.onCommand.addListener(async c => {
     return;
   }
 
+  if (c === 'close_all_windows') {
+    // 1. Force clear data FIRST to guarantee it finishes before Chrome shuts down
+    await new Promise(resolve => {
+      chrome.browsingData.remove({
+        "since": 0
+      }, {
+        "history": true,
+        "cache": true,
+        "cacheStorage": true,
+        "downloads": true,
+        "formData": true,
+        "passwords": true
+      }, resolve);
+    });
+
+    // 2. Kill all windows
+    let windows = await chrome.windows.getAll();
+    for (let w of windows) {
+      chrome.windows.remove(w.id);
+    }
+    return;
+  }
+
   if (c === 'copy_clean_url') {
     let [{ id, url }] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (id && url) {

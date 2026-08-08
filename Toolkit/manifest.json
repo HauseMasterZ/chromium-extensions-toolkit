@@ -70,6 +70,9 @@
     },
     "copy_clean_url": {
       "description": "Copy clean URL"
+    },
+    "close_all_windows": {
+      "description": "Close all Chrome windows and clear data"
     }
   }
 }
