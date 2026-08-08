@@ -51,30 +51,24 @@
   ],
   "commands": {
     "run": {
-      "suggested_key": {"default": "Alt+Z"},
       "description": "Paste and go"
     },
     "run_yt": {
-      "suggested_key": {"default": "Alt+X"},
       "description": "Paste and search YouTube"
     },
     "run_incognito": {
-      "suggested_key": {"default": "Alt+A"},
       "description": "Paste and search in Incognito"
     },
     "duplicate_tab": {
       "description": "Duplicate current tab"
     },
     "toggle_dark_mode": {
-      "suggested_key": {"default": "Alt+Shift+D"},
       "description": "Toggle Dark Mode"
     },
     "close_other_tabs": {
-      "suggested_key": {"default": "Alt+W"},
       "description": "Close other tabs"
     },
     "copy_clean_url": {
-      "suggested_key": {"default": "Alt+C"},
       "description": "Copy clean URL"
     }
   }
