@@ -261,6 +261,10 @@ async function updateDomainMemory(tabId, isEnabled) {
     try {
         let tab = await chrome.tabs.get(tabId);
         if (!tab || !tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('https://chrome.google.com/webstore')) return;
+        
+        // Make toggles strictly stateless in incognito mode
+        if (tab.incognito) return;
+        
         let hostname = new URL(tab.url).hostname;
         if (!hostname) return;
 
