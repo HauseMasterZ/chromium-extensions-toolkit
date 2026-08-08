@@ -55,11 +55,7 @@ chrome.commands.onCommand.addListener(async c => {
         parsed.search = params.toString();
         let cleanUrl = parsed.toString();
         
-        await chrome.scripting.executeScript({
-          target: { tabId: id },
-          func: (cleanUrl) => navigator.clipboard.writeText(cleanUrl),
-          args: [cleanUrl]
-        });
+        await navigator.clipboard.writeText(cleanUrl);
       } catch (e) {}
     }
     return;
@@ -68,30 +64,18 @@ chrome.commands.onCommand.addListener(async c => {
   if (c !== 'run' && c !== 'run_yt' && c !== 'run_incognito') return;
   let [{ id, url }] = await chrome.tabs.query({ active: true, currentWindow: true });
   try {
-    let result = null;
-    let isExtensionPage = false;
-
-    try {
-      let res = await chrome.scripting.executeScript({ target: { tabId: id }, func: () => navigator.clipboard.readText() });
-      result = res && res[0] ? res[0].result : null;
-    } catch (e) {
-      isExtensionPage = true;
-      try {
-        result = await chrome.tabs.sendMessage(id, { action: 'read_clipboard' });
-      } catch (e2) {}
-    }
+    let result = await navigator.clipboard.readText();
 
     if (result) {
       result = result.trim();
       let isUrl = /^https?:\/\//i.test(result);
-      
       if (c === 'run') {
         let finalUrl = isUrl ? result : `https://google.com/search?q=${encodeURIComponent(result)}`;
-        if (isExtensionPage) chrome.tabs.update(id, { url: finalUrl });
+        if (url.startsWith('chrome://')) chrome.tabs.update(id, { url: finalUrl });
         else chrome.tabs.create({ url: finalUrl });
       } else if (c === 'run_yt') {
         let finalUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(result)}`;
-        if (isExtensionPage) chrome.tabs.update(id, { url: finalUrl });
+        if (url.startsWith('chrome://')) chrome.tabs.update(id, { url: finalUrl });
         else chrome.tabs.create({ url: finalUrl });
       } else if (c === 'run_incognito') {
         let targetUrl = isUrl ? result : `https://google.com/search?q=${encodeURIComponent(result)}`;

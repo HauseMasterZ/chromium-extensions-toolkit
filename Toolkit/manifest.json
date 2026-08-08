@@ -4,8 +4,8 @@
   "version": "2.0",
   "description": "Auto Copy, Paste & Go, New Tab, YT Music Audio, YT Float Search, WhatsApp Web Tweaks, and On-Demand Dark Mode.",
   "permissions": [
-    "scripting", 
     "clipboardRead", 
+    "clipboardWrite",
     "activeTab",
     "storage",
     "browsingData"
