@@ -93,8 +93,6 @@ chrome.commands.onCommand.addListener(async c => {
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.removeAll();
-
   chrome.storage.local.get({ featureYtMusic: true, featureYtFloatSearch: true, featureWhatsapp: true }, (res) => {
     updateYtMusicScript(res.featureYtMusic);
     updateYtFloatSearchScript(res.featureYtFloatSearch);
