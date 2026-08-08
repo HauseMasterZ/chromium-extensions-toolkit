@@ -102,7 +102,7 @@ const updateYtFloatSearchScript = async (enabled) => {
         matches: ["https://www.youtube.com/*", "https://m.youtube.com/*"],
         js: ["yt-float-search.js"],
         css: ["yt-float-search.css"],
-        runAt: "document_start"
+        runAt: "document_idle"
       }]);
     } catch (e) {}
   }
