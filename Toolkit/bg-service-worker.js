@@ -83,7 +83,7 @@ const updateYtMusicScript = async (enabled) => {
         id: "yt-music-audio",
         matches: ["*://music.youtube.com/*"],
         js: ["yt-music-audio.js"],
-        runAt: "document_start",
+        runAt: "document_idle",
         world: "MAIN"
       }]);
     } catch (e) {}
@@ -120,7 +120,7 @@ const updateWhatsappScript = async (enabled) => {
           id: "whatsapp-virtual-camera",
           matches: ["*://web.whatsapp.com/*", "https://web.whatsapp.com/*"],
           js: ["whatsapp-virtual-camera.js"],
-          runAt: "document_start",
+          runAt: "document_idle",
           world: "MAIN"
         },
         {
