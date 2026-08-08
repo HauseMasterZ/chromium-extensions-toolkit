@@ -23,10 +23,28 @@ chrome.commands.onCommand.addListener(async c => {
   }
   
   if (c === 'close_other_tabs') {
-    let [{ id }] = await chrome.tabs.query({ active: true, currentWindow: true });
+    let [{ id: activeTabId, windowId: currentWindowId }] = await chrome.tabs.query({ active: true, currentWindow: true });
     let allTabs = await chrome.tabs.query({});
-    let tabsToRemove = allTabs.filter(t => t.id !== id).map(t => t.id);
-    if (tabsToRemove.length) chrome.tabs.remove(tabsToRemove);
+    
+    // Group tabs by windowId
+    let windows = {};
+    for (let t of allTabs) {
+      if (!windows[t.windowId]) windows[t.windowId] = [];
+      windows[t.windowId].push(t.id);
+    }
+
+    for (let winId in windows) {
+      winId = parseInt(winId);
+      if (winId === currentWindowId) {
+        // In current window, remove all except active tab
+        let toRemove = windows[winId].filter(tId => tId !== activeTabId);
+        if (toRemove.length) await chrome.tabs.remove(toRemove);
+      } else {
+        // In other windows, create a new blank tab FIRST to prevent window closure, then nuke the rest
+        await chrome.tabs.create({ windowId: winId });
+        await chrome.tabs.remove(windows[winId]);
+      }
+    }
     return;
   }
 
