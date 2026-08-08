@@ -1,22 +1,10 @@
-async function getClipboardData() {
-    try {
-        const existingContexts = await chrome.runtime.getContexts({
-            contextTypes: ['OFFSCREEN_DOCUMENT'],
-        });
-        if (existingContexts.length === 0) {
-            await chrome.offscreen.createDocument({
-                url: 'offscreen.html',
-                reasons: ['CLIPBOARD'],
-                justification: 'Read clipboard for Paste and Go'
-            });
-        }
-        let response = await chrome.runtime.sendMessage({ action: 'read_clipboard' });
-        return response ? response.result : null;
-    } catch (e) {
-        console.error("Offscreen clipboard error:", e);
-        return null;
-    }
-}
+importScripts('clearurls-engine.js');
+
+let clearUrlsData = null;
+fetch(chrome.runtime.getURL('clearurls-rules.json'))
+    .then(res => res.json())
+    .then(data => clearUrlsData = data)
+    .catch(console.error);
 
 chrome.commands.onCommand.addListener(async c => {
   const { featurePasteGo = true } = await chrome.storage.local.get('featurePasteGo');
@@ -35,8 +23,8 @@ chrome.commands.onCommand.addListener(async c => {
   }
   
   if (c === 'close_other_tabs') {
-    let [{ windowId, id }] = await chrome.tabs.query({ active: true, currentWindow: true });
-    let allTabs = await chrome.tabs.query({ windowId });
+    let [{ id }] = await chrome.tabs.query({ active: true, currentWindow: true });
+    let allTabs = await chrome.tabs.query({});
     let tabsToRemove = allTabs.filter(t => t.id !== id).map(t => t.id);
     if (tabsToRemove.length) chrome.tabs.remove(tabsToRemove);
     return;
@@ -69,13 +57,13 @@ chrome.commands.onCommand.addListener(async c => {
     let [{ id, url }] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (id && url) {
       try {
-        let parsed = new URL(url);
-        let params = new URLSearchParams(parsed.search);
-        ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'fbclid', 'gclid', 'si', 'igshid', '_ga'].forEach(t => params.delete(t));
-        parsed.search = params.toString();
-        let cleanUrl = parsed.toString();
+        let cleanUrl = clearUrlsData ? cleanUrlWithClearUrls(url, clearUrlsData) : url;
         
-        await navigator.clipboard.writeText(cleanUrl);
+        await chrome.scripting.executeScript({
+          target: { tabId: id },
+          func: (cleanUrl) => navigator.clipboard.writeText(cleanUrl),
+          args: [cleanUrl]
+        });
       } catch (e) {}
     }
     return;
@@ -84,18 +72,30 @@ chrome.commands.onCommand.addListener(async c => {
   if (c !== 'run' && c !== 'run_yt' && c !== 'run_incognito') return;
   let [{ id, url }] = await chrome.tabs.query({ active: true, currentWindow: true });
   try {
-    let result = await getClipboardData();
+    let result = null;
+    let isExtensionPage = false;
+
+    try {
+      let res = await chrome.scripting.executeScript({ target: { tabId: id }, func: () => navigator.clipboard.readText() });
+      result = res && res[0] ? res[0].result : null;
+    } catch (e) {
+      isExtensionPage = true;
+      try {
+        result = await chrome.tabs.sendMessage(id, { action: 'read_clipboard' });
+      } catch (e2) {}
+    }
 
     if (result) {
       result = result.trim();
       let isUrl = /^https?:\/\//i.test(result);
+      
       if (c === 'run') {
         let finalUrl = isUrl ? result : `https://google.com/search?q=${encodeURIComponent(result)}`;
-        if (url.startsWith('chrome://')) chrome.tabs.update(id, { url: finalUrl });
+        if (isExtensionPage) chrome.tabs.update(id, { url: finalUrl });
         else chrome.tabs.create({ url: finalUrl });
       } else if (c === 'run_yt') {
         let finalUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(result)}`;
-        if (url.startsWith('chrome://')) chrome.tabs.update(id, { url: finalUrl });
+        if (isExtensionPage) chrome.tabs.update(id, { url: finalUrl });
         else chrome.tabs.create({ url: finalUrl });
       } else if (c === 'run_incognito') {
         let targetUrl = isUrl ? result : `https://google.com/search?q=${encodeURIComponent(result)}`;
@@ -113,6 +113,7 @@ chrome.commands.onCommand.addListener(async c => {
 });
 
 chrome.runtime.onInstalled.addListener(() => {
+
   chrome.storage.local.get({ featureYtMusic: true, featureYtFloatSearch: true, featureWhatsapp: true }, (res) => {
     updateYtMusicScript(res.featureYtMusic);
     updateYtFloatSearchScript(res.featureYtFloatSearch);
@@ -299,12 +300,10 @@ function rehydrateDarkScripts() {
     });
 }
 
-chrome.runtime.onStartup.addListener(rehydrateDarkScripts);
-
-chrome.windows.onRemoved.addListener(async (windowId) => {
-  let windows = await chrome.windows.getAll();
-  // If this was the last window, clear browsing data (excluding cookies/site data)
-  if (windows.length === 0) {
+chrome.runtime.onStartup.addListener(() => {
+    rehydrateDarkScripts();
+    // Auto-delete on startup to reliably emulate "clear on exit" since 
+    // Chrome instantly kills background workers when the last window closes.
     chrome.browsingData.remove({
       "since": 0
     }, {
@@ -315,5 +314,4 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
       "formData": true,
       "passwords": true
     }, () => {});
-  }
 });

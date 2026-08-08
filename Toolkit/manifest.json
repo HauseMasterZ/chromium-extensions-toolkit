@@ -4,13 +4,11 @@
   "version": "2.0",
   "description": "Auto Copy, Paste & Go, New Tab, YT Music Audio, YT Float Search, WhatsApp Web Tweaks, and On-Demand Dark Mode.",
   "permissions": [
-    "scripting",
+    "scripting", 
     "clipboardRead", 
-    "clipboardWrite",
     "activeTab",
     "storage",
-    "browsingData",
-    "offscreen"
+    "browsingData"
   ],
   "host_permissions": [
     "<all_urls>",
@@ -73,7 +71,7 @@
       "description": "Copy clean URL"
     },
     "close_all_windows": {
-      "description": "Close all Chrome windows and clear data"
+      "description": "Close all & clear data"
     }
   }
 }
