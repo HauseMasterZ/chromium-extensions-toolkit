@@ -7,7 +7,6 @@
     "scripting", 
     "clipboardRead", 
     "activeTab",
-    "contextMenus",
     "storage",
     "browsingData"
   ],

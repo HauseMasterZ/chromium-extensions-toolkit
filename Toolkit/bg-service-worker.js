@@ -109,11 +109,7 @@ chrome.commands.onCommand.addListener(async c => {
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: "translate_image",
-    title: "Translate via Google Lens",
-    contexts: ["image"]
-  });
+  chrome.contextMenus.removeAll();
 
   chrome.storage.local.get({ featureYtMusic: true, featureYtFloatSearch: true, featureWhatsapp: true }, (res) => {
     updateYtMusicScript(res.featureYtMusic);
@@ -123,12 +119,6 @@ chrome.runtime.onInstalled.addListener(() => {
   rehydrateDarkScripts();
 });
 
-chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId === "translate_image" && info.srcUrl) {
-    let url = `https://lens.google.com/uploadbyurl?url=${encodeURIComponent(info.srcUrl)}`;
-    chrome.tabs.create({ url: url });
-  }
-});
 
 // Manage dynamic content scripts
 const updateYtMusicScript = async (enabled) => {
