@@ -43,7 +43,15 @@ chrome.commands.onCommand.addListener(async c => {
         if (isExtensionPage) chrome.tabs.update(id, { url: finalUrl });
         else chrome.tabs.create({ url: finalUrl });
       } else if (c === 'run_incognito') {
-        chrome.windows.create({ url: isUrl ? result : `https://google.com/search?q=${encodeURIComponent(result)}`, incognito: true });
+        let targetUrl = isUrl ? result : `https://google.com/search?q=${encodeURIComponent(result)}`;
+        let windows = await chrome.windows.getAll();
+        let incognitoWin = windows.find(w => w.incognito);
+        if (incognitoWin) {
+          chrome.tabs.create({ windowId: incognitoWin.id, url: targetUrl });
+          chrome.windows.update(incognitoWin.id, { focused: true });
+        } else {
+          chrome.windows.create({ url: targetUrl, incognito: true });
+        }
       }
     }
   } catch {}
