@@ -55,8 +55,6 @@ chrome.commands.onCommand.addListener(async c => {
         "since": 0
       }, {
         "history": true,
-        "cache": true,
-        "cacheStorage": true,
         "downloads": true,
         "formData": true,
         "passwords": true
@@ -318,18 +316,22 @@ function rehydrateDarkScripts() {
     });
 }
 
-chrome.runtime.onStartup.addListener(() => {
+chrome.runtime.onStartup.addListener(async () => {
     rehydrateDarkScripts();
-    // Auto-delete on startup to reliably emulate "clear on exit" since 
-    // Chrome instantly kills background workers when the last window closes.
-    chrome.browsingData.remove({
-      "since": 0
-    }, {
-      "history": true,
-      "cache": true,
-      "cacheStorage": true,
-      "downloads": true,
-      "formData": true,
-      "passwords": true
-    }, () => {});
+    
+    // Only trigger auto-delete if the user has actually set up a shortcut for the panic button
+    let commands = await chrome.commands.getAll();
+    let closeCmd = commands.find(c => c.name === 'close_all_windows');
+    
+    if (closeCmd && closeCmd.shortcut) {
+        // Auto-delete on startup to reliably emulate "clear on exit"
+        chrome.browsingData.remove({
+          "since": 0
+        }, {
+          "history": true,
+          "downloads": true,
+          "formData": true,
+          "passwords": true
+        }, () => {});
+    }
 });
