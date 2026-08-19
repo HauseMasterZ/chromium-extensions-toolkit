@@ -49,13 +49,11 @@ function cleanUrlWithClearUrls(url, rulesData) {
         }
 
         if (rules.length > 0) {
-            let keysToDelete = [];
-            for (let param of searchParams.keys()) {
-                for (let rule of rules) {
-                    if (new RegExp("^" + rule + "$", "gi").test(param)) {
-                        keysToDelete.push(param);
-                        break;
-                    }
+            const compiledRules = rules.map(r => new RegExp(`^${r}$`, 'i'));
+            const keysToDelete = [];
+            for (const param of searchParams.keys()) {
+                if (compiledRules.some(rx => rx.test(param))) {
+                    keysToDelete.push(param);
                 }
             }
             keysToDelete.forEach(k => searchParams.delete(k));

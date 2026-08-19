@@ -269,13 +269,16 @@
   }
 
   function setupResponsiveTracker() {
-    // Keep a lightweight poller purely to update the CSS variable for the icons
-    setInterval(() => {
-      const side = document.getElementById('side');
-      if (side && side.parentElement) {
-        document.documentElement.style.setProperty('--chatlist-width', side.parentElement.getBoundingClientRect().width + 'px');
-      }
-    }, 500);
+    const side = document.getElementById('side');
+    const target = side?.parentElement;
+    if (!target) return;
+
+    const updateWidth = () => {
+      document.documentElement.style.setProperty('--chatlist-width', target.getBoundingClientRect().width + 'px');
+    };
+
+    updateWidth();
+    new ResizeObserver(updateWidth).observe(target);
   }
 
   function setupResizer() {

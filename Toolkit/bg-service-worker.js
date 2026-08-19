@@ -2,134 +2,164 @@ importScripts('clearurls-engine.js');
 
 let clearUrlsData = null;
 fetch(chrome.runtime.getURL('clearurls-rules.json'))
-    .then(res => res.json())
-    .then(data => clearUrlsData = data)
-    .catch(console.error);
+  .then(res => res.json())
+  .then(data => clearUrlsData = data)
+  .catch(console.error);
+
+async function getActiveTab() {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tabs && tabs.length > 0 ? tabs[0] : null;
+}
+
+function openTarget(targetUrl, isExtensionPage, tabId) {
+  if (isExtensionPage && tabId) chrome.tabs.update(tabId, { url: targetUrl });
+  else chrome.tabs.create({ url: targetUrl });
+}
 
 chrome.commands.onCommand.addListener(async c => {
   const { featurePasteGo = true } = await chrome.storage.local.get('featurePasteGo');
   if (!featurePasteGo) return;
 
+  const tab = await getActiveTab();
+
   if (c === 'duplicate_tab') {
-    let [{ id }] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (id) chrome.tabs.duplicate(id);
+    if (tab?.id) chrome.tabs.duplicate(tab.id);
     return;
   }
   
   if (c === 'toggle_dark_mode') {
-    let [{ id }] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (id) toggleDarkMode(id);
+    if (tab?.id) toggleDarkMode(tab.id);
     return;
   }
   
   if (c === 'close_other_tabs') {
-    let [{ id: activeTabId, windowId: currentWindowId }] = await chrome.tabs.query({ active: true, currentWindow: true });
-    let allTabs = await chrome.tabs.query({});
-    
-    // Group tabs by windowId
-    let windows = {};
-    for (let t of allTabs) {
-      if (!windows[t.windowId]) windows[t.windowId] = [];
-      windows[t.windowId].push(t.id);
+    if (!tab) return;
+    const allTabs = await chrome.tabs.query({});
+    const windows = {};
+    for (const t of allTabs) {
+      (windows[t.windowId] = windows[t.windowId] || []).push(t.id);
     }
 
-    for (let winId in windows) {
-      winId = parseInt(winId);
-      if (winId === currentWindowId) {
-        // In current window, remove all except active tab
-        let toRemove = windows[winId].filter(tId => tId !== activeTabId);
+    for (const [winIdStr, tabIds] of Object.entries(windows)) {
+      const winId = Number(winIdStr);
+      if (winId === tab.windowId) {
+        const toRemove = tabIds.filter(id => id !== tab.id);
         if (toRemove.length) await chrome.tabs.remove(toRemove);
       } else {
-        // In other windows, create a new blank tab FIRST to prevent window closure, then nuke the rest
         await chrome.tabs.create({ windowId: winId });
-        await chrome.tabs.remove(windows[winId]);
+        await chrome.tabs.remove(tabIds);
       }
     }
     return;
   }
 
   if (c === 'close_all_windows') {
-    // 1. Force clear data FIRST to guarantee it finishes before Chrome shuts down
     await new Promise(resolve => {
-      chrome.browsingData.remove({
-        "since": 0
-      }, {
-        "history": true,
-        "downloads": true,
-        "formData": true,
-        "passwords": true
+      chrome.browsingData.remove({ since: 0 }, {
+        history: true, downloads: true, formData: true, passwords: true,
+        cache: true, cacheStorage: true, pluginData: true, fileSystems: true, webSQL: true
       }, resolve);
     });
 
-    // 2. Kill all windows
-    let windows = await chrome.windows.getAll();
-    for (let w of windows) {
-      chrome.windows.remove(w.id);
-    }
+    const windows = await chrome.windows.getAll();
+    for (const w of windows) chrome.windows.remove(w.id);
     return;
   }
 
   if (c === 'copy_clean_url') {
-    let [{ id, url }] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (id && url) {
+    if (tab?.id && tab.url) {
       try {
-        let cleanUrl = clearUrlsData ? cleanUrlWithClearUrls(url, clearUrlsData) : url;
-        
+        const cleanUrl = clearUrlsData ? cleanUrlWithClearUrls(tab.url, clearUrlsData) : tab.url;
         await chrome.scripting.executeScript({
-          target: { tabId: id },
-          func: (cleanUrl) => navigator.clipboard.writeText(cleanUrl),
+          target: { tabId: tab.id },
+          func: (url) => navigator.clipboard.writeText(url),
           args: [cleanUrl]
         });
-      } catch (e) {}
+      } catch {}
     }
     return;
   }
   
-  if (c !== 'run' && c !== 'run_yt' && c !== 'run_incognito') return;
-  let [{ id, url }] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!['run', 'run_yt', 'run_incognito'].includes(c) || !tab?.id) return;
+  
   try {
     let result = null;
     let isExtensionPage = false;
 
     try {
-      let res = await chrome.scripting.executeScript({ target: { tabId: id }, func: () => navigator.clipboard.readText() });
-      result = res && res[0] ? res[0].result : null;
-    } catch (e) {
+      const res = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => navigator.clipboard.readText() });
+      result = res?.[0]?.result ?? null;
+    } catch {
       isExtensionPage = true;
       try {
-        result = await chrome.tabs.sendMessage(id, { action: 'read_clipboard' });
-      } catch (e2) {}
+        result = await chrome.tabs.sendMessage(tab.id, { action: 'read_clipboard' });
+      } catch {}
     }
 
-    if (result) {
-      result = result.trim();
-      let isUrl = /^https?:\/\//i.test(result);
-      
-      if (c === 'run') {
-        let finalUrl = isUrl ? result : `https://google.com/search?q=${encodeURIComponent(result)}`;
-        if (isExtensionPage) chrome.tabs.update(id, { url: finalUrl });
-        else chrome.tabs.create({ url: finalUrl });
-      } else if (c === 'run_yt') {
-        let finalUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(result)}`;
-        if (isExtensionPage) chrome.tabs.update(id, { url: finalUrl });
-        else chrome.tabs.create({ url: finalUrl });
-      } else if (c === 'run_incognito') {
-        let targetUrl = isUrl ? result : `https://google.com/search?q=${encodeURIComponent(result)}`;
-        let windows = await chrome.windows.getAll();
-        let incognitoWin = windows.find(w => w.incognito);
-        if (incognitoWin) {
-          chrome.tabs.create({ windowId: incognitoWin.id, url: targetUrl });
-          chrome.windows.update(incognitoWin.id, { focused: true });
-        } else {
-          chrome.windows.create({ url: targetUrl, incognito: true });
-        }
+    if (!result) return;
+    result = result.trim();
+    const isUrl = /^https?:\/\//i.test(result);
+
+    if (c === 'run') {
+      const finalUrl = isUrl ? result : `https://google.com/search?q=${encodeURIComponent(result)}`;
+      openTarget(finalUrl, isExtensionPage, tab.id);
+    } else if (c === 'run_yt') {
+      openTarget(`https://www.youtube.com/results?search_query=${encodeURIComponent(result)}`, isExtensionPage, tab.id);
+    } else if (c === 'run_incognito') {
+      const targetUrl = isUrl ? result : `https://google.com/search?q=${encodeURIComponent(result)}`;
+      const windows = await chrome.windows.getAll();
+      const incognitoWin = windows.find(w => w.incognito);
+      if (incognitoWin) {
+        chrome.tabs.create({ windowId: incognitoWin.id, url: targetUrl });
+        chrome.windows.update(incognitoWin.id, { focused: true });
+      } else {
+        chrome.windows.create({ url: targetUrl, incognito: true });
       }
     }
   } catch {}
 });
 
-chrome.runtime.onInstalled.addListener(() => {
+// Dynamic Script Registration Helper
+async function syncContentScripts(id, enabled, configs) {
+  try { await chrome.scripting.unregisterContentScripts({ ids: Array.isArray(id) ? id : [id] }); } catch {}
+  if (enabled && configs?.length) {
+    try { await chrome.scripting.registerContentScripts(configs); } catch (e) { console.error(`Script registration failed [${id}]:`, e); }
+  }
+}
 
+const updateYtMusicScript = (enabled) => syncContentScripts('yt-music-audio', enabled, [{
+  id: 'yt-music-audio',
+  matches: ['*://music.youtube.com/*'],
+  js: ['yt-music-audio.js'],
+  runAt: 'document_idle',
+  world: 'MAIN'
+}]);
+
+const updateYtFloatSearchScript = (enabled) => syncContentScripts('yt-float-search', enabled, [{
+  id: 'yt-float-search',
+  matches: ['https://www.youtube.com/*', 'https://m.youtube.com/*'],
+  js: ['yt-float-search.js'],
+  css: ['yt-float-search.css'],
+  runAt: 'document_idle'
+}]);
+
+const updateWhatsappScript = (enabled) => syncContentScripts(['whatsapp-virtual-camera', 'whatsapp-wide-style'], enabled, [
+  {
+    id: 'whatsapp-virtual-camera',
+    matches: ['*://web.whatsapp.com/*', 'https://web.whatsapp.com/*'],
+    js: ['whatsapp-virtual-camera.js'],
+    runAt: 'document_idle',
+    world: 'MAIN'
+  },
+  {
+    id: 'whatsapp-wide-style',
+    matches: ['*://web.whatsapp.com/*', 'https://web.whatsapp.com/*'],
+    js: ['whatsapp-wide-style.js'],
+    runAt: 'document_idle'
+  }
+]);
+
+chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.local.get({ featureYtMusic: true, featureYtFloatSearch: true, featureWhatsapp: true }, (res) => {
     updateYtMusicScript(res.featureYtMusic);
     updateYtFloatSearchScript(res.featureYtFloatSearch);
@@ -138,200 +168,108 @@ chrome.runtime.onInstalled.addListener(() => {
   rehydrateDarkScripts();
 });
 
-
-// Manage dynamic content scripts
-const updateYtMusicScript = async (enabled) => {
-  try {
-    await chrome.scripting.unregisterContentScripts({ ids: ["yt-music-audio"] });
-  } catch (e) {}
-
-  if (enabled) {
-    try {
-      await chrome.scripting.registerContentScripts([{
-        id: "yt-music-audio",
-        matches: ["*://music.youtube.com/*"],
-        js: ["yt-music-audio.js"],
-        runAt: "document_idle",
-        world: "MAIN"
-      }]);
-    } catch (e) {}
-  }
-};
-
-const updateYtFloatSearchScript = async (enabled) => {
-  try {
-    await chrome.scripting.unregisterContentScripts({ ids: ["yt-float-search"] });
-  } catch (e) {}
-
-  if (enabled) {
-    try {
-      await chrome.scripting.registerContentScripts([{
-        id: "yt-float-search",
-        matches: ["https://www.youtube.com/*", "https://m.youtube.com/*"],
-        js: ["yt-float-search.js"],
-        css: ["yt-float-search.css"],
-        runAt: "document_idle"
-      }]);
-    } catch (e) {}
-  }
-};
-
-const updateWhatsappScript = async (enabled) => {
-  try {
-    await chrome.scripting.unregisterContentScripts({ ids: ["whatsapp-virtual-camera", "whatsapp-wide-style"] });
-  } catch (e) {}
-
-  if (enabled) {
-    try {
-      await chrome.scripting.registerContentScripts([
-        {
-          id: "whatsapp-virtual-camera",
-          matches: ["*://web.whatsapp.com/*", "https://web.whatsapp.com/*"],
-          js: ["whatsapp-virtual-camera.js"],
-          runAt: "document_idle",
-          world: "MAIN"
-        },
-        {
-          id: "whatsapp-wide-style",
-          matches: ["*://web.whatsapp.com/*", "https://web.whatsapp.com/*"],
-          js: ["whatsapp-wide-style.js"],
-          runAt: "document_idle"
-        }
-      ]);
-    } catch (e) {}
-  }
-};
-
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.action === 'updateYtMusicScript') {
-    updateYtMusicScript(msg.enabled);
-  } else if (msg.action === 'updateYtFloatSearchScript') {
-    updateYtFloatSearchScript(msg.enabled);
-  } else if (msg.action === 'updateWhatsappScript') {
-    updateWhatsappScript(msg.enabled);
-  } else if (msg.action === 'toggleDarkMode') {
-    if (msg.tabId) toggleDarkMode(msg.tabId);
-  } else if (msg.action === 'fetchCSS') {
-    fetch(msg.url)
+  switch (msg.action) {
+    case 'updateYtMusicScript':
+      updateYtMusicScript(msg.enabled);
+      break;
+    case 'updateYtFloatSearchScript':
+      updateYtFloatSearchScript(msg.enabled);
+      break;
+    case 'updateWhatsappScript':
+      updateWhatsappScript(msg.enabled);
+      break;
+    case 'toggleDarkMode':
+      if (msg.tabId) toggleDarkMode(msg.tabId);
+      break;
+    case 'fetchCSS':
+      fetch(msg.url)
         .then(res => res.text())
         .then(text => sendResponse({ text }))
         .catch(err => sendResponse({ error: err.toString() }));
-    return true;
+      return true;
   }
 });
 
 function toggleDarkMode(tabId) {
-    if (!tabId) return;
+  if (!tabId) return;
 
-    chrome.scripting.executeScript({
-        target: { tabId: tabId },
-        func: () => window.__DARK_MODE_INJECTED__
-    }).then(async results => {
-        if (results && results[0] && results[0].result) {
-            let res = await chrome.scripting.executeScript({
-                target: { tabId: tabId },
-                func: () => window.__DARK_MODE_TOGGLE__()
-            });
-            if (res && res[0]) updateDomainMemory(tabId, res[0].result);
-        } else {
-            injectDarkMode(tabId);
-            updateDomainMemory(tabId, true);
-        }
-    }).catch(console.error);
+  chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => window.__DARK_MODE_INJECTED__
+  }).then(async results => {
+    if (results?.[0]?.result) {
+      const res = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => window.__DARK_MODE_TOGGLE__()
+      });
+      if (res?.[0]) updateDomainMemory(tabId, res[0].result);
+    } else {
+      injectDarkMode(tabId);
+      updateDomainMemory(tabId, true);
+    }
+  }).catch(console.error);
 }
 
 function injectDarkMode(tabId) {
-    chrome.scripting.insertCSS({
-        target: { tabId: tabId },
-        files: ['fast-inject.css']
-    });
-    chrome.scripting.executeScript({
-        target: { tabId: tabId },
-        files: ['fast-inject-class.js']
-    });
-    chrome.scripting.executeScript({
-        target: { tabId: tabId },
-        files: ['darkreader.js', 'autodark-init.js']
-    });
+  chrome.scripting.insertCSS({ target: { tabId }, files: ['fast-inject.css'] });
+  chrome.scripting.executeScript({ target: { tabId }, files: ['fast-inject-class.js'] });
+  chrome.scripting.executeScript({ target: { tabId }, files: ['darkreader.js', 'autodark-init.js'] });
 }
 
 async function updateDomainMemory(tabId, isEnabled) {
-    try {
-        let tab = await chrome.tabs.get(tabId);
-        if (!tab || !tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('https://chrome.google.com/webstore')) return;
-        let hostname = new URL(tab.url).hostname;
-        if (!hostname) return;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!tab?.url || tab.url.startsWith('chrome://') || tab.url.startsWith('https://chrome.google.com/webstore')) return;
+    const hostname = new URL(tab.url).hostname;
+    if (!hostname) return;
 
-        let { darkmode_domains = [] } = await chrome.storage.local.get('darkmode_domains');
-        let index = darkmode_domains.indexOf(hostname);
-        let changed = false;
+    const { darkmode_domains = [] } = await chrome.storage.local.get('darkmode_domains');
+    const index = darkmode_domains.indexOf(hostname);
+    let changed = false;
 
-        if (isEnabled && index === -1) {
-            darkmode_domains.push(hostname);
-            changed = true;
-        } else if (!isEnabled && index !== -1) {
-            darkmode_domains.splice(index, 1);
-            changed = true;
-        }
+    if (isEnabled && index === -1) {
+      darkmode_domains.push(hostname);
+      changed = true;
+    } else if (!isEnabled && index !== -1) {
+      darkmode_domains.splice(index, 1);
+      changed = true;
+    }
 
-        if (changed) {
-            await chrome.storage.local.set({ darkmode_domains });
-            updateRegisteredDarkModeScript(darkmode_domains);
-        }
-    } catch(e) {}
+    if (changed) {
+      await chrome.storage.local.set({ darkmode_domains });
+      updateRegisteredDarkModeScript(darkmode_domains);
+    }
+  } catch {}
 }
 
 async function updateRegisteredDarkModeScript(domains) {
-    try { await chrome.scripting.unregisterContentScripts({ ids: ["dynamic-dark-mode-css", "dynamic-dark-mode-js"] }); } catch(e) {}
+  try { 
+    await chrome.scripting.unregisterContentScripts({ ids: ['dynamic-dark-mode', 'dynamic-dark-mode-css', 'dynamic-dark-mode-js'] }); 
+  } catch {}
+  
+  if (domains?.length) {
+    const matches = domains.flatMap(d => {
+      const base = d.replace(/^www\./, '');
+      return [`*://${base}/*`, `*://*.${base}/*`];
+    });
     
-    if (domains && domains.length > 0) {
-        let matches = domains.flatMap(d => {
-            let base = d.replace(/^www\./, '');
-            return [`*://${base}/*`, `*://*.${base}/*`];
-        });
-        
-        try {
-            await chrome.scripting.registerContentScripts([
-                {
-                    id: "dynamic-dark-mode-css",
-                    matches: matches,
-                    css: ["fast-inject.css"],
-                    js: ["fast-inject-class.js"],
-                    runAt: "document_start"
-                },
-                {
-                    id: "dynamic-dark-mode-js",
-                    matches: matches,
-                    js: ["darkreader.js", "autodark-init.js"],
-                    runAt: "document_idle"
-                }
-            ]);
-        } catch(e) { console.error("Failed to register dynamic dark mode script:", e); }
+    try {
+      await chrome.scripting.registerContentScripts([{
+        id: 'dynamic-dark-mode',
+        matches,
+        css: ['fast-inject.css'],
+        js: ['fast-inject-class.js', 'darkreader.js', 'autodark-init.js'],
+        runAt: 'document_idle'
+      }]);
+    } catch (e) {
+      console.error('Failed to register dynamic dark mode script:', e);
     }
+  }
 }
 
 function rehydrateDarkScripts() {
-    chrome.storage.local.get('darkmode_domains', (res) => {
-        if (res.darkmode_domains) updateRegisteredDarkModeScript(res.darkmode_domains);
-    });
+  chrome.storage.local.get('darkmode_domains', (res) => {
+    if (res?.darkmode_domains) updateRegisteredDarkModeScript(res.darkmode_domains);
+  });
 }
-
-chrome.runtime.onStartup.addListener(async () => {
-    rehydrateDarkScripts();
-    
-    // Only trigger auto-delete if the user has actually set up a shortcut for the panic button
-    let commands = await chrome.commands.getAll();
-    let closeCmd = commands.find(c => c.name === 'close_all_windows');
-    
-    if (closeCmd && closeCmd.shortcut) {
-        // Auto-delete on startup to reliably emulate "clear on exit"
-        chrome.browsingData.remove({
-          "since": 0
-        }, {
-          "history": true,
-          "downloads": true,
-          "formData": true,
-          "passwords": true
-        }, () => {});
-    }
-});

@@ -11,13 +11,7 @@
     "browsingData"
   ],
   "host_permissions": [
-    "<all_urls>",
-    "https://suggestqueries.google.com/*",
-    "*://music.youtube.com/*",
-    "https://www.youtube.com/*",
-    "https://m.youtube.com/*",
-    "*://web.whatsapp.com/*",
-    "https://web.whatsapp.com/*"
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "bg-service-worker.js"
