@@ -12,15 +12,21 @@ const inject = () => {
   document.body.appendChild(wrapper);
 
   const profileBtn = document.getElementById('yt-profile-btn');
-  const avatarRoot = document.querySelector('ytd-app, ytm-app') || document.body;
-  const avatarObs = new MutationObserver(() => {
-    const img = document.querySelector('ytd-masthead #avatar img, ytm-app .mobile-topbar-header img[class*="avatar"]');
-    if (img?.src && img.src !== location.href) {
-      profileBtn.innerHTML = `<img src="${img.src}" width="26" height="26" style="border-radius:50%;object-fit:cover">`;
-      avatarObs.disconnect();
-    }
-  });
-  avatarObs.observe(avatarRoot, { childList: true, subtree: true });
+  const getAvatarImg = () => document.querySelector('ytd-masthead #avatar img, ytm-app .mobile-topbar-header img[class*="avatar"]');
+  const initialImg = getAvatarImg();
+  if (initialImg?.src && initialImg.src !== location.href) {
+    profileBtn.innerHTML = `<img src="${initialImg.src}" width="26" height="26" style="border-radius:50%;object-fit:cover">`;
+  } else {
+    const avatarRoot = document.querySelector('ytd-app, ytm-app') || document.body;
+    const avatarObs = new MutationObserver(() => {
+      const img = getAvatarImg();
+      if (img?.src && img.src !== location.href) {
+        profileBtn.innerHTML = `<img src="${img.src}" width="26" height="26" style="border-radius:50%;object-fit:cover">`;
+        avatarObs.disconnect();
+      }
+    });
+    avatarObs.observe(avatarRoot, { childList: true, subtree: true });
+  }
 
   const input = document.getElementById('yt-float-input');
   const searchBtn = document.getElementById('yt-float-btn');

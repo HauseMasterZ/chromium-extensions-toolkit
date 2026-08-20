@@ -2,8 +2,6 @@
 // Intelligently delays the official Dark Reader to maximize Lighthouse scores
 
 (function() {
-// Removed manual fast-inject style block. Now handled by Chrome's native CSS injection + fast-inject-class.js
-
     if (window.__DARK_MODE_INJECTED__) {
         window.__DARK_MODE_TOGGLE__();
         return;
@@ -15,13 +13,23 @@
         if (typeof DarkReader !== 'undefined') {
             DarkReader.setFetchMethod(url => {
                 return new Promise((resolve) => {
-                    chrome.runtime.sendMessage({ action: 'fetchCSS', url: url }, response => {
-                        if (response && response.text) {
-                            resolve(new Response(response.text, { headers: { 'Content-Type': 'text/css' } }));
-                        } else {
-                            resolve(new Response('', { headers: { 'Content-Type': 'text/css' } }));
-                        }
-                    });
+                    const fallbackResponse = () => resolve(new Response('', { headers: { 'Content-Type': 'text/css' } }));
+
+                    if (!chrome.runtime?.id) {
+                        return fallbackResponse();
+                    }
+
+                    try {
+                        chrome.runtime.sendMessage({ action: 'fetchCSS', url: url }, response => {
+                            if (chrome.runtime.lastError || !response?.text) {
+                                fallbackResponse();
+                            } else {
+                                resolve(new Response(response.text, { headers: { 'Content-Type': 'text/css' } }));
+                            }
+                        });
+                    } catch {
+                        fallbackResponse();
+                    }
                 });
             });
 

@@ -79,7 +79,37 @@ chrome.commands.onCommand.addListener(async c => {
     }
     return;
   }
-  
+
+  if (c === 'discard_background_tabs') {
+    const tabs = await chrome.tabs.query({ discarded: false });
+    for (const t of tabs) {
+      if (!t.active && t.id) {
+        chrome.tabs.discard(t.id).catch(() => {});
+      }
+    }
+    return;
+  }
+
+  if (c === 'price_history') {
+    if (tab?.id && tab.url) {
+      const cleanUrl = clearUrlsData ? cleanUrlWithClearUrls(tab.url, clearUrlsData) : tab.url;
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: (url) => navigator.clipboard.writeText(url),
+          args: [cleanUrl]
+        });
+      } catch {}
+
+      const buyhatkeUrl = `https://buyhatke.com/${cleanUrl}`;
+      const priceHistoryUrl = `https://pricehistory.app/?search=${encodeURIComponent(cleanUrl)}`;
+
+      await chrome.tabs.create({ url: buyhatkeUrl, index: tab.index + 1 });
+      await chrome.tabs.create({ url: priceHistoryUrl, index: tab.index + 2 });
+    }
+    return;
+  }
+
   if (!['run', 'run_yt', 'run_incognito'].includes(c) || !tab?.id) return;
   
   try {
@@ -121,7 +151,14 @@ chrome.commands.onCommand.addListener(async c => {
 
 // Dynamic Script Registration Helper
 async function syncContentScripts(id, enabled, configs) {
-  try { await chrome.scripting.unregisterContentScripts({ ids: Array.isArray(id) ? id : [id] }); } catch {}
+  const ids = Array.isArray(id) ? id : [id];
+  try {
+    const existing = await chrome.scripting.getRegisteredContentScripts();
+    const toRemove = existing.map(s => s.id).filter(sId => ids.includes(sId));
+    if (toRemove.length) {
+      await chrome.scripting.unregisterContentScripts({ ids: toRemove });
+    }
+  } catch {}
   if (enabled && configs?.length) {
     try { await chrome.scripting.registerContentScripts(configs); } catch (e) { console.error(`Script registration failed [${id}]:`, e); }
   }
@@ -159,7 +196,13 @@ const updateWhatsappScript = (enabled) => syncContentScripts(['whatsapp-virtual-
   }
 ]);
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener(async () => {
+  try {
+    const existing = await chrome.scripting.getRegisteredContentScripts();
+    const legacy = existing.map(s => s.id).filter(id => id === 'custom-seek');
+    if (legacy.length) await chrome.scripting.unregisterContentScripts({ ids: legacy });
+  } catch {}
+
   chrome.storage.local.get({ featureYtMusic: true, featureYtFloatSearch: true, featureWhatsapp: true }, (res) => {
     updateYtMusicScript(res.featureYtMusic);
     updateYtFloatSearchScript(res.featureYtFloatSearch);
@@ -243,29 +286,39 @@ async function updateDomainMemory(tabId, isEnabled) {
   } catch {}
 }
 
-async function updateRegisteredDarkModeScript(domains) {
-  try { 
-    await chrome.scripting.unregisterContentScripts({ ids: ['dynamic-dark-mode', 'dynamic-dark-mode-css', 'dynamic-dark-mode-js'] }); 
-  } catch {}
-  
-  if (domains?.length) {
-    const matches = domains.flatMap(d => {
-      const base = d.replace(/^www\./, '');
-      return [`*://${base}/*`, `*://*.${base}/*`];
-    });
-    
+let darkScriptLock = Promise.resolve();
+
+function updateRegisteredDarkModeScript(domains) {
+  darkScriptLock = darkScriptLock.then(async () => {
     try {
-      await chrome.scripting.registerContentScripts([{
-        id: 'dynamic-dark-mode',
-        matches,
-        css: ['fast-inject.css'],
-        js: ['fast-inject-class.js', 'darkreader.js', 'autodark-init.js'],
-        runAt: 'document_idle'
-      }]);
-    } catch (e) {
-      console.error('Failed to register dynamic dark mode script:', e);
+      const existing = await chrome.scripting.getRegisteredContentScripts();
+      const targetIds = ['dynamic-dark-mode', 'dynamic-dark-mode-css', 'dynamic-dark-mode-js'];
+      const toUnregister = existing.map(s => s.id).filter(id => targetIds.includes(id));
+      if (toUnregister.length) {
+        await chrome.scripting.unregisterContentScripts({ ids: toUnregister });
+      }
+    } catch {}
+
+    if (domains?.length) {
+      const matches = domains.flatMap(d => {
+        const base = d.replace(/^www\./, '');
+        return [`*://${base}/*`, `*://*.${base}/*`];
+      });
+
+      try {
+        await chrome.scripting.registerContentScripts([{
+          id: 'dynamic-dark-mode',
+          matches,
+          css: ['fast-inject.css'],
+          js: ['fast-inject-class.js', 'darkreader.js', 'autodark-init.js'],
+          runAt: 'document_idle'
+        }]);
+      } catch (e) {
+        console.error('Failed to register dynamic dark mode script:', e);
+      }
     }
-  }
+  });
+  return darkScriptLock;
 }
 
 function rehydrateDarkScripts() {

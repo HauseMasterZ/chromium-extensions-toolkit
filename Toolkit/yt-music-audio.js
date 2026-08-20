@@ -9,23 +9,29 @@ Object.defineProperty(window, '_lact', {
     configurable: true
 });
 
-const _p = JSON.parse, _f = window.fetch;
+const _fetch = window.fetch;
 
-JSON.parse = (t, r) => {
-    let o = _p(typeof t === 'string' ? t.replace(/"MUSIC_VIDEO_TYPE_\w+"/g, '"MUSIC_VIDEO_TYPE_ATV"') : t, r), s = o?.streamingData;
-    if (s) {
-        s.formats = [];
-        s.adaptiveFormats = s.adaptiveFormats?.filter(f => f.mimeType?.includes('audio'));
-        s.dashManifestUrl = s.hlsManifestUrl = '';
+function processPayload(rawText) {
+    try {
+        const sanitized = rawText.replace(/"MUSIC_VIDEO_TYPE_\w+"/g, '"MUSIC_VIDEO_TYPE_ATV"');
+        const data = JSON.parse(sanitized);
+        if (data?.streamingData) {
+            data.streamingData.formats = [];
+            data.streamingData.adaptiveFormats = data.streamingData.adaptiveFormats?.filter(f => f.mimeType?.includes('audio'));
+            data.streamingData.dashManifestUrl = data.streamingData.hlsManifestUrl = '';
+        }
+        return JSON.stringify(data);
+    } catch {
+        return rawText;
     }
-    return o;
-};
+}
 
 window.fetch = async (req, opts) => {
-    let res = await _f(req, opts);
-    if ((req.url || req).includes('/youtubei/v1/')) {
-        let text = await res.text();
-        return new Response(JSON.stringify(JSON.parse(text)), {status: res.status, headers: res.headers});
+    const res = await _fetch(req, opts);
+    const url = typeof req === 'string' ? req : req?.url || '';
+    if (url.includes('/youtubei/v1/')) {
+        const text = await res.text();
+        return new Response(processPayload(text), { status: res.status, headers: res.headers });
     }
     return res;
 };
@@ -39,17 +45,20 @@ let lastList;
 document.addEventListener('loadeddata', () => {
     // 1. Always update background image
     setTimeout(() => {
-        let art = navigator.mediaSession?.metadata?.artwork;
-        let bg = art?.at(-1)?.src || art?.at(0)?.src;
-        if (bg) document.getElementById('song-image').style.background = `url('${bg}') center/contain no-repeat #000`;
+        const art = navigator.mediaSession?.metadata?.artwork;
+        const bg = art?.at(-1)?.src || art?.at(0)?.src;
+        if (bg) {
+            const imgEl = document.getElementById('song-image');
+            if (imgEl) imgEl.style.background = `url('${bg}') center/contain no-repeat #000`;
+        }
     }, 150);
 
     // 2. Repeat logic
-    let list = new URLSearchParams(location.search).get('list');
-    if (!list || list === lastList) return; // Ignores URL flickers and same-playlist tracks
+    const list = new URLSearchParams(location.search).get('list');
+    if (!list || list === lastList) return;
     lastList = list;
 
-    let rep = document.querySelector('.repeat');
+    const rep = document.querySelector('.repeat');
     if (rep && !rep.title.includes('one')) {
         rep.click();
         if (!rep.title.includes('one')) setTimeout(() => rep.click(), 50);

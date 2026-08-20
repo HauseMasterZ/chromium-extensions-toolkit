@@ -3,6 +3,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const display = document.getElementById('volumeValue');
     const darkModeToggle = document.getElementById('toggleDarkMode');
     const btnEditShortcuts = document.getElementById('btnEditShortcuts');
+    const inputSeekSeconds = document.getElementById('inputSeekSeconds');
+    const toggleCustomSeek = document.getElementById('toggleCustomSeek');
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const isInjectable = tab?.url && !/^(chrome|edge|devtools|about):|chrome\.google\.com\/webstore/.test(tab.url);
@@ -51,6 +53,48 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
+    // Stateless Custom Seek Duration (Always defaults to 1s & disabled on fresh page)
+    if (inputSeekSeconds && toggleCustomSeek) {
+        inputSeekSeconds.value = 1;
+        toggleCustomSeek.checked = false;
+
+        if (isInjectable) {
+            try {
+                const res = await chrome.tabs.sendMessage(tab.id, { action: 'getSeekStatus' });
+                if (res) {
+                    toggleCustomSeek.checked = Boolean(res.enabled);
+                    inputSeekSeconds.value = res.duration || 1;
+                }
+            } catch {
+                toggleCustomSeek.checked = false;
+                inputSeekSeconds.value = 1;
+            }
+        } else {
+            toggleCustomSeek.closest('.toggle-row')?.classList.add('disabled');
+        }
+
+        const updateTabSeek = async () => {
+            if (!isInjectable || !tab?.id) return;
+            const enabled = toggleCustomSeek.checked;
+            const duration = Math.max(1, Math.min(300, parseInt(inputSeekSeconds.value, 10) || 1));
+            inputSeekSeconds.value = duration;
+
+            try {
+                await chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    files: ['custom-seek.js']
+                });
+                await chrome.tabs.sendMessage(tab.id, { action: 'setSeekStatus', enabled, duration });
+            } catch (err) {
+                console.error('Failed to set seek status:', err);
+            }
+        };
+
+        toggleCustomSeek.addEventListener('change', updateTabSeek);
+        inputSeekSeconds.addEventListener('change', updateTabSeek);
+        inputSeekSeconds.addEventListener('click', (e) => e.stopPropagation());
+    }
+
     // Context-Aware UI: Grey out irrelevant toggles
     const url = tab?.url || '';
     if (!url.includes('youtube.com') || url.includes('music.youtube.com')) {
@@ -63,7 +107,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         document.getElementById('toggleWhatsapp')?.closest('.toggle-row')?.classList.add('disabled');
     }
 
-    // Toggle management
+    // Global persistent toggles
     const toggles = {
         toggleAutoCopy: 'featureAutoCopy',
         toggleYtFloatSearch: 'featureYtFloatSearch',
@@ -79,12 +123,20 @@ document.addEventListener('DOMContentLoaded', async () => {
         featureWhatsapp: 'updateWhatsappScript'
     };
 
-    const defaultSettings = Object.fromEntries(Object.values(toggles).map(k => [k, true]));
+    const defaultSettings = {
+        featureAutoCopy: true,
+        featureYtFloatSearch: true,
+        featureYtMusic: true,
+        featureNewTabPage: true,
+        featureWhatsapp: true,
+        featurePasteGo: true
+    };
+
     chrome.storage.local.get(defaultSettings, (res) => {
         for (const [id, key] of Object.entries(toggles)) {
             const el = document.getElementById(id);
             if (!el) continue;
-            el.checked = res[key];
+            el.checked = Boolean(res[key]);
             el.addEventListener('change', (e) => {
                 const enabled = e.target.checked;
                 chrome.storage.local.set({ [key]: enabled });

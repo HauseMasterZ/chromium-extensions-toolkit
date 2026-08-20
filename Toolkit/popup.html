@@ -201,6 +201,53 @@
         input:focus + .slider-round {
             box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.3);
         }
+
+        .toggle-controls-wrap {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .seek-input-box {
+            display: flex;
+            align-items: center;
+            background: var(--toggle-bg);
+            border-radius: 6px;
+            padding: 2px 6px;
+            border: 1px solid var(--border-color);
+            transition: border-color 0.2s, background-color 0.2s;
+        }
+
+        .seek-input-box:focus-within {
+            border-color: var(--accent-color);
+            background: #252528;
+        }
+
+        .seek-input-box input {
+            width: 28px;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: var(--text-main);
+            font-size: 12px;
+            font-weight: 600;
+            text-align: right;
+            padding: 0 2px 0 0;
+            -moz-appearance: textfield;
+        }
+
+        .seek-input-box input::-webkit-outer-spin-button,
+        .seek-input-box input::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+
+        .seek-unit {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-weight: 500;
+            user-select: none;
+        }
     </style>
 </head>
 <body>
@@ -277,6 +324,20 @@
                     <span class="slider-round"></span>
                 </div>
             </label>
+
+            <div class="toggle-row" id="rowCustomSeek">
+                <span>Custom Seek Duration</span>
+                <div class="toggle-controls-wrap">
+                    <div class="seek-input-box" title="Skip duration in seconds">
+                        <input type="number" id="inputSeekSeconds" min="1" max="300" value="1">
+                        <span class="seek-unit">s</span>
+                    </div>
+                    <label class="switch" for="toggleCustomSeek">
+                        <input type="checkbox" id="toggleCustomSeek">
+                        <span class="slider-round"></span>
+                    </label>
+                </div>
+            </div>
 
         </div>
     </div>

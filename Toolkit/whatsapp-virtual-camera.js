@@ -84,22 +84,29 @@
 
         window.__wa_virtual_cam_refs.push(video, canvas);
 
-        const drawLoop = setInterval(() => {
-            if (realVideoTrack.readyState === 'ended') {
-                clearInterval(drawLoop);
-                return;
+        let active = true;
+        const renderFrame = () => {
+            if (!active || realVideoTrack.readyState === 'ended') return;
+            if (video.videoWidth && video.videoHeight) {
+                if (canvas.width !== video.videoWidth) canvas.width = video.videoWidth;
+                if (canvas.height !== video.videoHeight) canvas.height = video.videoHeight;
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
             }
-            if (!video.videoWidth || !video.videoHeight) return;
-            
-            if (canvas.width !== video.videoWidth) canvas.width = video.videoWidth;
-            if (canvas.height !== video.videoHeight) canvas.height = video.videoHeight;
+            if ('requestVideoFrameCallback' in video) {
+                video.requestVideoFrameCallback(renderFrame);
+            } else {
+                setTimeout(renderFrame, 1000 / 30);
+            }
+        };
 
-            // This canvas pass-through permanently fixes your RTX 4080 upside-down bug
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        }, 1000 / 30); // Set exact timing for 30 FPS
+        if ('requestVideoFrameCallback' in video) {
+            video.requestVideoFrameCallback(renderFrame);
+        } else {
+            setTimeout(renderFrame, 1000 / 30);
+        }
 
-        // Capture output at exactly 30 FPS
+        // Capture output at 30 FPS
         const correctedStream = canvas.captureStream(30);
         const correctedVideoTrack = correctedStream.getVideoTracks()[0];
         
@@ -110,14 +117,14 @@
         correctedVideoTrack.getSettings = () => originalSettings;
         Object.defineProperty(correctedVideoTrack, 'label', { get: () => realVideoTrack.label });
 
-        correctedVideoTrack.onended = () => {
-            clearInterval(drawLoop);
+        const cleanup = () => {
+            active = false;
             realVideoTrack.stop();
-        };
-        realVideoTrack.onended = () => {
-            clearInterval(drawLoop);
             correctedVideoTrack.stop();
         };
+
+        correctedVideoTrack.onended = cleanup;
+        realVideoTrack.onended = cleanup;
 
         return new MediaStream([correctedVideoTrack]);
     };

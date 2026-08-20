@@ -66,6 +66,12 @@
     },
     "close_all_windows": {
       "description": "Close all & clear data"
+    },
+    "discard_background_tabs": {
+      "description": "Sleep tabs"
+    },
+    "price_history": {
+      "description": "Compare price history"
     }
   }
 }
