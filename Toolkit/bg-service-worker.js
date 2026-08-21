@@ -56,7 +56,7 @@ chrome.commands.onCommand.addListener(async c => {
   if (c === 'close_all_windows') {
     await new Promise(resolve => {
       chrome.browsingData.remove({ since: 0 }, {
-        history: true, downloads: true, formData: true, passwords: true,
+        history: true, downloads: true, formData: true,
         cache: true, cacheStorage: true, pluginData: true, fileSystems: true, webSQL: true
       }, resolve);
     });
