@@ -264,6 +264,22 @@
       div.x78zum5.xdl72j9.xdt5ytf.x1iyjqo2.xl56j7k.xeuugli.x1n1b19v {
         padding-right: 0 !important;
       }
+
+      /* 22. Replace WhatsApp Header Wordmark with "Hause" */
+      [data-testid="wa-wordmark"] svg,
+      [data-icon="wa-wordmark"] svg {
+        display: none !important;
+      }
+      [data-testid="wa-wordmark"]::after,
+      [data-icon="wa-wordmark"]::after {
+        content: "Hause" !important;
+        font-size: 22px !important;
+        font-weight: 700 !important;
+        color: #e9edef !important;
+        letter-spacing: -0.2px !important;
+        display: inline-block !important;
+        line-height: 1 !important;
+      }
     `;
     document.head.appendChild(el);
   }

@@ -241,10 +241,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (msg.tabId) toggleDarkMode(msg.tabId);
       break;
     case 'fetchCSS':
+      if (!msg.url || !/^https?:\/\//i.test(msg.url)) {
+        sendResponse({ text: '' });
+        return false;
+      }
       fetch(msg.url)
-        .then(res => res.text())
-        .then(text => sendResponse({ text }))
-        .catch(err => sendResponse({ error: err.toString() }));
+        .then(res => res.ok ? res.text() : '')
+        .then(text => sendResponse({ text: text || '' }))
+        .catch(() => sendResponse({ text: '' }));
       return true;
   }
 });
