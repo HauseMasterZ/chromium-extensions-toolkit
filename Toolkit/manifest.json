@@ -8,7 +8,8 @@
     "clipboardRead", 
     "activeTab",
     "storage",
-    "browsingData"
+    "browsingData",
+    "sessions"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -72,6 +73,9 @@
     },
     "price_history": {
       "description": "Compare price history"
+    },
+    "restore_last_closed_window": {
+      "description": "Reopen last closed window"
     }
   }
 }

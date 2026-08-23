@@ -110,6 +110,21 @@ chrome.commands.onCommand.addListener(async c => {
     return;
   }
 
+  if (c === 'restore_last_closed_window') {
+    try {
+      const recentlyClosed = await chrome.sessions.getRecentlyClosed({ maxResults: 25 });
+      const lastClosedWindow = recentlyClosed.find(s => s.window);
+      if (lastClosedWindow?.window?.sessionId) {
+        await chrome.sessions.restore(lastClosedWindow.window.sessionId);
+      } else {
+        await chrome.sessions.restore();
+      }
+    } catch (e) {
+      console.error('Failed to restore window:', e);
+    }
+    return;
+  }
+
   if (!['run', 'run_yt', 'run_incognito'].includes(c) || !tab?.id) return;
   
   try {
