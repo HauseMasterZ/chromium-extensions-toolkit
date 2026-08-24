@@ -18,23 +18,23 @@ jobs:
       - name: Fetch Latest DarkReader
         run: |
           echo "Fetching latest darkreader.min.js from jsDelivr..."
-          curl -sSL "https://cdn.jsdelivr.net/npm/darkreader/darkreader.min.js" -o darkreader.js.new
-          if [ -s darkreader.js.new ]; then
-            mv darkreader.js.new darkreader.js
+          curl -sSL "https://cdn.jsdelivr.net/npm/darkreader/darkreader.min.js" -o Toolkit/darkreader.js.new
+          if [ -s Toolkit/darkreader.js.new ]; then
+            mv Toolkit/darkreader.js.new Toolkit/darkreader.js
           else
             echo "Failed to fetch darkreader.min.js"
-            rm -f darkreader.js.new
+            rm -f Toolkit/darkreader.js.new
           fi
 
       - name: Fetch Latest ClearURLs Rules
         run: |
           echo "Fetching latest ClearURLs rules..."
-          curl -sSL "https://rules2.clearurls.xyz/data.minify.json" -o clearurls-rules.json.new
-          if [ -s clearurls-rules.json.new ]; then
-            mv clearurls-rules.json.new clearurls-rules.json
+          curl -sSL "https://rules2.clearurls.xyz/data.minify.json" -o Toolkit/clearurls-rules.json.new
+          if [ -s Toolkit/clearurls-rules.json.new ]; then
+            mv Toolkit/clearurls-rules.json.new Toolkit/clearurls-rules.json
           else
             echo "Failed to fetch ClearURLs rules"
-            rm -f clearurls-rules.json.new
+            rm -f Toolkit/clearurls-rules.json.new
           fi
 
       - name: Commit & Push Changes
@@ -42,7 +42,10 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          git add darkreader.js clearurls-rules.json
+          # Clean up any accidental root-level duplicates if present
+          git rm -f darkreader.js clearurls-rules.json 2>/dev/null || true
+          
+          git add Toolkit/darkreader.js Toolkit/clearurls-rules.json
           if git diff --staged --quiet; then
             echo "No updates detected. Repository is already up-to-date."
           else

@@ -22,7 +22,7 @@ async function initClearUrlsRules() {
 
 // Fetch live rules from GitHub Raw endpoint and update storage cache
 async function syncRemoteClearUrlsRules() {
-  const REMOTE_URL = 'https://raw.githubusercontent.com/HauseMasterZ/chromium-extensions-toolkit/main/clearurls-rules.json';
+  const REMOTE_URL = 'https://raw.githubusercontent.com/HauseMasterZ/chromium-extensions-toolkit/main/Toolkit/clearurls-rules.json';
   try {
     const res = await fetch(REMOTE_URL, { cache: 'no-cache' });
     if (!res.ok) return;
