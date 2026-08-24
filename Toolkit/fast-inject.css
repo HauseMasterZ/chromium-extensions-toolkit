@@ -1,1 +1,21 @@
-html.fast-dark-active, html.fast-dark-active body, html.fast-dark-active .qsbWrapper, html.fast-dark-active .qsb-header-container, html.fast-dark-active #root, html.fast-dark-active .ni-desktop-homepage-v2 { background-color: #000000 !important; background-image: none !important; color: #e8eaed !important; }
+/* Pre-paint anti-flash pitch-black veil (Active strictly until DarkReader completes all stylesheet compilations) */
+html:not(.darkreader-ready):not(.darkreader--disabled),
+html:not(.darkreader-ready):not(.darkreader--disabled) body {
+  background-color: #000000 !important;
+  color-scheme: dark !important;
+}
+
+html:not(.darkreader-ready):not(.darkreader--disabled) :not(img):not(video):not(canvas):not(svg):not(iframe) {
+  background-color: #000000 !important;
+  background-image: none !important;
+  color: #e8eaed !important;
+  border-color: #111111 !important;
+}
+
+/* Preserve media elements during pre-paint phase */
+html:not(.darkreader-ready):not(.darkreader--disabled) img,
+html:not(.darkreader-ready):not(.darkreader--disabled) video,
+html:not(.darkreader-ready):not(.darkreader--disabled) canvas,
+html:not(.darkreader-ready):not(.darkreader--disabled) svg {
+  background-color: transparent !important;
+}

@@ -1,6 +1,7 @@
 importScripts('clearurls-engine.js');
 
 let clearUrlsData = null;
+const cssMemoryCache = new Map();
 
 // Load rules with 3-tier fallback: (1) Cached in Storage -> (2) Bundled Local File
 async function initClearUrlsRules() {
@@ -283,9 +284,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ text: '' });
         return false;
       }
-      fetch(msg.url)
+      if (cssMemoryCache.has(msg.url)) {
+        sendResponse({ text: cssMemoryCache.get(msg.url) });
+        return false;
+      }
+      fetch(msg.url, { cache: 'force-cache' })
         .then(res => res.ok ? res.text() : '')
-        .then(text => sendResponse({ text: text || '' }))
+        .then(text => {
+          if (text && text.length < 1000000) {
+            if (cssMemoryCache.size > 250) cssMemoryCache.delete(cssMemoryCache.keys().next().value);
+            cssMemoryCache.set(msg.url, text);
+          }
+          sendResponse({ text: text || '' });
+        })
         .catch(() => sendResponse({ text: '' }));
       return true;
   }
@@ -313,7 +324,6 @@ function toggleDarkMode(tabId) {
 
 function injectDarkMode(tabId) {
   chrome.scripting.insertCSS({ target: { tabId }, files: ['fast-inject.css'] });
-  chrome.scripting.executeScript({ target: { tabId }, files: ['fast-inject-class.js'] });
   chrome.scripting.executeScript({ target: { tabId }, files: ['darkreader.js', 'autodark-init.js'] });
 }
 
@@ -363,13 +373,20 @@ function updateRegisteredDarkModeScript(domains) {
       });
 
       try {
-        await chrome.scripting.registerContentScripts([{
-          id: 'dynamic-dark-mode',
-          matches,
-          css: ['fast-inject.css'],
-          js: ['fast-inject-class.js', 'darkreader.js', 'autodark-init.js'],
-          runAt: 'document_idle'
-        }]);
+        await chrome.scripting.registerContentScripts([
+          {
+            id: 'dynamic-dark-mode-css',
+            matches,
+            css: ['fast-inject.css'],
+            runAt: 'document_start'
+          },
+          {
+            id: 'dynamic-dark-mode-js',
+            matches,
+            js: ['darkreader.js', 'autodark-init.js'],
+            runAt: 'document_idle'
+          }
+        ]);
       } catch (e) {
         console.error('Failed to register dynamic dark mode script:', e);
       }
