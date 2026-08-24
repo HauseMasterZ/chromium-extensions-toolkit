@@ -1,10 +1,48 @@
 importScripts('clearurls-engine.js');
 
 let clearUrlsData = null;
-fetch(chrome.runtime.getURL('clearurls-rules.json'))
-  .then(res => res.json())
-  .then(data => clearUrlsData = data)
-  .catch(console.error);
+
+// Load rules with 3-tier fallback: (1) Cached in Storage -> (2) Bundled Local File
+async function initClearUrlsRules() {
+  try {
+    const { cachedClearUrlsRules } = await chrome.storage.local.get('cachedClearUrlsRules');
+    if (cachedClearUrlsRules?.providers) {
+      clearUrlsData = cachedClearUrlsRules;
+      return;
+    }
+  } catch {}
+
+  try {
+    const res = await fetch(chrome.runtime.getURL('clearurls-rules.json'));
+    clearUrlsData = await res.json();
+  } catch (e) {
+    console.error('Failed to load bundled clearurls rules:', e);
+  }
+}
+
+// Fetch live rules from GitHub Raw endpoint and update storage cache
+async function syncRemoteClearUrlsRules() {
+  const REMOTE_URL = 'https://raw.githubusercontent.com/HauseMasterZ/chromium-extensions-toolkit/main/clearurls-rules.json';
+  try {
+    const res = await fetch(REMOTE_URL, { cache: 'no-cache' });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data?.providers && data?.globalRules) {
+      clearUrlsData = data;
+      await chrome.storage.local.set({ cachedClearUrlsRules: data, lastRulesSyncTime: Date.now() });
+    }
+  } catch {}
+}
+
+initClearUrlsRules();
+syncRemoteClearUrlsRules();
+
+chrome.alarms.create('sync_clearurls_alarm', { periodInMinutes: 1440 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'sync_clearurls_alarm') {
+    syncRemoteClearUrlsRules();
+  }
+});
 
 async function getActiveTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
