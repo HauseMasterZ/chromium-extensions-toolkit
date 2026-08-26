@@ -81,26 +81,19 @@ jobs:
           TAG_NAME="v$(date -u +'%Y.%m.%d-%H%M')"
           RELEASE_TIME="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
 
-          cat <<EOF > release_notes.md
-## 🚀 Automated Dependencies & Engine Build
-
-**Updated at:** \`$RELEASE_TIME\`
-
----
-
-### 📦 Upstream Data & Dependency Status
-* **DarkReader**: Upstream \`darkreader.js\` compiled bundle
-* **ClearURLs Rule Definitions**: Latest \`clearurls-rules.json\` tracking parameter filters
-* **HaGeZi URL Shortener Dataset**: \`shorteners-rules.json\` containing **9,900+ active shortener & vanity redirect domains**
-
----
-
-### 🛠️ Installation Instructions
-1. Download **\`toolkit-extension.zip\`** below and extract the archive to a folder.
-2. Open Chromium browser (Chrome / Brave / Edge) and navigate to \`chrome://extensions\`.
-3. Toggle **Developer mode** on (top-right corner).
-4. Click **Load unpacked** and select the extracted folder.
-EOF
+          printf "## 🚀 Automated Dependencies & Engine Build\n\n" > release_notes.md
+          printf "**Updated at:** \`%s\`\n\n" "$RELEASE_TIME" >> release_notes.md
+          printf -- "---\n\n" >> release_notes.md
+          printf "### 📦 Upstream Data & Dependency Status\n" >> release_notes.md
+          printf "* **DarkReader**: Upstream \`darkreader.js\` compiled bundle\n" >> release_notes.md
+          printf "* **ClearURLs Rule Definitions**: Latest \`clearurls-rules.json\` tracking parameter filters\n" >> release_notes.md
+          printf "* **HaGeZi URL Shortener Dataset**: \`shorteners-rules.json\` containing **9,900+ active shortener & vanity redirect domains**\n\n" >> release_notes.md
+          printf -- "---\n\n" >> release_notes.md
+          printf "### 🛠️ Installation Instructions\n" >> release_notes.md
+          printf "1. Download **\`toolkit-extension.zip\`** below and extract the archive to a folder.\n" >> release_notes.md
+          printf "2. Open Chromium browser (Chrome / Brave / Edge) and navigate to \`chrome://extensions\`.\n" >> release_notes.md
+          printf "3. Toggle **Developer mode** on (top-right corner).\n" >> release_notes.md
+          printf "4. Click **Load unpacked** and select the extracted folder.\n" >> release_notes.md
 
           echo "Creating GitHub Release $TAG_NAME..."
           gh release create "$TAG_NAME" toolkit-extension.zip \
