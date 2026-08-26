@@ -1,9 +1,11 @@
 importScripts('clearurls-engine.js');
 
 let clearUrlsData = null;
+let shortenersSet = new Set();
 const cssMemoryCache = new Map();
+const unshortenCache = new Map();
 
-// Load rules with 3-tier fallback: (1) Cached in Storage -> (2) Bundled Local File
+// Load ClearURLs rules with 3-tier fallback
 async function initClearUrlsRules() {
   try {
     const { cachedClearUrlsRules } = await chrome.storage.local.get('cachedClearUrlsRules');
@@ -21,7 +23,29 @@ async function initClearUrlsRules() {
   }
 }
 
-// Fetch live rules from GitHub Raw endpoint and update storage cache
+// Load Shortener Domains with 3-tier fallback
+async function initShortenersList() {
+  try {
+    const { cachedShortenersList } = await chrome.storage.local.get('cachedShortenersList');
+    if (Array.isArray(cachedShortenersList) && cachedShortenersList.length > 0) {
+      shortenersSet = new Set(cachedShortenersList);
+      return;
+    }
+  } catch {}
+
+  try {
+    const res = await fetch(chrome.runtime.getURL('shorteners-rules.json'));
+    const list = await res.json();
+    if (Array.isArray(list)) {
+      shortenersSet = new Set(list);
+      await chrome.storage.local.set({ cachedShortenersList: list });
+    }
+  } catch (e) {
+    console.error('Failed to load bundled shorteners list:', e);
+  }
+}
+
+// Fetch live rules from GitHub
 async function syncRemoteClearUrlsRules() {
   const REMOTE_URL = 'https://raw.githubusercontent.com/HauseMasterZ/chromium-extensions-toolkit/main/Toolkit/clearurls-rules.json';
   try {
@@ -35,13 +59,59 @@ async function syncRemoteClearUrlsRules() {
   } catch {}
 }
 
+// Fetch live shorteners with Option A (HaGeZi Upstream / CDN) -> Option B (Repo Mirror) fallback
+async function syncRemoteShortenersList() {
+  const UPSTREAM_URL = 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/urlshortener-onlydomains.txt';
+  const CDN_BACKUP_URL = 'https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/wildcard/urlshortener-onlydomains.txt';
+  const REPO_FALLBACK_URL = 'https://raw.githubusercontent.com/HauseMasterZ/chromium-extensions-toolkit/main/Toolkit/shorteners-rules.json';
+
+  const tryFetchTextList = async (url) => {
+    try {
+      const res = await fetch(url, { cache: 'no-cache' });
+      if (!res.ok) return null;
+      const text = await res.text();
+      const list = text.split(/\r?\n/).map(s => s.trim().toLowerCase()).filter(s => s && !s.startsWith('#'));
+      return list.length > 500 ? list : null;
+    } catch {
+      return null;
+    }
+  };
+
+  // Option A1: Primary Upstream HaGeZi
+  let list = await tryFetchTextList(UPSTREAM_URL);
+  
+  // Option A2: Fast jsDelivr CDN
+  if (!list) list = await tryFetchTextList(CDN_BACKUP_URL);
+
+  if (list) {
+    shortenersSet = new Set(list);
+    await chrome.storage.local.set({ cachedShortenersList: list, lastShortenersSyncTime: Date.now() });
+    return;
+  }
+
+  // Option B: Secondary Fallback to Repo Mirror JSON
+  try {
+    const res = await fetch(REPO_FALLBACK_URL, { cache: 'no-cache' });
+    if (res.ok) {
+      const jsonList = await res.json();
+      if (Array.isArray(jsonList) && jsonList.length > 500) {
+        shortenersSet = new Set(jsonList);
+        await chrome.storage.local.set({ cachedShortenersList: jsonList, lastShortenersSyncTime: Date.now() });
+      }
+    }
+  } catch {}
+}
+
 initClearUrlsRules();
+initShortenersList();
 syncRemoteClearUrlsRules();
+syncRemoteShortenersList();
 
 chrome.alarms.create('sync_clearurls_alarm', { periodInMinutes: 1440 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'sync_clearurls_alarm') {
     syncRemoteClearUrlsRules();
+    syncRemoteShortenersList();
   }
 });
 
@@ -250,7 +320,32 @@ const updateWhatsappScript = (enabled) => syncContentScripts(['whatsapp-virtual-
   }
 ]);
 
+function setupContextMenus() {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: 'open_clean_link_tab',
+      title: 'Open Clean / Unshortened Link',
+      contexts: ['link']
+    });
+  });
+}
+
+setupContextMenus();
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId === 'open_clean_link_tab' && info.linkUrl) {
+    const cleanUrl = await resolveAndCleanShortUrl(info.linkUrl) || info.linkUrl;
+    const createProps = { url: cleanUrl };
+    if (tab?.id) {
+      createProps.index = tab.index + 1;
+      createProps.openerTabId = tab.id;
+    }
+    chrome.tabs.create(createProps);
+  }
+});
+
 chrome.runtime.onInstalled.addListener(async () => {
+  setupContextMenus();
   try {
     const existing = await chrome.scripting.getRegisteredContentScripts();
     const legacy = existing.map(s => s.id).filter(id => id === 'custom-seek');
@@ -299,8 +394,141 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         })
         .catch(() => sendResponse({ text: '' }));
       return true;
+    case 'unshortenUrl':
+      if (!msg.url) {
+        sendResponse({ success: false });
+        return false;
+      }
+      resolveAndCleanShortUrl(msg.url).then(cleanUrl => {
+        sendResponse({ success: Boolean(cleanUrl), cleanUrl: cleanUrl || msg.url });
+      }).catch(() => sendResponse({ success: false, cleanUrl: msg.url }));
+      return true;
+    case 'openUnshortenedTab':
+      if (!msg.url) {
+        sendResponse({ success: false });
+        return false;
+      }
+      resolveAndCleanShortUrl(msg.url).then(cleanUrl => {
+        const urlToOpen = cleanUrl || msg.url;
+        const createProps = { url: urlToOpen, active: false };
+        if (sender.tab?.id) {
+          createProps.index = sender.tab.index + 1;
+          createProps.openerTabId = sender.tab.id;
+        }
+        chrome.tabs.create(createProps);
+        sendResponse({ success: true, cleanUrl: urlToOpen });
+      }).catch(() => {
+        chrome.tabs.create({ url: msg.url, active: false });
+        sendResponse({ success: false });
+      });
+      return true;
   }
 });
+
+function unwrapGatewayUrl(rawUrl) {
+  if (!rawUrl) return null;
+  try {
+    const parsed = new URL(rawUrl);
+    const paramNames = ['q', 'url', 'dest', 'destination', 'target', 'u', 'redirect_uri', 'r', 'z', 'link'];
+    for (const p of paramNames) {
+      const val = parsed.searchParams.get(p);
+      if (val && /^https?:\/\//i.test(val)) {
+        return val;
+      }
+    }
+  } catch {}
+  return null;
+}
+
+function isShortenerUrl(urlStr) {
+  try {
+    const url = new URL(urlStr);
+    const host = url.hostname.toLowerCase().replace(/^www\./, '');
+    const pathname = url.pathname;
+
+    if (shortenersSet.has(host)) return true;
+
+    const knownShorteners = new Set([
+      'bit.ly', 't.co', 'tinyurl.com', 'is.gd', 'v.gd', 'amzn.to', 'buff.ly', 'ow.ly',
+      'goo.gl', 'qr.ae', 'cutt.ly', 'rb.gy', 'shorturl.at', 'ift.tt', 'trib.al',
+      'rebrand.ly', 'lnkd.in', 'linktr.ee', 'rotf.lol', 'tiny.cc', 'lmg.gg', 'redd.it',
+      'spoti.fi', 'apple.co', 'w.wiki', 'wapo.st', 'nyti.ms', 'bit.do', 'shorte.st',
+      'geni.us', 'a.co', 'snip.ly', 'snip.li', 't.ly', 'dub.sh', 'snip.to', 's.id'
+    ]);
+    if (knownShorteners.has(host)) return true;
+
+    // Generic short TLD single slug pattern
+    const shortTlds = /\.(gg|ly|to|co|is|gd|cc|link|me|click|fi|ms|it|st|app|bio|us|sh|io|so|at|am|ws|nu|ee|ai|xyz|site)$/i;
+    if (host.length <= 14 && shortTlds.test(host) && /^\/[a-zA-Z0-9_\-\.]{1,25}\/?$/.test(pathname)) {
+      return true;
+    }
+
+    // Generic vanity short link pattern (e.g. piavpn.com/ltt, dbrand.com/pcb)
+    if (/^\/[a-zA-Z0-9_\-]{1,24}\/?$/.test(pathname) && !pathname.includes('.')) {
+      const standardRoots = new Set(['/login', '/signup', '/register', '/about', '/terms', '/privacy', '/contact', '/help', '/support', '/pricing', '/faq']);
+      if (!standardRoots.has(pathname.toLowerCase().replace(/\/$/, ''))) {
+        return true;
+      }
+    }
+  } catch {}
+  return false;
+}
+
+async function resolveAndCleanShortUrl(rawUrl) {
+  if (!rawUrl || !/^https?:\/\//i.test(rawUrl)) return null;
+  if (unshortenCache.has(rawUrl)) return unshortenCache.get(rawUrl);
+
+  try {
+    let currentUrl = rawUrl;
+    
+    // Step 1: Unwrap outer platform gateway (YouTube, Google, Reddit, etc.)
+    const unwrapped = unwrapGatewayUrl(currentUrl);
+    if (unwrapped) currentUrl = unwrapped;
+
+    let finalUrl = currentUrl;
+
+    // Step 2: If currentUrl is a shortener, resolve via HTTP HEAD/GET with 4s timeout
+    if (isShortenerUrl(currentUrl)) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+      try {
+        let res = await fetch(currentUrl, { method: 'HEAD', redirect: 'follow', signal: controller.signal });
+        clearTimeout(timeoutId);
+        
+        // If res.url changed, we followed the redirect successfully regardless of final status code (e.g. 503 bot protect)
+        if (res.url && res.url !== currentUrl) {
+          finalUrl = res.url;
+        } else if (!res.ok && res.status !== 404) {
+          const getController = new AbortController();
+          const getTimeout = setTimeout(() => getController.abort(), 3000);
+          res = await fetch(currentUrl, { method: 'GET', redirect: 'follow', signal: getController.signal });
+          clearTimeout(getTimeout);
+          finalUrl = res.url || currentUrl;
+        } else {
+          finalUrl = res.url || currentUrl;
+        }
+      } catch {
+        clearTimeout(timeoutId);
+        finalUrl = currentUrl;
+      }
+    }
+
+    // Step 3: Check for nested inner gateway
+    const secondUnwrap = unwrapGatewayUrl(finalUrl);
+    if (secondUnwrap) finalUrl = secondUnwrap;
+
+    // Step 4: Sanitize through ClearURLs engine
+    const cleanUrl = typeof cleanUrlWithClearUrls === 'function' ? cleanUrlWithClearUrls(finalUrl, clearUrlsData) : finalUrl;
+
+    if (unshortenCache.size > 500) unshortenCache.delete(unshortenCache.keys().next().value);
+    unshortenCache.set(rawUrl, cleanUrl);
+
+    return cleanUrl;
+  } catch (e) {
+    return rawUrl;
+  }
+}
 
 function toggleDarkMode(tabId) {
   if (!tabId) return;

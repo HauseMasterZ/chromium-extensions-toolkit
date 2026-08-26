@@ -269,3 +269,92 @@ document.addEventListener('mouseup', e => {
         showAndroidClipboardOverlay(text, e.clientX, e.clientY);
     }
 });
+
+// ==========================================
+// UNIVERSAL SAFE FORCE-PASTE & FORCE-COPY ENGINE
+// ==========================================
+
+function enableSafePaste(e) {
+    const target = e.target;
+    if (!target) return;
+    const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+    if (!isInput) return;
+
+    // Stop website scripts from canceling native paste
+    e.stopImmediatePropagation();
+
+    // After paste completes, dispatch synthetic events to update banking/React/Angular/jQuery validation state
+    setTimeout(() => {
+        try {
+            target.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+            target.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+        } catch {}
+    }, 0);
+}
+
+function enableSafeCopyCut(e) {
+    if (e.defaultPrevented) return;
+    e.stopImmediatePropagation();
+}
+
+function enableSafeContextMenu(e) {
+    e.stopImmediatePropagation();
+}
+
+function enableSafeSelection(e) {
+    e.stopImmediatePropagation();
+}
+
+// Attach in capture phase to intercept before website's blocking listeners
+window.addEventListener('paste', enableSafePaste, true);
+window.addEventListener('copy', enableSafeCopyCut, true);
+window.addEventListener('cut', enableSafeCopyCut, true);
+window.addEventListener('contextmenu', enableSafeContextMenu, true);
+window.addEventListener('selectstart', enableSafeSelection, true);
+window.addEventListener('dragstart', enableSafeSelection, true);
+
+// Strip inline blocking attributes on form inputs (e.g. onpaste="return false;")
+function sanitizeFormAttributes(root = document) {
+    const blockedElements = root.querySelectorAll?.('input, textarea, [onpaste], [oncopy], [oncut], [oncontextmenu], [onselectstart]') || [];
+    const attrs = ['onpaste', 'oncopy', 'oncut', 'oncontextmenu', 'onselectstart', 'ondragstart'];
+    
+    for (const el of blockedElements) {
+        for (const attr of attrs) {
+            if (el.hasAttribute(attr)) {
+                el.removeAttribute(attr);
+            }
+        }
+    }
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => sanitizeFormAttributes());
+} else {
+    sanitizeFormAttributes();
+}
+
+const formObserver = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+            if (node.nodeType === 1) {
+                sanitizeFormAttributes(node);
+            }
+        }
+    }
+});
+
+formObserver.observe(document.documentElement || document.body, {
+    childList: true,
+    subtree: true,
+    attributeFilter: ['onpaste', 'oncopy', 'oncut', 'oncontextmenu', 'onselectstart']
+});
+
+// Ensure text fields remain selectable
+const forceSelectStyle = document.createElement('style');
+forceSelectStyle.textContent = `
+    input, textarea, [contenteditable="true"] {
+        -webkit-user-select: text !important;
+        user-select: text !important;
+    }
+`;
+(document.head || document.documentElement).appendChild(forceSelectStyle);

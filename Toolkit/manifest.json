@@ -10,7 +10,8 @@
     "storage",
     "browsingData",
     "sessions",
-    "alarms"
+    "alarms",
+    "contextMenus"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -41,7 +42,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["global-auto-copy.js"]
+      "js": ["global-auto-copy.js", "link-unshortener.js"]
     }
   ],
   "commands": {

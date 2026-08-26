@@ -37,15 +37,27 @@ jobs:
             rm -f Toolkit/clearurls-rules.json.new
           fi
 
+      - name: Fetch Latest Shorteners List
+        run: |
+          echo "Fetching latest shorteners list from HaGeZi's DNS blocklists..."
+          curl -sSL "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/urlshortener-onlydomains.txt" -o shorteners_raw.txt
+          if [ -s shorteners_raw.txt ]; then
+            python3 -c "import json; lines = [l.strip().lower() for l in open('shorteners_raw.txt') if l.strip() and not l.strip().startswith('#')]; open('Toolkit/shorteners-rules.json', 'w').write(json.dumps(lines))"
+            rm -f shorteners_raw.txt
+          else
+            echo "Failed to fetch shorteners list"
+            rm -f shorteners_raw.txt
+          fi
+
       - name: Commit & Push Changes
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
           # Clean up any accidental root-level duplicates if present
-          git rm -f darkreader.js clearurls-rules.json 2>/dev/null || true
+          git rm -f darkreader.js clearurls-rules.json shorteners-rules.json 2>/dev/null || true
           
-          git add Toolkit/darkreader.js Toolkit/clearurls-rules.json
+          git add Toolkit/darkreader.js Toolkit/clearurls-rules.json Toolkit/shorteners-rules.json
           if git diff --staged --quiet; then
             echo "No updates detected. Repository is already up-to-date."
           else
