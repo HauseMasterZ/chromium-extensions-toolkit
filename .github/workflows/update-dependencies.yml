@@ -81,10 +81,8 @@ jobs:
           TAG_NAME="v$(date -u +'%Y.%m.%d-%H%M')"
           RELEASE_TIME="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
 
-          echo "Creating GitHub Release $TAG_NAME..."
-          gh release create "$TAG_NAME" toolkit-extension.zip \
-            --title "Toolkit Extension Release ($TAG_NAME)" \
-            --notes "## 🚀 Automated Dependencies & Engine Build
+          cat <<EOF > release_notes.md
+## 🚀 Automated Dependencies & Engine Build
 
 **Updated at:** \`$RELEASE_TIME\`
 
@@ -101,5 +99,11 @@ jobs:
 1. Download **\`toolkit-extension.zip\`** below and extract the archive to a folder.
 2. Open Chromium browser (Chrome / Brave / Edge) and navigate to \`chrome://extensions\`.
 3. Toggle **Developer mode** on (top-right corner).
-4. Click **Load unpacked** and select the extracted folder."
+4. Click **Load unpacked** and select the extracted folder.
+EOF
+
+          echo "Creating GitHub Release $TAG_NAME..."
+          gh release create "$TAG_NAME" toolkit-extension.zip \
+            --title "Toolkit Extension Release ($TAG_NAME)" \
+            --notes-file release_notes.md
 
