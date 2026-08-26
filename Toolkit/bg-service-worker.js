@@ -59,44 +59,33 @@ async function syncRemoteClearUrlsRules() {
   } catch {}
 }
 
-// Fetch live shorteners with Option A (HaGeZi Upstream / CDN) -> Option B (Repo Mirror) fallback
+// Fetch live shorteners & clickthroughs (Repo Mirror 40k+ Dataset -> HaGeZi/AdGuard Upstream Fallback)
 async function syncRemoteShortenersList() {
-  const UPSTREAM_URL = 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/urlshortener-onlydomains.txt';
-  const CDN_BACKUP_URL = 'https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/wildcard/urlshortener-onlydomains.txt';
-  const REPO_FALLBACK_URL = 'https://raw.githubusercontent.com/HauseMasterZ/chromium-extensions-toolkit/main/Toolkit/shorteners-rules.json';
+  const REPO_URL = 'https://raw.githubusercontent.com/HauseMasterZ/chromium-extensions-toolkit/main/Toolkit/shorteners-rules.json';
+  const HAGEZI_URL = 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/urlshortener-onlydomains.txt';
 
-  const tryFetchTextList = async (url) => {
-    try {
-      const res = await fetch(url, { cache: 'no-cache' });
-      if (!res.ok) return null;
-      const text = await res.text();
-      const list = text.split(/\r?\n/).map(s => s.trim().toLowerCase()).filter(s => s && !s.startsWith('#'));
-      return list.length > 500 ? list : null;
-    } catch {
-      return null;
-    }
-  };
-
-  // Option A1: Primary Upstream HaGeZi
-  let list = await tryFetchTextList(UPSTREAM_URL);
-  
-  // Option A2: Fast jsDelivr CDN
-  if (!list) list = await tryFetchTextList(CDN_BACKUP_URL);
-
-  if (list) {
-    shortenersSet = new Set(list);
-    await chrome.storage.local.set({ cachedShortenersList: list, lastShortenersSyncTime: Date.now() });
-    return;
-  }
-
-  // Option B: Secondary Fallback to Repo Mirror JSON
   try {
-    const res = await fetch(REPO_FALLBACK_URL, { cache: 'no-cache' });
+    // Primary: Pre-compiled merged dataset (HaGeZi + AdGuard CNAME clickthroughs)
+    const res = await fetch(REPO_URL, { cache: 'no-cache' });
     if (res.ok) {
       const jsonList = await res.json();
-      if (Array.isArray(jsonList) && jsonList.length > 500) {
+      if (Array.isArray(jsonList) && jsonList.length > 5000) {
         shortenersSet = new Set(jsonList);
         await chrome.storage.local.set({ cachedShortenersList: jsonList, lastShortenersSyncTime: Date.now() });
+        return;
+      }
+    }
+  } catch {}
+
+  try {
+    // Secondary fallback: Direct HaGeZi upstream
+    const res = await fetch(HAGEZI_URL, { cache: 'no-cache' });
+    if (res.ok) {
+      const text = await res.text();
+      const list = text.split(/\r?\n/).map(s => s.trim().toLowerCase()).filter(s => s && !s.startsWith('#'));
+      if (list.length > 500) {
+        shortenersSet = new Set(list);
+        await chrome.storage.local.set({ cachedShortenersList: list, lastShortenersSyncTime: Date.now() });
       }
     }
   } catch {}
@@ -320,32 +309,7 @@ const updateWhatsappScript = (enabled) => syncContentScripts(['whatsapp-virtual-
   }
 ]);
 
-function setupContextMenus() {
-  chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: 'open_clean_link_tab',
-      title: 'Open Clean / Unshortened Link',
-      contexts: ['link']
-    });
-  });
-}
-
-setupContextMenus();
-
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId === 'open_clean_link_tab' && info.linkUrl) {
-    const cleanUrl = await resolveAndCleanShortUrl(info.linkUrl) || info.linkUrl;
-    const createProps = { url: cleanUrl };
-    if (tab?.id) {
-      createProps.index = tab.index + 1;
-      createProps.openerTabId = tab.id;
-    }
-    chrome.tabs.create(createProps);
-  }
-});
-
 chrome.runtime.onInstalled.addListener(async () => {
-  setupContextMenus();
   try {
     const existing = await chrome.scripting.getRegisteredContentScripts();
     const legacy = existing.map(s => s.id).filter(id => id === 'custom-seek');
@@ -457,18 +421,9 @@ function isShortenerUrl(urlStr) {
     ]);
     if (knownShorteners.has(host)) return true;
 
-    // Generic short TLD single slug pattern
     const shortTlds = /\.(gg|ly|to|co|is|gd|cc|link|me|click|fi|ms|it|st|app|bio|us|sh|io|so|at|am|ws|nu|ee|ai|xyz|site)$/i;
     if (host.length <= 14 && shortTlds.test(host) && /^\/[a-zA-Z0-9_\-\.]{1,25}\/?$/.test(pathname)) {
       return true;
-    }
-
-    // Generic vanity short link pattern (e.g. piavpn.com/ltt, dbrand.com/pcb)
-    if (/^\/[a-zA-Z0-9_\-]{1,24}\/?$/.test(pathname) && !pathname.includes('.')) {
-      const standardRoots = new Set(['/login', '/signup', '/register', '/about', '/terms', '/privacy', '/contact', '/help', '/support', '/pricing', '/faq']);
-      if (!standardRoots.has(pathname.toLowerCase().replace(/\/$/, ''))) {
-        return true;
-      }
     }
   } catch {}
   return false;
@@ -487,31 +442,48 @@ async function resolveAndCleanShortUrl(rawUrl) {
 
     let finalUrl = currentUrl;
 
-    // Step 2: If currentUrl is a shortener, resolve via HTTP HEAD/GET with 4s timeout
-    if (isShortenerUrl(currentUrl)) {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 4000);
+    const requestHeaders = {
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'cross-site'
+    };
 
-      try {
-        let res = await fetch(currentUrl, { method: 'HEAD', redirect: 'follow', signal: controller.signal });
-        clearTimeout(timeoutId);
-        
-        // If res.url changed, we followed the redirect successfully regardless of final status code (e.g. 503 bot protect)
-        if (res.url && res.url !== currentUrl) {
-          finalUrl = res.url;
-        } else if (!res.ok && res.status !== 404) {
-          const getController = new AbortController();
-          const getTimeout = setTimeout(() => getController.abort(), 3000);
-          res = await fetch(currentUrl, { method: 'GET', redirect: 'follow', signal: getController.signal });
-          clearTimeout(getTimeout);
-          finalUrl = res.url || currentUrl;
-        } else {
-          finalUrl = res.url || currentUrl;
-        }
-      } catch {
-        clearTimeout(timeoutId);
-        finalUrl = currentUrl;
+    // Step 2: Resolve via fast HTTP HEAD (with GET fallback and stream abortion)
+    const headController = new AbortController();
+    const headTimeoutId = setTimeout(() => headController.abort(), 2000);
+
+    try {
+      let res = await fetch(currentUrl, {
+        method: 'HEAD',
+        redirect: 'follow',
+        headers: requestHeaders,
+        signal: headController.signal
+      });
+      clearTimeout(headTimeoutId);
+      
+      if (res.url && res.url !== currentUrl) {
+        finalUrl = res.url;
+      } else if (!res.ok && res.status !== 404) {
+        const getController = new AbortController();
+        const getTimeoutId = setTimeout(() => getController.abort(), 2000);
+        res = await fetch(currentUrl, {
+          method: 'GET',
+          redirect: 'follow',
+          headers: requestHeaders,
+          signal: getController.signal
+        });
+        clearTimeout(getTimeoutId);
+        finalUrl = res.url || currentUrl;
+        // Immediately cancel the response stream to save memory & bandwidth
+        try { if (res.body?.cancel) res.body.cancel(); } catch {}
+      } else {
+        finalUrl = res.url || currentUrl;
       }
+    } catch {
+      clearTimeout(headTimeoutId);
+      finalUrl = currentUrl;
     }
 
     // Step 3: Check for nested inner gateway
@@ -521,7 +493,7 @@ async function resolveAndCleanShortUrl(rawUrl) {
     // Step 4: Sanitize through ClearURLs engine
     const cleanUrl = typeof cleanUrlWithClearUrls === 'function' ? cleanUrlWithClearUrls(finalUrl, clearUrlsData) : finalUrl;
 
-    if (unshortenCache.size > 500) unshortenCache.delete(unshortenCache.keys().next().value);
+    if (unshortenCache.size > 1000) unshortenCache.delete(unshortenCache.keys().next().value);
     unshortenCache.set(rawUrl, cleanUrl);
 
     return cleanUrl;

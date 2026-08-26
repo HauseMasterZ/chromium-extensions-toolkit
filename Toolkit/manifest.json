@@ -10,8 +10,7 @@
     "storage",
     "browsingData",
     "sessions",
-    "alarms",
-    "contextMenus"
+    "alarms"
   ],
   "host_permissions": [
     "<all_urls>"

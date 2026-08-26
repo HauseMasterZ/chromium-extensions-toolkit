@@ -37,17 +37,32 @@ jobs:
             rm -f Toolkit/clearurls-rules.json.new
           fi
 
-      - name: Fetch Latest Shorteners List
+      - name: Fetch Latest Shorteners & Clickthrough Lists
         run: |
-          echo "Fetching latest shorteners list from HaGeZi's DNS blocklists..."
-          curl -sSL "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/urlshortener-onlydomains.txt" -o shorteners_raw.txt
-          if [ -s shorteners_raw.txt ]; then
-            python3 -c "import json; lines = [l.strip().lower() for l in open('shorteners_raw.txt') if l.strip() and not l.strip().startswith('#')]; open('Toolkit/shorteners-rules.json', 'w').write(json.dumps(lines))"
-            rm -f shorteners_raw.txt
-          else
-            echo "Failed to fetch shorteners list"
-            rm -f shorteners_raw.txt
-          fi
+          echo "Fetching latest shorteners from HaGeZi & AdGuard CNAME clickthroughs..."
+          curl -sSL "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/urlshortener-onlydomains.txt" -o hagezi_raw.txt
+          curl -sSL "https://raw.githubusercontent.com/AdguardTeam/cname-trackers/master/data/combined_disguised_clickthroughs.txt" -o adguard_raw.txt
+          python3 -c "
+          import json, re, os
+          domains = set()
+          if os.path.exists('hagezi_raw.txt'):
+              for line in open('hagezi_raw.txt', encoding='utf-8', errors='ignore'):
+                  l = line.strip().lower()
+                  if l and not l.startswith('#'):
+                      domains.add(l)
+              os.remove('hagezi_raw.txt')
+          if os.path.exists('adguard_raw.txt'):
+              for line in open('adguard_raw.txt', encoding='utf-8', errors='ignore'):
+                  l = line.strip().lower()
+                  if l and not l.startswith('!'):
+                      clean = re.sub(r'^[\|\^]+|[\|\^]+$', '', l)
+                      if clean:
+                          domains.add(clean)
+              os.remove('adguard_raw.txt')
+          if len(domains) > 5000:
+              open('Toolkit/shorteners-rules.json', 'w', encoding='utf-8').write(json.dumps(sorted(list(domains))))
+              print(f'Successfully compiled {len(domains)} unique shortener and clickthrough domains.')
+          "
 
       - name: Commit & Push Changes
         id: commit_step

@@ -41,8 +41,21 @@ function isShortOrGatewayLink(rawUrl) {
         const host = url.hostname.toLowerCase().replace(/^www\./, '');
         const pathname = url.pathname;
 
+        // Never treat same-domain internal links as shorteners
+        const currentHost = window.location.hostname.toLowerCase().replace(/^www\./, '');
+        if (host === currentHost || host.endsWith('.' + currentHost) || currentHost.endsWith('.' + host)) {
+            return false;
+        }
+
+        // Exclude static media, stylesheets, and binary downloads
+        if (/\.(png|jpg|jpeg|gif|webp|svg|mp4|webm|zip|tar|gz|pdf|css|js|woff|woff2|ttf|json|xml)$/i.test(pathname)) {
+            return false;
+        }
+
+        // Tier 2: 40,495+ verified dynamic shorteners & clickthrough database
         if (dynamicShorteners.has(host)) return true;
 
+        // Built-in known shortener services
         const knownHosts = new Set([
             'bit.ly', 't.co', 'tinyurl.com', 'is.gd', 'v.gd', 'amzn.to', 'buff.ly', 'ow.ly',
             'goo.gl', 'qr.ae', 'cutt.ly', 'rb.gy', 'shorturl.at', 'ift.tt', 'trib.al',
@@ -52,26 +65,77 @@ function isShortOrGatewayLink(rawUrl) {
         ]);
         if (knownHosts.has(host)) return true;
 
+        // Dedicated shortener TLDs with single slug (e.g. *.gg/xyz, *.ly/xyz, *.to/xyz, *.link/xyz)
         const shortTlds = /\.(gg|ly|to|co|is|gd|cc|link|me|click|fi|ms|it|st|app|bio|us|sh|io|so|at|am|ws|nu|ee|ai|xyz|site)$/i;
         if (host.length <= 14 && shortTlds.test(host) && /^\/[a-zA-Z0-9_\-\.]{1,25}\/?$/.test(pathname)) {
             return true;
         }
 
-        // Generic vanity single-slug affiliate link pattern (e.g. piavpn.com/ltt, dbrand.com/pcb)
-        if (/^\/[a-zA-Z0-9_\-]{1,24}\/?$/.test(pathname) && !pathname.includes('.')) {
-            const standardRoots = new Set(['/login', '/signup', '/register', '/about', '/terms', '/privacy', '/contact', '/help', '/support', '/pricing', '/faq']);
-            if (!standardRoots.has(pathname.toLowerCase().replace(/\/$/, ''))) {
-                return true;
-            }
+        // Tier 3: External cross-origin paths for sponsor/vanity unshortening (e.g. piavpn.com/ltt, dbrand.com/mkbhd)
+        if (pathname && pathname.length > 1 && pathname !== '/' && !pathname.includes('//')) {
+            return true;
         }
     } catch {}
     return false;
 }
 
+function injectUnshortenStyles() {
+    if (document.getElementById('toolkit-unshorten-styles')) return;
+    const style = document.createElement('style');
+    style.id = 'toolkit-unshorten-styles';
+    style.textContent = `
+        @keyframes toolkitUnshortenPulse {
+            0% { text-decoration-color: rgba(59, 130, 246, 0.35); }
+            50% { text-decoration-color: rgba(59, 130, 246, 1); }
+            100% { text-decoration-color: rgba(59, 130, 246, 0.35); }
+        }
+        a[data-unshorten-state="resolving"] {
+            text-decoration: underline dashed #3b82f6 !important;
+            text-decoration-thickness: 1.5px !important;
+            text-underline-offset: 3px !important;
+            animation: toolkitUnshortenPulse 0.75s infinite ease-in-out !important;
+            cursor: progress !important;
+        }
+        a[data-unshorten-state="resolved"] {
+            text-decoration-style: solid !important;
+        }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+}
+
+try { injectUnshortenStyles(); } catch {}
+
 const resolvingElements = new WeakSet();
+const tabUnshortenCache = new Map();
+
+function isHighConfidenceShortener(rawUrl) {
+    if (!rawUrl) return false;
+    if (unwrapGatewayUrl(rawUrl)) return true;
+    try {
+        const url = new URL(rawUrl);
+        const host = url.hostname.toLowerCase().replace(/^www\./, '');
+        return dynamicShorteners.has(host) || knownHosts.has(host);
+    } catch {}
+    return false;
+}
+
+function refreshBrowserStatusBubble(a) {
+    if (!a || lastHoveredAnchor !== a) return;
+    a.style.pointerEvents = 'none';
+    requestAnimationFrame(() => {
+        a.style.pointerEvents = '';
+        a.dispatchEvent(new MouseEvent('mousemove', {
+            bubbles: true,
+            cancelable: true,
+            view: window,
+            clientX: lastMouseX,
+            clientY: lastMouseY
+        }));
+    });
+}
 
 function handleLinkUnshorten(a) {
-    if (!a || !a.href || a.dataset.unshortened || resolvingElements.has(a)) return;
+    if (!a || !a.href || resolvingElements.has(a)) return;
 
     // If wrapped in a gateway, unwrap first
     const unwrapped = unwrapGatewayUrl(a.href);
@@ -80,38 +144,50 @@ function handleLinkUnshorten(a) {
     }
 
     if (!isShortOrGatewayLink(a.href)) {
-        a.dataset.unshortened = 'true';
+        if (unwrapped) {
+            a.dataset.unshortened = 'true';
+            refreshBrowserStatusBubble(a);
+        }
+        delete a.dataset.unshortenState;
+        return;
+    }
+
+    const targetHref = a.href;
+
+    // 0ms In-Tab Cache Hit
+    if (tabUnshortenCache.has(targetHref)) {
+        const cachedUrl = tabUnshortenCache.get(targetHref);
+        if (cachedUrl && cachedUrl !== targetHref) {
+            a.dataset.unshortenState = 'resolved';
+            a.dataset.unshortened = 'true';
+            a.dataset.originalShortUrl = targetHref;
+            a.href = cachedUrl;
+            refreshBrowserStatusBubble(a);
+        }
         return;
     }
 
     resolvingElements.add(a);
-    const targetHref = a.href;
+    a.dataset.unshortenState = 'resolving';
 
     try {
         chrome.runtime.sendMessage({ action: 'unshortenUrl', url: targetHref }, (res) => {
             resolvingElements.delete(a);
-            if (chrome.runtime.lastError || !res?.cleanUrl || res.cleanUrl === targetHref) return;
+            if (chrome.runtime.lastError || !res?.cleanUrl || res.cleanUrl === targetHref) {
+                delete a.dataset.unshortenState;
+                return;
+            }
 
+            tabUnshortenCache.set(targetHref, res.cleanUrl);
+            a.dataset.unshortenState = 'resolved';
             a.dataset.unshortened = 'true';
             a.dataset.originalShortUrl = targetHref;
             a.href = res.cleanUrl;
-            a.title = `🔗 Destination: ${res.cleanUrl}`;
-
-            // Force Chromium to refresh the native bottom status bubble immediately without requiring hover-out
-            if (lastHoveredAnchor === a) {
-                a.style.pointerEvents = 'none';
-                requestAnimationFrame(() => {
-                    a.style.pointerEvents = '';
-                    a.dispatchEvent(new MouseEvent('mousemove', {
-                        bubbles: true,
-                        clientX: lastMouseX,
-                        clientY: lastMouseY
-                    }));
-                });
-            }
+            refreshBrowserStatusBubble(a);
         });
     } catch {
         resolvingElements.delete(a);
+        delete a.dataset.unshortenState;
     }
 }
 
@@ -123,10 +199,6 @@ function sweepGatewayLinks(root = document) {
             a.href = unwrapped;
             if (!isShortOrGatewayLink(unwrapped)) {
                 a.dataset.unshortened = 'true';
-                a.title = `🔗 Destination: ${unwrapped}`;
-            } else {
-                delete a.dataset.unshortened;
-                handleLinkUnshorten(a);
             }
         }
     }
@@ -165,7 +237,13 @@ document.addEventListener('mouseover', (e) => {
     lastHoveredAnchor = a;
     if (!a) return;
     if (hoverUnshortenTimer) clearTimeout(hoverUnshortenTimer);
-    hoverUnshortenTimer = setTimeout(() => handleLinkUnshorten(a), 40);
+    
+    // Instant 0ms for high-confidence shorteners, tight 15ms debounce for general external links
+    if (isHighConfidenceShortener(a.href) || tabUnshortenCache.has(a.href)) {
+        handleLinkUnshorten(a);
+    } else {
+        hoverUnshortenTimer = setTimeout(() => handleLinkUnshorten(a), 15);
+    }
 }, { passive: true });
 
 document.addEventListener('mousemove', (e) => {
@@ -180,13 +258,45 @@ document.addEventListener('focusin', (e) => {
     handleLinkUnshorten(a);
 }, { passive: true });
 
-// Immediately resolve on right-click to prepare context menu
+// Synchronously unwrap on right-click context menu so Chrome's native "Copy link address" captures clean URL
+document.addEventListener('contextmenu', (e) => {
+    const a = e.target.closest?.('a[href]');
+    if (!a || !a.href) return;
+    const unwrapped = unwrapGatewayUrl(a.href);
+    if (unwrapped) {
+        a.href = unwrapped;
+        a.dataset.unshortened = 'true';
+    }
+    if (isShortOrGatewayLink(a.href)) {
+        handleLinkUnshorten(a);
+    }
+}, { capture: true });
+
+// Immediately resolve on right-click to prepare native menu actions
 document.addEventListener('mousedown', (e) => {
     if (e.button === 2) {
         const a = e.target.closest?.('a[href]');
-        if (a) handleLinkUnshorten(a);
+        if (!a || !a.href) return;
+        const unwrapped = unwrapGatewayUrl(a.href);
+        if (unwrapped) {
+            a.href = unwrapped;
+            a.dataset.unshortened = 'true';
+        }
+        if (isShortOrGatewayLink(a.href)) handleLinkUnshorten(a);
     }
 }, { passive: true });
+
+// Intercept clipboard copy to ensure any gateway URL copied via shortcut/context menu is unwrapped
+document.addEventListener('copy', (e) => {
+    const sel = window.getSelection()?.toString()?.trim();
+    if (sel && /^https?:\/\//i.test(sel)) {
+        const unwrapped = unwrapGatewayUrl(sel);
+        if (unwrapped) {
+            e.clipboardData?.setData('text/plain', unwrapped);
+            e.preventDefault();
+        }
+    }
+});
 
 // Intercept left-click in capture phase to bypass YouTube/Google tracking router
 document.addEventListener('click', (e) => {
@@ -195,23 +305,28 @@ document.addEventListener('click', (e) => {
     if (!a || !a.href) return;
 
     const unwrapped = unwrapGatewayUrl(a.href);
-    const targetUrl = unwrapped || a.href;
+    if (unwrapped) {
+        a.href = unwrapped;
+        a.dataset.unshortened = 'true';
+        if (!isShortOrGatewayLink(unwrapped)) return;
+    }
 
-    if (unwrapped || isShortOrGatewayLink(targetUrl)) {
+    if (isShortOrGatewayLink(a.href) && !a.dataset.unshortened) {
+        const targetUrl = a.href;
         e.preventDefault();
         e.stopImmediatePropagation();
-        a.href = targetUrl;
         
-        if (a.dataset.unshortened && targetUrl === a.href) {
-            window.open(targetUrl, a.target || '_blank', 'noopener,noreferrer');
-        } else {
-            chrome.runtime.sendMessage({ action: 'unshortenUrl', url: targetUrl }, (res) => {
-                const finalDest = res?.cleanUrl || targetUrl;
-                a.href = finalDest;
-                a.dataset.unshortened = 'true';
-                window.open(finalDest, a.target || '_blank', 'noopener,noreferrer');
-            });
-        }
+        chrome.runtime.sendMessage({ action: 'unshortenUrl', url: targetUrl }, (res) => {
+            const finalDest = res?.cleanUrl || targetUrl;
+            a.href = finalDest;
+            a.dataset.unshortened = 'true';
+            
+            if (a.target === '_blank' || e.ctrlKey || e.metaKey) {
+                window.open(finalDest, '_blank', 'noopener,noreferrer');
+            } else {
+                window.location.href = finalDest;
+            }
+        });
     }
 }, true);
 
