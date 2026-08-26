@@ -73,10 +73,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Packaging extension into ZIP archive..."
-          cd Toolkit
-          zip -r ../toolkit-extension.zip . -x ".*" -x "__MACOSX/*"
-          cd ..
+          echo "Packaging extension into Toolkit.zip..."
+          zip -r Toolkit.zip Toolkit/ -x "Toolkit/.*" -x "Toolkit/__MACOSX/*"
 
           TAG_NAME="v$(date -u +'%Y.%m.%d-%H%M')"
           RELEASE_TIME="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
@@ -90,13 +88,13 @@ jobs:
           printf "* **HaGeZi URL Shortener Dataset**: \`shorteners-rules.json\` containing **9,900+ active shortener & vanity redirect domains**\n\n" >> release_notes.md
           printf -- "---\n\n" >> release_notes.md
           printf "### 🛠️ Installation Instructions\n" >> release_notes.md
-          printf "1. Download **\`toolkit-extension.zip\`** below and extract the archive to a folder.\n" >> release_notes.md
+          printf "1. Download **\`Toolkit.zip\`** below and extract the archive.\n" >> release_notes.md
           printf "2. Open Chromium browser (Chrome / Brave / Edge) and navigate to \`chrome://extensions\`.\n" >> release_notes.md
           printf "3. Toggle **Developer mode** on (top-right corner).\n" >> release_notes.md
-          printf "4. Click **Load unpacked** and select the extracted folder.\n" >> release_notes.md
+          printf "4. Click **Load unpacked** and select the extracted \`Toolkit\` folder.\n" >> release_notes.md
 
           echo "Creating GitHub Release $TAG_NAME..."
-          gh release create "$TAG_NAME" toolkit-extension.zip \
+          gh release create "$TAG_NAME" Toolkit.zip \
             --title "Toolkit Extension Release ($TAG_NAME)" \
             --notes-file release_notes.md
 
