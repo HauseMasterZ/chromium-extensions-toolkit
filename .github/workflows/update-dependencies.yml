@@ -50,6 +50,7 @@ jobs:
           fi
 
       - name: Commit & Push Changes
+        id: commit_step
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
@@ -60,7 +61,45 @@ jobs:
           git add Toolkit/darkreader.js Toolkit/clearurls-rules.json Toolkit/shorteners-rules.json
           if git diff --staged --quiet; then
             echo "No updates detected. Repository is already up-to-date."
+            echo "has_updates=false" >> $GITHUB_OUTPUT
           else
             git commit -m "chore(deps): auto-update upstream dependencies [skip ci]"
             git push
+            echo "has_updates=true" >> $GITHUB_OUTPUT
           fi
+
+      - name: Package Extension & Create GitHub Release
+        if: steps.commit_step.outputs.has_updates == 'true' || github.event_name == 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Packaging extension into ZIP archive..."
+          cd Toolkit
+          zip -r ../toolkit-extension.zip . -x ".*" -x "__MACOSX/*"
+          cd ..
+
+          TAG_NAME="v$(date -u +'%Y.%m.%d-%H%M')"
+          RELEASE_TIME="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+
+          echo "Creating GitHub Release $TAG_NAME..."
+          gh release create "$TAG_NAME" toolkit-extension.zip \
+            --title "Toolkit Extension Release ($TAG_NAME)" \
+            --notes "## 🚀 Automated Dependencies & Engine Build
+
+**Updated at:** \`$RELEASE_TIME\`
+
+---
+
+### 📦 Upstream Data & Dependency Status
+* **DarkReader**: Upstream \`darkreader.js\` compiled bundle
+* **ClearURLs Rule Definitions**: Latest \`clearurls-rules.json\` tracking parameter filters
+* **HaGeZi URL Shortener Dataset**: \`shorteners-rules.json\` containing **9,900+ active shortener & vanity redirect domains**
+
+---
+
+### 🛠️ Installation Instructions
+1. Download **\`toolkit-extension.zip\`** below and extract the archive to a folder.
+2. Open Chromium browser (Chrome / Brave / Edge) and navigate to \`chrome://extensions\`.
+3. Toggle **Developer mode** on (top-right corner).
+4. Click **Load unpacked** and select the extracted folder."
+
