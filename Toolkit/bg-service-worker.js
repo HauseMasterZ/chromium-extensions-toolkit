@@ -296,9 +296,9 @@ const updateYtFloatSearchScript = (enabled) => syncContentScripts('yt-float-sear
 const updateWhatsappScript = (enabled) => syncContentScripts(['whatsapp-virtual-camera', 'whatsapp-wide-style'], enabled, [
   {
     id: 'whatsapp-virtual-camera',
-    matches: ['*://web.whatsapp.com/*', 'https://web.whatsapp.com/*'],
+    matches: ['*://web.whatsapp.com/*', 'https://web.whatsapp.com/*', '*://github.com/*', 'https://github.com/*', 'https://*.github.com/*'],
     js: ['whatsapp-virtual-camera.js'],
-    runAt: 'document_idle',
+    runAt: 'document_start',
     world: 'MAIN'
   },
   {

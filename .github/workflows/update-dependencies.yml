@@ -21,6 +21,7 @@ jobs:
           curl -sSL "https://cdn.jsdelivr.net/npm/darkreader/darkreader.min.js" -o Toolkit/darkreader.js.new
           if [ -s Toolkit/darkreader.js.new ]; then
             mv Toolkit/darkreader.js.new Toolkit/darkreader.js
+            python3 -c "import re; p=r'Toolkit/darkreader.js'; c=open(p,'r',encoding='utf-8').read(); c=re.sub(r'(\(\"darkreader--proxy\"\);e\.append\(`\(\$\{es\}\)\(\$\{u\},\s*\$\{d\}\)`\),document\.head\.insertBefore\(e,l\.nextSibling\),e\.remove\(\)\})', r'(\"darkreader--proxy\");/* CSP safe */}', c); open(p,'w',encoding='utf-8').write(c)"
           else
             echo "Failed to fetch darkreader.min.js"
             rm -f Toolkit/darkreader.js.new
