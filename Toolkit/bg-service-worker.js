@@ -114,10 +114,55 @@ function openTarget(targetUrl, isExtensionPage, tabId) {
   else chrome.tabs.create({ url: targetUrl });
 }
 
-chrome.commands.onCommand.addListener(async c => {
-  const { featurePasteGo = true } = await chrome.storage.local.get('featurePasteGo');
-  if (!featurePasteGo) return;
+function showPillToast(tabId, message, durationMs = 1200) {
+  if (!tabId) return;
+  chrome.scripting.executeScript({
+    target: { tabId },
+    func: (text, duration) => {
+      const existing = document.getElementById('toolkit-pill-toast');
+      if (existing) existing.remove();
+      const toast = document.createElement('div');
+      toast.id = 'toolkit-pill-toast';
+      toast.style.cssText = `
+        position: fixed !important;
+        top: 16px !important;
+        left: 50% !important;
+        transform: translateX(-50%) translateY(-6px) !important;
+        background: rgba(18, 18, 22, 0.9) !important;
+        backdrop-filter: blur(10px) !important;
+        -webkit-backdrop-filter: blur(10px) !important;
+        color: #e2e8f0 !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        border-radius: 9999px !important;
+        padding: 6px 14px !important;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+        font-size: 12px !important;
+        font-weight: 500 !important;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4) !important;
+        z-index: 2147483647 !important;
+        display: flex !important;
+        align-items: center !important;
+        opacity: 0 !important;
+        transition: all 0.18s ease-out !important;
+        pointer-events: none !important;
+      `;
+      toast.textContent = text;
+      (document.body || document.documentElement).appendChild(toast);
+      requestAnimationFrame(() => {
+        toast.style.opacity = '1';
+        toast.style.transform = 'translateX(-50%) translateY(0)';
+      });
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateX(-50%) translateY(-6px)';
+        setTimeout(() => toast.remove(), 200);
+      }, duration);
+    },
+    args: [message, durationMs]
+  }).catch(() => {});
+}
 
+chrome.commands.onCommand.addListener(async c => {
   const tab = await getActiveTab();
 
   if (c === 'duplicate_tab') {
@@ -238,7 +283,25 @@ chrome.commands.onCommand.addListener(async c => {
         const probeTask = chrome.scripting.executeScript({
           target: { tabId: t.id },
           func: async () => {
+            const detectedOrigins = [];
+            let isCritical = false;
+
             try {
+              // Method 1: In-Memory CORS Resource Timing Harvest
+              const entries = performance.getEntriesByType('resource') || [];
+              for (const entry of entries) {
+                if (!entry.name || !entry.name.startsWith('http')) continue;
+                try {
+                  const url = new URL(entry.name);
+                  if (url.origin !== window.location.origin) {
+                    if (/(accounts|auth|login|oauth|idp|sso|session|token|api)\./i.test(url.hostname) ||
+                        /(oauth|token|auth|session|rotatecookies)/i.test(url.pathname)) {
+                      detectedOrigins.push(url.origin);
+                    }
+                  }
+                } catch {}
+              }
+
               // Tier 1 (Synchronous & Instant): Valid Cryptographic JWT / Auth Token Inspection
               const jwtRegex = /^[A-Za-z0-9-_=]{15,}\.[A-Za-z0-9-_=]{15,}\.?[A-Za-z0-9-_.+/=]*$/;
               const authKeyPattern = /(token|auth|session|master_key|cipher|credentials|supabase\.auth|firebase:authUser)/i;
@@ -251,44 +314,55 @@ chrome.commands.onCommand.addListener(async c => {
                 if (!val || val.length < 20) continue;
 
                 if (jwtRegex.test(val) || (authKeyPattern.test(key) && val.length >= 24)) {
-                  return true;
+                  isCritical = true;
+                  break;
                 }
               }
 
-              for (let i = 0; i < sessionStorage.length; i++) {
-                const key = sessionStorage.key(i);
-                if (!key || analyticsPattern.test(key)) continue;
-                const val = sessionStorage.getItem(key);
-                if (!val || val.length < 20) continue;
+              if (!isCritical) {
+                for (let i = 0; i < sessionStorage.length; i++) {
+                  const key = sessionStorage.key(i);
+                  if (!key || analyticsPattern.test(key)) continue;
+                  const val = sessionStorage.getItem(key);
+                  if (!val || val.length < 20) continue;
 
-                if (jwtRegex.test(val) || (authKeyPattern.test(key) && val.length >= 24)) {
-                  return true;
+                  if (jwtRegex.test(val) || (authKeyPattern.test(key) && val.length >= 24)) {
+                    isCritical = true;
+                    break;
+                  }
                 }
               }
 
               // Tier 2: Substantial Named Databases (IndexedDB)
-              if (window.indexedDB?.databases) {
+              if (!isCritical && window.indexedDB?.databases) {
                 const dbs = await window.indexedDB.databases();
                 const realDbs = dbs.filter(d => d.name && !/^(_ga|firebase-heartbeat|google-analytics)/i.test(d.name));
                 if (realDbs.length >= 2 || realDbs.some(d => /(notesnook|discord|slack|notion|vault|state|auth|session|localforage|matrix|rxdb)/i.test(d.name))) {
-                  return true;
+                  isCritical = true;
                 }
               }
 
               // Tier 3: Persistent Storage Flag
-              if (navigator.storage?.persisted && await navigator.storage.persisted()) {
-                return true;
+              if (!isCritical && navigator.storage?.persisted && await navigator.storage.persisted()) {
+                isCritical = true;
               }
             } catch {}
-            return false;
+
+            return { isCritical, corsOrigins: detectedOrigins };
           }
         });
 
         const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 1000));
-        const results = await Promise.race([probeTask, timeoutPromise]);
+        const probeRes = await Promise.race([probeTask, timeoutPromise]);
+        const res = probeRes?.[0]?.result;
 
-        if (results?.[0]?.result === true) {
+        if (res?.isCritical) {
           dynamicPersistedSet.add(origin);
+        }
+        if (res?.corsOrigins?.length) {
+          for (const co of res.corsOrigins) {
+            dynamicPersistedSet.add(co);
+          }
         }
       } catch {}
     });
@@ -337,18 +411,25 @@ chrome.commands.onCommand.addListener(async c => {
           func: (url) => navigator.clipboard.writeText(url),
           args: [cleanUrl]
         });
+        showPillToast(tab.id, 'Clean URL copied', 1200);
       } catch {}
     }
     return;
   }
 
   if (c === 'discard_background_tabs') {
-    const tabs = await chrome.tabs.query({ discarded: false });
-    for (const t of tabs) {
-      if (!t.active && t.id) {
-        chrome.tabs.discard(t.id).catch(() => {});
-      }
-    }
+    const backgroundTabs = await chrome.tabs.query({ active: false });
+    const results = await Promise.allSettled(
+      backgroundTabs.map(t => {
+        if (t.id && !t.discarded) {
+          return chrome.tabs.discard(t.id);
+        }
+        return Promise.resolve(null);
+      })
+    );
+
+    const discardedCount = results.filter(r => r.status === 'fulfilled' && r.value && r.value.discarded).length;
+    showPillToast(tab?.id, discardedCount > 0 ? `Slept ${discardedCount} tab${discardedCount === 1 ? '' : 's'}` : 'Background tabs already asleep', 1500);
     return;
   }
 
@@ -388,6 +469,8 @@ chrome.commands.onCommand.addListener(async c => {
   }
 
   if (!['run', 'run_yt', 'run_incognito'].includes(c) || !tab?.id) return;
+  const { featurePasteGo = true } = await chrome.storage.local.get('featurePasteGo');
+  if (!featurePasteGo) return;
   
   try {
     let result = null;
