@@ -152,26 +152,150 @@ chrome.commands.onCommand.addListener(async c => {
   }
 
   if (c === 'close_all_windows') {
-    const excludedOrigins = [
-      'https://open.spotify.com',
-      'https://spotify.com',
-      'https://accounts.spotify.com',
-      'https://gae2-spclient.spotify.com',
-      'https://api.spotify.com',
-      'https://app.notesnook.com',
-      'https://notesnook.com',
-      'https://auth.notesnook.com',
-      'https://api.notesnook.com',
-      'https://discord.com',
-      'https://ptb.discord.com',
-      'https://canary.discord.com',
-      'https://web.whatsapp.com',
-      'https://web.telegram.org',
-      'https://k.telegram.org',
-      'https://z.telegram.org',
-      'https://a.telegram.org',
-      'https://hausemasterz.github.io'
-    ];
+    // Show immediate visual loading hint on the active tab
+    if (tab?.id) {
+      chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          if (document.getElementById('toolkit-cleaning-overlay')) return;
+          const overlay = document.createElement('div');
+          overlay.id = 'toolkit-cleaning-overlay';
+          overlay.style.cssText = `
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100vw !important;
+            height: 100vh !important;
+            background: rgba(10, 10, 15, 0.75) !important;
+            backdrop-filter: blur(12px) !important;
+            -webkit-backdrop-filter: blur(12px) !important;
+            z-index: 2147483647 !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            opacity: 0 !important;
+            transition: opacity 0.15s ease-out !important;
+            pointer-events: all !important;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+          `;
+
+          overlay.innerHTML = `
+            <div style="
+              background: #1e1e24;
+              border: 1px solid rgba(255, 255, 255, 0.12);
+              box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+              border-radius: 20px;
+              padding: 24px 32px;
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              gap: 14px;
+              color: #f1f3f5;
+              transform: scale(0.92);
+              transition: transform 0.18s cubic-bezier(0.1, 0.9, 0.2, 1);
+            " id="toolkit-cleaning-card">
+              <div style="
+                width: 32px;
+                height: 32px;
+                border: 3.5px solid rgba(59, 130, 246, 0.2);
+                border-top-color: #3b82f6;
+                border-radius: 50%;
+                animation: toolkitSpin 0.75s linear infinite;
+              "></div>
+              <div style="text-align: center;">
+                <div style="font-size: 14.5px; font-weight: 600; letter-spacing: -0.2px;">Clearing Data &amp; Closing...</div>
+                <div style="font-size: 11.5px; color: #9ca3af; margin-top: 3px;">Flushing caches &amp; preserving persistent sessions</div>
+              </div>
+            </div>
+            <style>
+              @keyframes toolkitSpin { to { transform: rotate(360deg); } }
+            </style>
+          `;
+
+          (document.body || document.documentElement).appendChild(overlay);
+          requestAnimationFrame(() => {
+            overlay.style.opacity = '1';
+            const card = document.getElementById('toolkit-cleaning-card');
+            if (card) card.style.transform = 'scale(1)';
+          });
+        }
+      }).catch(() => {});
+    }
+
+    const { persisted_origins = [] } = await chrome.storage.local.get('persisted_origins');
+    const dynamicPersistedSet = new Set(persisted_origins);
+    dynamicPersistedSet.add('https://hausemasterz.github.io');
+
+    const allTabs = await chrome.tabs.query({});
+    const probePromises = allTabs.map(async (t) => {
+      if (!t.url || !t.url.startsWith('http') || !t.id) return;
+      const origin = new URL(t.url).origin;
+
+      // Skip discarded/sleeping tabs to prevent multi-second forced page reloads
+      if (t.discarded) return;
+
+      try {
+        const probeTask = chrome.scripting.executeScript({
+          target: { tabId: t.id },
+          func: async () => {
+            try {
+              // Tier 1 (Synchronous & Instant): Valid Cryptographic JWT / Auth Token Inspection
+              const jwtRegex = /^[A-Za-z0-9-_=]{15,}\.[A-Za-z0-9-_=]{15,}\.?[A-Za-z0-9-_.+/=]*$/;
+              const authKeyPattern = /(token|auth|session|master_key|cipher|credentials|supabase\.auth|firebase:authUser)/i;
+              const analyticsPattern = /^(_ga|_gid|amp|criteo|ajs_|cookie|theme|volume|banner|popup|sidebar)/i;
+
+              for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (!key || analyticsPattern.test(key)) continue;
+                const val = localStorage.getItem(key);
+                if (!val || val.length < 20) continue;
+
+                if (jwtRegex.test(val) || (authKeyPattern.test(key) && val.length >= 24)) {
+                  return true;
+                }
+              }
+
+              for (let i = 0; i < sessionStorage.length; i++) {
+                const key = sessionStorage.key(i);
+                if (!key || analyticsPattern.test(key)) continue;
+                const val = sessionStorage.getItem(key);
+                if (!val || val.length < 20) continue;
+
+                if (jwtRegex.test(val) || (authKeyPattern.test(key) && val.length >= 24)) {
+                  return true;
+                }
+              }
+
+              // Tier 2: Substantial Named Databases (IndexedDB)
+              if (window.indexedDB?.databases) {
+                const dbs = await window.indexedDB.databases();
+                const realDbs = dbs.filter(d => d.name && !/^(_ga|firebase-heartbeat|google-analytics)/i.test(d.name));
+                if (realDbs.length >= 2 || realDbs.some(d => /(notesnook|discord|slack|notion|vault|state|auth|session|localforage|matrix|rxdb)/i.test(d.name))) {
+                  return true;
+                }
+              }
+
+              // Tier 3: Persistent Storage Flag
+              if (navigator.storage?.persisted && await navigator.storage.persisted()) {
+                return true;
+              }
+            } catch {}
+            return false;
+          }
+        });
+
+        const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 1000));
+        const results = await Promise.race([probeTask, timeoutPromise]);
+
+        if (results?.[0]?.result === true) {
+          dynamicPersistedSet.add(origin);
+        }
+      } catch {}
+    });
+
+    await Promise.allSettled(probePromises);
+    const finalExcludedList = Array.from(dynamicPersistedSet);
+    await chrome.storage.local.set({ persisted_origins: finalExcludedList });
 
     await Promise.all([
       new Promise(resolve => {
@@ -182,10 +306,11 @@ chrome.commands.onCommand.addListener(async c => {
         }, resolve);
       }),
       new Promise(resolve => {
-        chrome.browsingData.remove({
-          since: 0,
-          excludeOrigins: excludedOrigins
-        }, {
+        const removalOptions = { since: 0 };
+        if (finalExcludedList.length > 0) {
+          removalOptions.excludeOrigins = finalExcludedList;
+        }
+        chrome.browsingData.remove(removalOptions, {
           cache: true,
           cacheStorage: true,
           fileSystems: true,
