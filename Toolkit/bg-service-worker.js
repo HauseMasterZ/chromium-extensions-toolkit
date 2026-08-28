@@ -152,12 +152,51 @@ chrome.commands.onCommand.addListener(async c => {
   }
 
   if (c === 'close_all_windows') {
-    await new Promise(resolve => {
-      chrome.browsingData.remove({ since: 0 }, {
-        history: true, downloads: true, formData: true,
-        cache: true, cacheStorage: true, pluginData: true, fileSystems: true, webSQL: true
-      }, resolve);
-    });
+    const excludedOrigins = [
+      'https://open.spotify.com',
+      'https://spotify.com',
+      'https://accounts.spotify.com',
+      'https://gae2-spclient.spotify.com',
+      'https://api.spotify.com',
+      'https://app.notesnook.com',
+      'https://notesnook.com',
+      'https://auth.notesnook.com',
+      'https://api.notesnook.com',
+      'https://discord.com',
+      'https://ptb.discord.com',
+      'https://canary.discord.com',
+      'https://web.whatsapp.com',
+      'https://web.telegram.org',
+      'https://k.telegram.org',
+      'https://z.telegram.org',
+      'https://a.telegram.org',
+      'https://hausemasterz.github.io'
+    ];
+
+    await Promise.all([
+      new Promise(resolve => {
+        chrome.browsingData.remove({ since: 0 }, {
+          history: true,
+          downloads: true,
+          formData: true
+        }, resolve);
+      }),
+      new Promise(resolve => {
+        chrome.browsingData.remove({
+          since: 0,
+          excludeOrigins: excludedOrigins
+        }, {
+          cache: true,
+          cacheStorage: true,
+          fileSystems: true,
+          indexedDB: true,
+          localStorage: true,
+          serviceWorkers: true,
+          webSQL: true,
+          pluginData: true
+        }, resolve);
+      })
+    ]);
 
     const windows = await chrome.windows.getAll();
     for (const w of windows) chrome.windows.remove(w.id);
@@ -296,9 +335,9 @@ const updateYtFloatSearchScript = (enabled) => syncContentScripts('yt-float-sear
 const updateWhatsappScript = (enabled) => syncContentScripts(['whatsapp-virtual-camera', 'whatsapp-wide-style'], enabled, [
   {
     id: 'whatsapp-virtual-camera',
-    matches: ['*://web.whatsapp.com/*', 'https://web.whatsapp.com/*', '*://github.com/*', 'https://github.com/*', 'https://*.github.com/*'],
+    matches: ['*://web.whatsapp.com/*', 'https://web.whatsapp.com/*'],
     js: ['whatsapp-virtual-camera.js'],
-    runAt: 'document_start',
+    runAt: 'document_idle',
     world: 'MAIN'
   },
   {

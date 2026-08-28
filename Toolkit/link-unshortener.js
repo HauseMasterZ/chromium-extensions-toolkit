@@ -103,8 +103,6 @@ function injectUnshortenStyles() {
     (document.head || document.documentElement).appendChild(style);
 }
 
-try { injectUnshortenStyles(); } catch {}
-
 const resolvingElements = new WeakSet();
 const tabUnshortenCache = new Map();
 
@@ -171,6 +169,12 @@ function handleLinkUnshorten(a) {
     a.dataset.unshortenState = 'resolving';
 
     try {
+        if (!chrome.runtime?.id) {
+            resolvingElements.delete(a);
+            delete a.dataset.unshortenState;
+            return;
+        }
+
         chrome.runtime.sendMessage({ action: 'unshortenUrl', url: targetHref }, (res) => {
             resolvingElements.delete(a);
             if (chrome.runtime.lastError || !res?.cleanUrl || res.cleanUrl === targetHref) {
@@ -191,40 +195,6 @@ function handleLinkUnshorten(a) {
     }
 }
 
-function sweepGatewayLinks(root = document) {
-    const links = root.querySelectorAll?.('a[href*="redirect?q="], a[href*="google.com/url?q="], a[href*="out.reddit.com"], a[href*="steamcommunity.com/linkfilter"]') || [];
-    for (const a of links) {
-        const unwrapped = unwrapGatewayUrl(a.href);
-        if (unwrapped) {
-            a.href = unwrapped;
-            if (!isShortOrGatewayLink(unwrapped)) {
-                a.dataset.unshortened = 'true';
-            }
-        }
-    }
-}
-
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => sweepGatewayLinks());
-} else {
-    sweepGatewayLinks();
-}
-
-const linkObserver = new MutationObserver((mutations) => {
-    for (const mutation of mutations) {
-        for (const node of mutation.addedNodes) {
-            if (node.nodeType === 1) {
-                sweepGatewayLinks(node);
-            }
-        }
-    }
-});
-
-linkObserver.observe(document.documentElement || document.body, {
-    childList: true,
-    subtree: true
-});
-
 let lastHoveredAnchor = null;
 let lastMouseX = 0;
 let lastMouseY = 0;
@@ -236,6 +206,7 @@ document.addEventListener('mouseover', (e) => {
     const a = e.target.closest?.('a[href]');
     lastHoveredAnchor = a;
     if (!a) return;
+    try { injectUnshortenStyles(); } catch {}
     if (hoverUnshortenTimer) clearTimeout(hoverUnshortenTimer);
     
     // Instant 0ms for high-confidence shorteners, tight 15ms debounce for general external links
@@ -288,6 +259,8 @@ document.addEventListener('mousedown', (e) => {
 
 // Intercept clipboard copy to ensure any gateway URL copied via shortcut/context menu is unwrapped
 document.addEventListener('copy', (e) => {
+    const target = e.target;
+    if (target && (target.isContentEditable || target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.closest?.('[contenteditable="true"]'))) return;
     const sel = window.getSelection()?.toString()?.trim();
     if (sel && /^https?:\/\//i.test(sel)) {
         const unwrapped = unwrapGatewayUrl(sel);
@@ -316,17 +289,27 @@ document.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopImmediatePropagation();
         
-        chrome.runtime.sendMessage({ action: 'unshortenUrl', url: targetUrl }, (res) => {
-            const finalDest = res?.cleanUrl || targetUrl;
-            a.href = finalDest;
+        const navigate = (dest) => {
+            a.href = dest;
             a.dataset.unshortened = 'true';
-            
             if (a.target === '_blank' || e.ctrlKey || e.metaKey) {
-                window.open(finalDest, '_blank', 'noopener,noreferrer');
+                window.open(dest, '_blank', 'noopener,noreferrer');
             } else {
-                window.location.href = finalDest;
+                window.location.href = dest;
             }
-        });
+        };
+
+        try {
+            if (chrome.runtime?.id) {
+                chrome.runtime.sendMessage({ action: 'unshortenUrl', url: targetUrl }, (res) => {
+                    navigate(res?.cleanUrl || targetUrl);
+                });
+            } else {
+                navigate(targetUrl);
+            }
+        } catch {
+            navigate(targetUrl);
+        }
     }
 }, true);
 
@@ -343,6 +326,14 @@ document.addEventListener('auxclick', (e) => {
         e.preventDefault();
         e.stopImmediatePropagation();
         a.href = targetUrl;
-        chrome.runtime.sendMessage({ action: 'openUnshortenedTab', url: targetUrl });
+        try {
+            if (chrome.runtime?.id) {
+                chrome.runtime.sendMessage({ action: 'openUnshortenedTab', url: targetUrl });
+            } else {
+                window.open(targetUrl, '_blank');
+            }
+        } catch {
+            window.open(targetUrl, '_blank');
+        }
     }
 }, true);
