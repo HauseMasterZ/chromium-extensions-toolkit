@@ -418,17 +418,46 @@ chrome.commands.onCommand.addListener(async c => {
   }
 
   if (c === 'discard_background_tabs') {
-    const backgroundTabs = await chrome.tabs.query({ active: false });
-    const results = await Promise.allSettled(
-      backgroundTabs.map(t => {
-        if (t.id && !t.discarded) {
-          return chrome.tabs.discard(t.id);
-        }
-        return Promise.resolve(null);
-      })
+    const isNewTab = (url) => !url || url.includes('newtab-page.html') || url === 'chrome://newtab/' || url === 'helium://newtab/' || url === 'about:blank' || url === 'about:newtab';
+
+    const allTabs = await chrome.tabs.query({});
+    
+    // Group tabs by windowId
+    const windowsMap = new Map();
+    for (const t of allTabs) {
+      if (!windowsMap.has(t.windowId)) {
+        windowsMap.set(t.windowId, []);
+      }
+      windowsMap.get(t.windowId).push(t);
+    }
+
+    // For every window whose active view is NOT an empty new tab:
+    // If an existing new tab is already open in that window, focus it; otherwise create one.
+    for (const [winId, wTabs] of windowsMap) {
+      const activeTab = wTabs.find(t => t.active);
+      if (!activeTab || isNewTab(activeTab.url)) continue;
+
+      const existingNewTab = wTabs.find(t => isNewTab(t.url));
+      if (existingNewTab?.id) {
+        try {
+          await chrome.tabs.update(existingNewTab.id, { active: true });
+        } catch {}
+      } else {
+        try {
+          await chrome.tabs.create({ windowId: winId, active: true });
+        } catch {}
+      }
+    }
+
+    // Full sweep discard across all windows and monitors (including helium://, chrome://, and all web pages)
+    const refreshedTabs = await chrome.tabs.query({});
+    const tabsToDiscard = refreshedTabs.filter(t => t.id && !t.active && !t.discarded && !isNewTab(t.url));
+
+    const discardResults = await Promise.allSettled(
+      tabsToDiscard.map(t => chrome.tabs.discard(t.id))
     );
 
-    const discardedCount = results.filter(r => r.status === 'fulfilled' && r.value && r.value.discarded).length;
+    const discardedCount = discardResults.filter(r => r.status === 'fulfilled' && r.value && r.value.discarded).length;
     showPillToast(tab?.id, discardedCount > 0 ? `Slept ${discardedCount} tab${discardedCount === 1 ? '' : 's'}` : 'Background tabs already asleep', 1500);
     return;
   }
