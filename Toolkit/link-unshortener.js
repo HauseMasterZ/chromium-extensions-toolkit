@@ -94,7 +94,6 @@ function injectUnshortenStyles() {
             text-decoration-thickness: 1.5px !important;
             text-underline-offset: 3px !important;
             animation: toolkitUnshortenPulse 0.75s infinite ease-in-out !important;
-            cursor: progress !important;
         }
         a[data-unshorten-state="resolved"] {
             text-decoration-style: solid !important;
