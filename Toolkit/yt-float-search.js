@@ -200,13 +200,17 @@ const inject = () => {
 // ==========================================
 const syncTheaterMode = () => {
   if (!location.pathname.startsWith('/watch')) return;
-  const hasPlaylist = Boolean(new URLSearchParams(location.search).get('list'));
+
+  let attempts = 0;
+  const maxAttempts = 10;
 
   const checkAndToggle = () => {
+    if (!location.pathname.startsWith('/watch')) return true;
     const watch = document.querySelector('ytd-watch-grid, ytd-watch-flexy');
     const sizeBtn = document.querySelector('.ytp-size-button');
     if (!watch || !sizeBtn) return false;
 
+    const hasPlaylist = Boolean(new URLSearchParams(location.search).get('list'));
     const isTheater = watch.hasAttribute('theater');
     if ((hasPlaylist && isTheater) || (!hasPlaylist && !isTheater)) {
       sizeBtn.click();
@@ -215,7 +219,12 @@ const syncTheaterMode = () => {
   };
 
   if (!checkAndToggle()) {
-    setTimeout(checkAndToggle, 300);
+    const timer = setInterval(() => {
+      attempts++;
+      if (checkAndToggle() || attempts >= maxAttempts) {
+        clearInterval(timer);
+      }
+    }, 100);
   }
 };
 
@@ -233,4 +242,5 @@ if (document.readyState === 'loading') {
 } else {
   init();
 }
+
 
