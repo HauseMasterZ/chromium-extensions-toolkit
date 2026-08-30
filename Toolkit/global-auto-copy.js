@@ -56,6 +56,11 @@ function showAndroidClipboardOverlay(text, mouseX, mouseY) {
                 max-width: 280px;
                 box-sizing: border-box;
                 user-select: none;
+                outline: none;
+            }
+            .chip-container:focus,
+            .chip-container:focus-visible {
+                outline: none;
             }
             .chip-container:hover {
                 background: #36343b;
@@ -107,12 +112,17 @@ function showAndroidClipboardOverlay(text, mouseX, mouseY) {
                 align-items: center;
                 justify-content: center;
                 flex-shrink: 0;
+                cursor: pointer;
                 transition: background-color 0.2s, color 0.2s, transform 0.15s;
+            }
+            .icon-badge:hover {
+                background: #0a84ff;
+                color: #ffffff;
+                transform: scale(1.1);
             }
             .icon-badge svg {
                 width: 14px;
                 height: 14px;
-                fill: currentColor;
             }
             .chip-container.editing .icon-badge {
                 background: #0a84ff;
@@ -122,10 +132,6 @@ function showAndroidClipboardOverlay(text, mouseX, mouseY) {
             .chip-container.editing .icon-badge:hover {
                 transform: scale(1.08);
             }
-            .icon-badge.saved {
-                background: #34c759 !important;
-                color: #ffffff !important;
-            }
         `;
         shadowRoot.appendChild(style);
 
@@ -134,8 +140,12 @@ function showAndroidClipboardOverlay(text, mouseX, mouseY) {
         container.title = 'Click to edit clipboard';
         container.innerHTML = `
             <div class="preview-card" spellcheck="false"></div>
-            <div class="icon-badge" title="Save changes">
-                <svg viewBox="0 0 24 24"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm-2 14l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>
+            <div class="icon-badge" title="Paste & Go in new tab">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                    <polyline points="15 3 21 3 21 9"></polyline>
+                    <line x1="10" y1="14" x2="21" y2="3"></line>
+                </svg>
             </div>
         `;
         shadowRoot.appendChild(container);
@@ -157,6 +167,7 @@ function showAndroidClipboardOverlay(text, mouseX, mouseY) {
                 preview.focus();
                 const range = document.createRange();
                 range.selectNodeContents(preview);
+                range.collapse(false);
                 const sel = window.getSelection();
                 sel.removeAllRanges();
                 sel.addRange(range);
@@ -177,8 +188,9 @@ function showAndroidClipboardOverlay(text, mouseX, mouseY) {
             preview.removeAttribute('contenteditable');
             preview.textContent = currentRawText.length > 40 ? currentRawText.slice(0, 40) + '…' : currentRawText;
 
-            iconBadge.classList.add('saved');
-            setTimeout(() => iconBadge.classList.remove('saved'), 600);
+            // Retain focus on container so a 2nd Enter keypress triggers pasteAndGo
+            container.tabIndex = -1;
+            container.focus();
 
             clearTimeout(hideTimer);
             hideTimer = setTimeout(() => {
@@ -194,6 +206,76 @@ function showAndroidClipboardOverlay(text, mouseX, mouseY) {
             container.classList.remove('visible');
         };
 
+        const pasteAndGo = (text) => {
+            let raw = (text || currentRawText || '').trim();
+            if (isEditing) {
+                raw = preview.innerText.trim() || raw;
+            }
+            if (!raw) return;
+
+            if (raw !== currentRawText) {
+                currentRawText = raw;
+                navigator.clipboard.writeText(raw).catch(() => {});
+            }
+
+            container.classList.remove('visible', 'editing');
+            preview.classList.remove('editing');
+            preview.removeAttribute('contenteditable');
+            isEditing = false;
+
+            const isUrl = /^https?:\/\//i.test(raw) || /^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(\/.*)?$/i.test(raw);
+            const targetUrl = /^https?:\/\//i.test(raw)
+                ? raw
+                : (/^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(\/.*)?$/i.test(raw) ? 'https://' + raw : `https://www.google.com/search?q=${encodeURIComponent(raw)}`);
+
+            try {
+                if (chrome.runtime?.id) {
+                    chrome.runtime.sendMessage({ action: 'pasteAndGo', url: targetUrl });
+                } else {
+                    window.open(targetUrl, '_blank', 'noopener,noreferrer');
+                }
+            } catch {
+                window.open(targetUrl, '_blank', 'noopener,noreferrer');
+            }
+        };
+
+        const stopKeyEvent = (e) => {
+            const isVisible = container.classList.contains('visible');
+            if (!isVisible) return;
+
+            if (isEditing) {
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                if (e.type === 'keydown') {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        commitEdit();
+                    } else if (e.key === 'Escape') {
+                        e.preventDefault();
+                        cancelEdit();
+                    }
+                }
+            } else {
+                if (e.type === 'keydown') {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        e.stopImmediatePropagation();
+                        pasteAndGo();
+                    } else if (e.key === 'Escape') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        e.stopImmediatePropagation();
+                        container.classList.remove('visible');
+                    }
+                }
+            }
+        };
+
+        const stopMouseEvent = (e) => {
+            e.stopPropagation();
+        };
+
         container.addEventListener('click', (e) => {
             if (!isEditing) {
                 e.stopPropagation();
@@ -202,22 +284,21 @@ function showAndroidClipboardOverlay(text, mouseX, mouseY) {
         });
 
         iconBadge.addEventListener('click', (e) => {
-            if (isEditing) {
-                e.stopPropagation();
-                commitEdit();
-            }
+            e.stopPropagation();
+            pasteAndGo();
         });
 
-        preview.addEventListener('keydown', (e) => {
-            if (!isEditing) return;
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                commitEdit();
-            } else if (e.key === 'Escape') {
-                e.preventDefault();
-                cancelEdit();
-            }
-        });
+        container.addEventListener('mousedown', stopMouseEvent);
+        container.addEventListener('mouseup', stopMouseEvent);
+        container.addEventListener('pointerdown', stopMouseEvent);
+        container.addEventListener('pointerup', stopMouseEvent);
+
+        preview.addEventListener('keydown', stopKeyEvent, true);
+        preview.addEventListener('keyup', stopKeyEvent, true);
+        preview.addEventListener('keypress', stopKeyEvent, true);
+        container.addEventListener('keydown', stopKeyEvent, true);
+        container.addEventListener('keyup', stopKeyEvent, true);
+        container.addEventListener('keypress', stopKeyEvent, true);
 
         preview.addEventListener('blur', () => {
             if (isEditing) commitEdit();

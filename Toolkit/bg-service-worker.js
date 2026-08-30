@@ -538,19 +538,27 @@ chrome.commands.onCommand.addListener(async c => {
   } catch {}
 });
 
-// Dynamic Script Registration Helper
-async function syncContentScripts(id, enabled, configs) {
+// Dynamic Script Registration Helper with Mutex Lock
+let scriptSyncLock = Promise.resolve();
+
+function syncContentScripts(id, enabled, configs) {
   const ids = Array.isArray(id) ? id : [id];
-  try {
-    const existing = await chrome.scripting.getRegisteredContentScripts();
-    const toRemove = existing.map(s => s.id).filter(sId => ids.includes(sId));
-    if (toRemove.length) {
-      await chrome.scripting.unregisterContentScripts({ ids: toRemove });
+  scriptSyncLock = scriptSyncLock.then(async () => {
+    try {
+      const existing = await chrome.scripting.getRegisteredContentScripts();
+      const registeredIds = new Set(existing.map(s => s.id));
+      const toRemove = ids.filter(sId => registeredIds.has(sId));
+      if (toRemove.length > 0) {
+        await chrome.scripting.unregisterContentScripts({ ids: toRemove });
+      }
+      if (enabled && configs?.length) {
+        await chrome.scripting.registerContentScripts(configs);
+      }
+    } catch (e) {
+      console.error(`Script registration failed [${ids.join(',')}]:`, e);
     }
-  } catch {}
-  if (enabled && configs?.length) {
-    try { await chrome.scripting.registerContentScripts(configs); } catch (e) { console.error(`Script registration failed [${id}]:`, e); }
-  }
+  });
+  return scriptSyncLock;
 }
 
 const updateYtMusicScript = (enabled) => syncContentScripts('yt-music-audio', enabled, [{
@@ -608,8 +616,6 @@ chrome.runtime.onStartup.addListener(() => {
   rehydrateFeatureScripts();
 });
 
-rehydrateFeatureScripts();
-
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   switch (msg.action) {
@@ -625,6 +631,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'toggleDarkMode':
       if (msg.tabId) toggleDarkMode(msg.tabId);
       break;
+    case 'pasteAndGo':
+      if (msg.url) {
+        const createProps = { url: msg.url, active: true };
+        if (sender.tab?.id) {
+          createProps.index = sender.tab.index + 1;
+          createProps.openerTabId = sender.tab.id;
+        }
+        chrome.tabs.create(createProps);
+        sendResponse({ success: true });
+      }
+      return false;
     case 'fetchCSS':
       if (!msg.url || !/^https?:\/\//i.test(msg.url)) {
         sendResponse({ text: '' });
