@@ -196,39 +196,115 @@ const inject = () => {
 };
 
 // ==========================================
-// AUTOMATED THEATER MODE ENGINE (LIGHTWEIGHT)
+// AUTOMATED THEATER MODE ENGINE
+// 1. In Active Playlist: Disable Theater Mode (Standard 2-Column View)
+// 2. Standalone Video: Enable Theater Mode (Full-Bleed View)
 // ==========================================
-const syncTheaterMode = () => {
+
+let lastProcessedUrl = '';
+let theaterSyncTimer = null;
+
+function isTheaterActive() {
+  const watch = document.querySelector('ytd-watch-grid, ytd-watch-flexy');
+  if (watch) {
+    if (watch.hasAttribute('theater') || watch.hasAttribute('theater-requested_')) return true;
+    if (watch.theater !== undefined) return Boolean(watch.theater);
+  }
+  const sizeBtn = document.querySelector('.ytp-size-button');
+  if (sizeBtn) {
+    const title = (sizeBtn.getAttribute('aria-label') || sizeBtn.getAttribute('title') || sizeBtn.getAttribute('data-title-no-tooltip') || '').toLowerCase();
+    if (title.includes('default')) return true;
+    if (title.includes('theater')) return false;
+  }
+  const moviePlayer = document.getElementById('movie_player');
+  if (moviePlayer && moviePlayer.classList.contains('ytp-cinema-mode')) {
+    return true;
+  }
+  return false;
+}
+
+function executeTheaterToggle() {
+  const sizeBtn = document.querySelector('.ytp-size-button');
+  if (sizeBtn && typeof sizeBtn.click === 'function') {
+    sizeBtn.click();
+    return true;
+  }
+  const player = document.getElementById('movie_player') || document.body;
+  if (player) {
+    player.dispatchEvent(new KeyboardEvent('keydown', { key: 't', code: 'KeyT', keyCode: 84, which: 84, bubbles: true, cancelable: true }));
+    return true;
+  }
+  return false;
+}
+
+function syncTheaterMode() {
   if (!location.pathname.startsWith('/watch')) return;
 
+  const currentHref = location.href;
+  lastProcessedUrl = currentHref;
+
+  if (theaterSyncTimer) clearInterval(theaterSyncTimer);
+
   let attempts = 0;
-  const maxAttempts = 10;
+  const maxAttempts = 30; // 3 seconds timeout
 
-  const checkAndToggle = () => {
-    if (!location.pathname.startsWith('/watch')) return true;
-    const watch = document.querySelector('ytd-watch-grid, ytd-watch-flexy');
-    const sizeBtn = document.querySelector('.ytp-size-button');
-    if (!watch || !sizeBtn) return false;
-
-    const hasPlaylist = Boolean(new URLSearchParams(location.search).get('list'));
-    const isTheater = watch.hasAttribute('theater');
-    if ((hasPlaylist && isTheater) || (!hasPlaylist && !isTheater)) {
-      sizeBtn.click();
+  const checkAndApply = () => {
+    if (location.href !== currentHref || !location.pathname.startsWith('/watch')) {
+      if (theaterSyncTimer) clearInterval(theaterSyncTimer);
+      return true;
     }
+
+    const watch = document.querySelector('ytd-watch-grid, ytd-watch-flexy');
+    const player = document.getElementById('movie_player');
+    const sizeBtn = document.querySelector('.ytp-size-button');
+
+    if (!watch || (!sizeBtn && !player)) {
+      return false;
+    }
+
+    const searchParams = new URLSearchParams(location.search);
+    const hasPlaylist = Boolean(searchParams.get('list')) || Boolean(document.querySelector('ytd-playlist-panel-renderer, #playlist'));
+    const isTheater = isTheaterActive();
+
+    if (hasPlaylist && isTheater) {
+      executeTheaterToggle();
+      if (theaterSyncTimer) clearInterval(theaterSyncTimer);
+      return true;
+    } else if (!hasPlaylist && !isTheater) {
+      executeTheaterToggle();
+      if (theaterSyncTimer) clearInterval(theaterSyncTimer);
+      return true;
+    }
+
+    if (theaterSyncTimer) clearInterval(theaterSyncTimer);
     return true;
   };
 
-  if (!checkAndToggle()) {
-    const timer = setInterval(() => {
+  if (!checkAndApply()) {
+    theaterSyncTimer = setInterval(() => {
       attempts++;
-      if (checkAndToggle() || attempts >= maxAttempts) {
-        clearInterval(timer);
+      if (checkAndApply() || attempts >= maxAttempts) {
+        if (theaterSyncTimer) clearInterval(theaterSyncTimer);
       }
     }, 100);
   }
-};
+}
 
+// Hook into YouTube navigation lifecycle events
 document.addEventListener('yt-navigate-finish', syncTheaterMode, { passive: true });
+document.addEventListener('yt-page-data-updated', syncTheaterMode, { passive: true });
+window.addEventListener('popstate', syncTheaterMode, { passive: true });
+
+// Continuous URL change watcher for background auto-advance transitions
+let lastKnownHref = location.href;
+setInterval(() => {
+  if (location.href !== lastKnownHref) {
+    lastKnownHref = location.href;
+    if (location.pathname.startsWith('/watch')) {
+      syncTheaterMode();
+    }
+  }
+}, 400);
 
 const init = () => {
   syncTheaterMode();
@@ -242,5 +318,6 @@ if (document.readyState === 'loading') {
 } else {
   init();
 }
+
 
 

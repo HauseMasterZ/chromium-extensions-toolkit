@@ -585,6 +585,15 @@ const updateWhatsappScript = (enabled) => syncContentScripts(['whatsapp-virtual-
   }
 ]);
 
+function rehydrateFeatureScripts() {
+  chrome.storage.local.get({ featureYtMusic: true, featureYtFloatSearch: true, featureWhatsapp: true }, (res) => {
+    updateYtMusicScript(res.featureYtMusic);
+    updateYtFloatSearchScript(res.featureYtFloatSearch);
+    updateWhatsappScript(res.featureWhatsapp);
+  });
+  rehydrateDarkScripts();
+}
+
 chrome.runtime.onInstalled.addListener(async () => {
   try {
     const existing = await chrome.scripting.getRegisteredContentScripts();
@@ -592,13 +601,15 @@ chrome.runtime.onInstalled.addListener(async () => {
     if (legacy.length) await chrome.scripting.unregisterContentScripts({ ids: legacy });
   } catch {}
 
-  chrome.storage.local.get({ featureYtMusic: true, featureYtFloatSearch: true, featureWhatsapp: true }, (res) => {
-    updateYtMusicScript(res.featureYtMusic);
-    updateYtFloatSearchScript(res.featureYtFloatSearch);
-    updateWhatsappScript(res.featureWhatsapp);
-  });
-  rehydrateDarkScripts();
+  rehydrateFeatureScripts();
 });
+
+chrome.runtime.onStartup.addListener(() => {
+  rehydrateFeatureScripts();
+});
+
+rehydrateFeatureScripts();
+
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   switch (msg.action) {
