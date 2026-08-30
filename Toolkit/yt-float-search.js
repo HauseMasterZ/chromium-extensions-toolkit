@@ -192,18 +192,45 @@ const inject = () => {
 
     window.addEventListener('scroll', handleScroll, { passive: true });
     window.visualViewport?.addEventListener('scroll', handleScroll, { passive: true });
-    window.visualViewport?.addEventListener('resize', handleScroll, { passive: true });
   }
 };
 
-  const init = () => {
-    'requestIdleCallback' in window
-      ? requestIdleCallback(inject, { timeout: 3000 })
-      : window.addEventListener('load', inject, { once: true });
+// ==========================================
+// AUTOMATED THEATER MODE ENGINE (LIGHTWEIGHT)
+// ==========================================
+const syncTheaterMode = () => {
+  if (!location.pathname.startsWith('/watch')) return;
+  const hasPlaylist = Boolean(new URLSearchParams(location.search).get('list'));
+
+  const checkAndToggle = () => {
+    const watch = document.querySelector('ytd-watch-grid, ytd-watch-flexy');
+    const sizeBtn = document.querySelector('.ytp-size-button');
+    if (!watch || !sizeBtn) return false;
+
+    const isTheater = watch.hasAttribute('theater');
+    if ((hasPlaylist && isTheater) || (!hasPlaylist && !isTheater)) {
+      sizeBtn.click();
+    }
+    return true;
   };
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
+  if (!checkAndToggle()) {
+    setTimeout(checkAndToggle, 300);
   }
+};
+
+document.addEventListener('yt-navigate-finish', syncTheaterMode, { passive: true });
+
+const init = () => {
+  syncTheaterMode();
+  'requestIdleCallback' in window
+    ? requestIdleCallback(inject, { timeout: 3000 })
+    : window.addEventListener('load', inject, { once: true });
+};
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
+
