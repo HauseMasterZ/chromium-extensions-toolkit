@@ -11,7 +11,8 @@
     "storage",
     "browsingData",
     "sessions",
-    "alarms"
+    "alarms",
+    "offscreen"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -23,7 +24,7 @@
     "newtab": "newtab-page.html"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
   "icons": {
     "16": "Images/icon16.png",
@@ -42,7 +43,14 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["global-auto-copy.js", "link-unshortener.js"]
+      "js": ["global-auto-copy.js", "link-unshortener.js", "ocr-dom-overlay.js"],
+      "css": ["ocr-dom-overlay.css"]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["ocr/*"],
+      "matches": ["<all_urls>"]
     }
   ],
   "commands": {
@@ -78,6 +86,9 @@
     },
     "restore_last_closed_window": {
       "description": "Reopen last closed window"
+    },
+    "ocr_dom": {
+      "description": "Toggle DOM Image OCR"
     }
   }
 }

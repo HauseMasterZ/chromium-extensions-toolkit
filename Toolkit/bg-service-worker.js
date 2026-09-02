@@ -114,52 +114,120 @@ function openTarget(targetUrl, isExtensionPage, tabId) {
   else chrome.tabs.create({ url: targetUrl });
 }
 
-function showPillToast(tabId, message, durationMs = 1200) {
+let offscreenCreationPromise = null;
+let offscreenCloseTimer = null;
+
+async function ensureOffscreenDocument() {
+  if (offscreenCloseTimer) clearTimeout(offscreenCloseTimer);
+  offscreenCloseTimer = setTimeout(() => {
+    closeOffscreenDocument();
+  }, 60000);
+
+  if (chrome.offscreen?.hasDocument && await chrome.offscreen.hasDocument()) {
+    return;
+  }
+
+  const existingContexts = await chrome.runtime.getContexts?.({ contextTypes: ['OFFSCREEN_DOCUMENT'] }) || [];
+  if (existingContexts.length > 0) return;
+
+  if (offscreenCreationPromise) {
+    await offscreenCreationPromise;
+    return;
+  }
+
+  offscreenCreationPromise = chrome.offscreen.createDocument({
+    url: 'ocr-offscreen.html',
+    reasons: ['WORKERS', 'BLOBS'],
+    justification: 'Run offline Tesseract.js WASM OCR engine'
+  }).catch((err) => {
+    if (!err?.message?.includes('Only a single offscreen document')) {
+      console.error('Failed to create offscreen document:', err);
+    }
+  }).finally(() => {
+    offscreenCreationPromise = null;
+  });
+
+  await offscreenCreationPromise;
+}
+
+async function closeOffscreenDocument() {
+  try {
+    if (chrome.offscreen?.hasDocument && await chrome.offscreen.hasDocument()) {
+      await chrome.offscreen.closeDocument();
+    }
+  } catch {}
+}
+
+function resolvePasteUrl(input) {
+  if (!input) return null;
+  const str = input.trim();
+  if (!str) return null;
+
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//i.test(str)) {
+    return str;
+  }
+  if (/^localhost(:\d+)?(\/.*)?$/i.test(str)) {
+    return `http://${str}`;
+  }
+  if (/^(\d{1,3}\.){3}\d{1,3}(:\d+)?(\/.*)?$/.test(str)) {
+    return `http://${str}`;
+  }
+  if (!/\s/.test(str) && /^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(:\d+)?(\/.*)?$/i.test(str)) {
+    return `https://${str}`;
+  }
+  return `https://www.google.com/search?q=${encodeURIComponent(str)}`;
+}
+
+async function showPillToast(tabId, message, durationMs = 1200) {
   if (!tabId) return;
-  chrome.scripting.executeScript({
-    target: { tabId },
-    func: (text, duration) => {
-      const existing = document.getElementById('toolkit-pill-toast');
-      if (existing) existing.remove();
-      const toast = document.createElement('div');
-      toast.id = 'toolkit-pill-toast';
-      toast.style.cssText = `
-        position: fixed !important;
-        top: 16px !important;
-        left: 50% !important;
-        transform: translateX(-50%) translateY(-6px) !important;
-        background: rgba(18, 18, 22, 0.9) !important;
-        backdrop-filter: blur(10px) !important;
-        -webkit-backdrop-filter: blur(10px) !important;
-        color: #e2e8f0 !important;
-        border: 1px solid rgba(255, 255, 255, 0.1) !important;
-        border-radius: 9999px !important;
-        padding: 6px 14px !important;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
-        font-size: 12px !important;
-        font-weight: 500 !important;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4) !important;
-        z-index: 2147483647 !important;
-        display: flex !important;
-        align-items: center !important;
-        opacity: 0 !important;
-        transition: all 0.18s ease-out !important;
-        pointer-events: none !important;
-      `;
-      toast.textContent = text;
-      (document.body || document.documentElement).appendChild(toast);
-      requestAnimationFrame(() => {
-        toast.style.opacity = '1';
-        toast.style.transform = 'translateX(-50%) translateY(0)';
-      });
-      setTimeout(() => {
-        toast.style.opacity = '0';
-        toast.style.transform = 'translateX(-50%) translateY(-6px)';
-        setTimeout(() => toast.remove(), 200);
-      }, duration);
-    },
-    args: [message, durationMs]
-  }).catch(() => {});
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!tab?.url || !/^https?:\/\//i.test(tab.url)) return;
+    chrome.scripting.executeScript({
+      target: { tabId },
+      func: (text, duration) => {
+        const existing = document.getElementById('toolkit-pill-toast');
+        if (existing) existing.remove();
+        const toast = document.createElement('div');
+        toast.id = 'toolkit-pill-toast';
+        toast.style.cssText = `
+          position: fixed !important;
+          top: 16px !important;
+          left: 50% !important;
+          transform: translateX(-50%) translateY(-6px) !important;
+          background: rgba(18, 18, 22, 0.9) !important;
+          backdrop-filter: blur(10px) !important;
+          -webkit-backdrop-filter: blur(10px) !important;
+          color: #e2e8f0 !important;
+          border: 1px solid rgba(255, 255, 255, 0.1) !important;
+          border-radius: 9999px !important;
+          padding: 6px 14px !important;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+          font-size: 12px !important;
+          font-weight: 500 !important;
+          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4) !important;
+          z-index: 2147483647 !important;
+          display: flex !important;
+          align-items: center !important;
+          opacity: 0 !important;
+          transition: all 0.18s ease-out !important;
+          pointer-events: none !important;
+        `;
+        toast.textContent = text;
+        (document.body || document.documentElement).appendChild(toast);
+        requestAnimationFrame(() => {
+          toast.style.opacity = '1';
+          toast.style.transform = 'translateX(-50%) translateY(0)';
+        });
+        setTimeout(() => {
+          toast.style.opacity = '0';
+          toast.style.transform = 'translateX(-50%) translateY(-6px)';
+          setTimeout(() => toast.remove(), 200);
+        }, duration);
+      },
+      args: [message, durationMs]
+    }).catch(() => {});
+  } catch {}
 }
 
 chrome.commands.onCommand.addListener(async c => {
@@ -403,7 +471,7 @@ chrome.commands.onCommand.addListener(async c => {
   }
 
   if (c === 'copy_clean_url') {
-    if (tab?.id && tab.url) {
+    if (tab?.id && tab.url && /^https?:\/\//i.test(tab.url)) {
       try {
         const cleanUrl = clearUrlsData ? cleanUrlWithClearUrls(tab.url, clearUrlsData) : tab.url;
         await chrome.scripting.executeScript({
@@ -431,11 +499,11 @@ chrome.commands.onCommand.addListener(async c => {
       windowsMap.get(t.windowId).push(t);
     }
 
-    // For every window whose active view is NOT an empty new tab:
+    // For every window whose active view is NOT an empty new tab and NOT playing media:
     // If an existing new tab is already open in that window, focus it; otherwise create one.
     for (const [winId, wTabs] of windowsMap) {
       const activeTab = wTabs.find(t => t.active);
-      if (!activeTab || isNewTab(activeTab.url)) continue;
+      if (!activeTab || isNewTab(activeTab.url) || activeTab.audible) continue;
 
       const existingNewTab = wTabs.find(t => isNewTab(t.url));
       if (existingNewTab?.id) {
@@ -449,9 +517,9 @@ chrome.commands.onCommand.addListener(async c => {
       }
     }
 
-    // Full sweep discard across all windows and monitors (including helium://, chrome://, and all web pages)
+    // Full sweep discard across all windows and monitors, skipping active, sleeping, new tab, and media/audible tabs
     const refreshedTabs = await chrome.tabs.query({});
-    const tabsToDiscard = refreshedTabs.filter(t => t.id && !t.active && !t.discarded && !isNewTab(t.url));
+    const tabsToDiscard = refreshedTabs.filter(t => t.id && !t.active && !t.discarded && !isNewTab(t.url) && !t.audible);
 
     const discardResults = await Promise.allSettled(
       tabsToDiscard.map(t => chrome.tabs.discard(t.id))
@@ -463,7 +531,7 @@ chrome.commands.onCommand.addListener(async c => {
   }
 
   if (c === 'price_history') {
-    if (tab?.id && tab.url) {
+    if (tab?.id && tab.url && /^https?:\/\//i.test(tab.url)) {
       const cleanUrl = clearUrlsData ? cleanUrlWithClearUrls(tab.url, clearUrlsData) : tab.url;
       try {
         await chrome.scripting.executeScript({
@@ -497,35 +565,60 @@ chrome.commands.onCommand.addListener(async c => {
     return;
   }
 
+  if (c === 'ocr_dom') {
+    if (tab?.id && tab.url && /^https?:\/\//i.test(tab.url)) {
+      try {
+        await chrome.tabs.sendMessage(tab.id, { action: 'toggle_ocr' });
+      } catch {
+        try {
+          await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ['ocr-dom-overlay.css'] });
+          await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['ocr-dom-overlay.js'] });
+          setTimeout(() => {
+            chrome.tabs.sendMessage(tab.id, { action: 'toggle_ocr' }).catch(() => {});
+          }, 100);
+        } catch {}
+      }
+    }
+    return;
+  }
+
   if (!['run', 'run_yt', 'run_incognito'].includes(c) || !tab?.id) return;
   const { featurePasteGo = true } = await chrome.storage.local.get('featurePasteGo');
   if (!featurePasteGo) return;
   
   try {
     let result = null;
-    let isExtensionPage = false;
+    const isExtensionPage = Boolean(tab.url && (tab.url.startsWith('chrome-extension://') || tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('edge://')));
 
-    try {
-      const res = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => navigator.clipboard.readText() });
-      result = res?.[0]?.result ?? null;
-    } catch {
-      isExtensionPage = true;
+    if (isExtensionPage) {
       try {
         result = await chrome.tabs.sendMessage(tab.id, { action: 'read_clipboard' });
       } catch {}
+    } else {
+      try {
+        const res = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => navigator.clipboard.readText() });
+        result = res?.[0]?.result ?? null;
+      } catch {
+        try {
+          result = await chrome.tabs.sendMessage(tab.id, { action: 'read_clipboard' });
+        } catch {}
+      }
     }
 
     if (!result) return;
     result = result.trim();
-    const isUrl = /^https?:\/\//i.test(result);
 
     if (c === 'run') {
-      const finalUrl = isUrl ? result : `https://google.com/search?q=${encodeURIComponent(result)}`;
+      const finalUrl = resolvePasteUrl(result);
       openTarget(finalUrl, isExtensionPage, tab.id);
     } else if (c === 'run_yt') {
-      openTarget(`https://www.youtube.com/results?search_query=${encodeURIComponent(result)}`, isExtensionPage, tab.id);
+      if (/^https?:\/\/(www\.)?(youtube\.com|youtu\.be)/i.test(result)) {
+        openTarget(result, isExtensionPage, tab.id);
+      } else {
+        openTarget(`https://www.youtube.com/results?search_query=${encodeURIComponent(result)}`, isExtensionPage, tab.id);
+      }
     } else if (c === 'run_incognito') {
-      const targetUrl = isUrl ? result : `https://google.com/search?q=${encodeURIComponent(result)}`;
+      const targetUrl = resolvePasteUrl(result);
       const windows = await chrome.windows.getAll();
       const incognitoWin = windows.find(w => w.incognito);
       if (incognitoWin) {
@@ -633,7 +726,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       break;
     case 'pasteAndGo':
       if (msg.url) {
-        const createProps = { url: msg.url, active: true };
+        const targetUrl = resolvePasteUrl(msg.url);
+        const createProps = { url: targetUrl, active: true };
         if (sender.tab?.id) {
           createProps.index = sender.tab.index + 1;
           createProps.openerTabId = sender.tab.id;
@@ -642,6 +736,56 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ success: true });
       }
       return false;
+    case 'ocrProcessImage':
+      (async () => {
+        try {
+          await ensureOffscreenDocument();
+          let dataUrl = msg.dataUrl;
+
+          // If content script couldn't read cross-origin image pixels, fetch via background
+          if (!dataUrl && msg.imgUrl && /^https?:\/\//i.test(msg.imgUrl)) {
+            try {
+              const res = await fetch(msg.imgUrl, { credentials: 'include' });
+              if (res.ok) {
+                const arrayBuffer = await res.arrayBuffer();
+                const bytes = new Uint8Array(arrayBuffer);
+                let binary = '';
+                const len = bytes.byteLength;
+                const chunkSize = 8192;
+                for (let i = 0; i < len; i += chunkSize) {
+                  binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunkSize, len)));
+                }
+                const base64 = btoa(binary);
+                const contentType = res.headers.get('content-type') || 'image/png';
+                dataUrl = `data:${contentType};base64,${base64}`;
+              }
+            } catch (fetchErr) {
+              console.warn('Background image fetch failed for OCR:', fetchErr);
+            }
+          }
+
+          if (!dataUrl) {
+            sendResponse({ success: false, imageId: msg.imageId, error: 'No image data available' });
+            return;
+          }
+
+          chrome.runtime.sendMessage({
+            target: 'offscreen',
+            action: 'OCR_RECOGNIZE',
+            imageId: msg.imageId,
+            dataUrl: dataUrl
+          }, (ocrRes) => {
+            if (chrome.runtime.lastError) {
+              sendResponse({ success: false, imageId: msg.imageId, error: chrome.runtime.lastError.message });
+            } else {
+              sendResponse(ocrRes || { success: false, imageId: msg.imageId, error: 'No OCR response' });
+            }
+          });
+        } catch (err) {
+          sendResponse({ success: false, imageId: msg.imageId, error: err?.message || String(err) });
+        }
+      })();
+      return true;
     case 'fetchCSS':
       if (!msg.url || !/^https?:\/\//i.test(msg.url)) {
         sendResponse({ text: '' });

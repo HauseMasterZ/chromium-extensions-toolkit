@@ -143,3 +143,122 @@ ytm-browse, ytm-search, ytm-watch { margin-top: 0 !important; padding-top: 0 !im
   #yt-float-wrapper.bar-visible { pointer-events: auto; }
 }
 
+/* Increase theater mode video container height */
+ytd-watch-grid[theater] #player-theater-container,
+ytd-watch-grid[theater] #full-bleed-container,
+ytd-watch-flexy[theater] #player-theater-container,
+ytd-watch-flexy[theater] #full-bleed-container {
+  max-height: calc(100vh - 40px) !important;
+  min-height: calc(100vh - 40px) !important;
+  height: calc(100vh - 40px) !important;
+}
+
+ytd-watch-grid[theater],
+ytd-watch-flexy[theater] {
+  --ytd-watch-flexy-theater-player-height: calc(100vh - 40px) !important;
+  --ytd-watch-flexy-player-height: calc(100vh - 40px) !important;
+}
+
+/* Move Like/Dislike/Share/Download actions to the right of the Title */
+ytd-watch-metadata #above-the-fold {
+  display: grid !important;
+  grid-template-columns: 1fr auto !important;
+  grid-template-areas:
+    "title actions"
+    "owner owner" !important;
+  align-items: center !important;
+  row-gap: 8px !important;
+  column-gap: 16px !important;
+}
+
+ytd-watch-metadata #title {
+  grid-area: title !important;
+  margin-bottom: 0 !important;
+}
+
+ytd-watch-metadata #title h1 {
+  margin-bottom: 0 !important;
+}
+
+ytd-watch-metadata #top-row {
+  display: contents !important;
+}
+
+ytd-watch-metadata #owner {
+  grid-area: owner !important;
+  display: flex !important;
+  align-items: center !important;
+  margin-top: 0 !important;
+}
+
+ytd-watch-metadata #actions {
+  grid-area: actions !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  min-width: 0 !important;
+  margin-top: 0 !important;
+}
+
+ytd-watch-metadata #actions #menu,
+ytd-watch-metadata ytd-menu-renderer {
+  margin-top: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+}
+
+/* Collapse empty spacing divs and reduce gap between player bottom edge and title */
+ytd-watch-flexy #alerts:empty,
+ytd-watch-flexy #messages:empty,
+ytd-watch-flexy #clarify-box:empty,
+ytd-watch-grid #alerts:empty,
+ytd-watch-grid #messages:empty,
+ytd-watch-grid #clarify-box:empty,
+#alerts:empty,
+#messages:empty,
+#clarify-box:empty,
+#alerts,
+#messages,
+#clarify-box {
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+#alerts:empty,
+#messages:empty,
+#clarify-box:empty {
+  display: none !important;
+}
+
+#columns.ytd-watch-flexy,
+#columns.ytd-watch-grid,
+#primary.ytd-watch-flexy,
+#primary.ytd-watch-grid,
+#primary-inner.ytd-watch-flexy,
+#primary-inner.ytd-watch-grid,
+#meta.ytd-watch-flexy,
+#meta.ytd-watch-grid {
+  margin-top: 0 !important;
+  padding-top: 0 !important;
+}
+
+ytd-watch-metadata {
+  margin-top: 2px !important;
+  padding-top: 0 !important;
+}
+
+ytd-watch-grid #player-theater-container,
+ytd-watch-grid #full-bleed-container,
+ytd-watch-flexy #player-theater-container,
+ytd-watch-flexy #full-bleed-container,
+#player-container-outer {
+  margin-bottom: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+
+
+
+

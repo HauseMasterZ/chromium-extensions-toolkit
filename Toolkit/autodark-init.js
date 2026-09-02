@@ -76,6 +76,12 @@
                         darkSchemeTextColor: '#e8eaed',
                         lightSchemeBackgroundColor: '#000000',
                         lightSchemeTextColor: '#e8eaed',
+                    }, {
+                        css: `
+                            html, body {
+                                background-image: none !important;
+                            }
+                        `
                     });
                     enabled = true;
                     markReady();

@@ -206,6 +206,26 @@ function showAndroidClipboardOverlay(text, mouseX, mouseY) {
             container.classList.remove('visible');
         };
 
+        const resolvePasteUrl = (input) => {
+            if (!input) return null;
+            const str = input.trim();
+            if (!str) return null;
+
+            if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//i.test(str)) {
+                return str;
+            }
+            if (/^localhost(:\d+)?(\/.*)?$/i.test(str)) {
+                return `http://${str}`;
+            }
+            if (/^(\d{1,3}\.){3}\d{1,3}(:\d+)?(\/.*)?$/.test(str)) {
+                return `http://${str}`;
+            }
+            if (!/\s/.test(str) && /^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(:\d+)?(\/.*)?$/i.test(str)) {
+                return `https://${str}`;
+            }
+            return `https://www.google.com/search?q=${encodeURIComponent(str)}`;
+        };
+
         const pasteAndGo = (text) => {
             let raw = (text || currentRawText || '').trim();
             if (isEditing) {
@@ -223,10 +243,7 @@ function showAndroidClipboardOverlay(text, mouseX, mouseY) {
             preview.removeAttribute('contenteditable');
             isEditing = false;
 
-            const isUrl = /^https?:\/\//i.test(raw) || /^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(\/.*)?$/i.test(raw);
-            const targetUrl = /^https?:\/\//i.test(raw)
-                ? raw
-                : (/^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(\/.*)?$/i.test(raw) ? 'https://' + raw : `https://www.google.com/search?q=${encodeURIComponent(raw)}`);
+            const targetUrl = resolvePasteUrl(raw);
 
             try {
                 if (chrome.runtime?.id) {
