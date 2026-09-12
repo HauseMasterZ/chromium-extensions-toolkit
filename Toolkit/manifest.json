@@ -12,7 +12,8 @@
     "browsingData",
     "sessions",
     "alarms",
-    "offscreen"
+    "offscreen",
+    "contextMenus"
   ],
   "host_permissions": [
     "<all_urls>"

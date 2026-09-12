@@ -156,8 +156,31 @@ function refreshBrowserStatusBubble(a) {
     } catch {}
 }
 
+function saveRawHref(a) {
+    if (!a || !a.href) return;
+    if (!a.dataset.rawHref) {
+        a.dataset.rawHref = a.href;
+    }
+}
+
+function getAnchorFromEvent(e) {
+    if (!e) return null;
+    if (e.target?.closest) {
+        const a = e.target.closest('a[href]');
+        if (a) return a;
+    }
+    if (typeof e.composedPath === 'function') {
+        for (const el of e.composedPath()) {
+            if (el?.tagName === 'A' && el.href) return el;
+        }
+    }
+    return null;
+}
+
 function handleLinkUnshorten(a) {
     if (!a || !a.href || resolvingElements.has(a)) return;
+
+    saveRawHref(a);
 
     // If wrapped in a gateway, unwrap first
     const unwrapped = unwrapGatewayUrl(a.href);
@@ -267,9 +290,10 @@ let hoverUnshortenTimer = null;
 document.addEventListener('mouseover', (e) => {
     lastMouseX = e.clientX;
     lastMouseY = e.clientY;
-    const a = e.target.closest?.('a[href]');
+    const a = getAnchorFromEvent(e);
     lastHoveredAnchor = a;
     if (!a) return;
+    saveRawHref(a);
     try { injectUnshortenStyles(); } catch {}
 
     if (isExternalSearchOrGatewayLink(a)) {
@@ -292,16 +316,27 @@ document.addEventListener('mousemove', (e) => {
 }, { passive: true });
 
 document.addEventListener('focusin', (e) => {
-    const a = e.target.closest?.('a[href]');
+    const a = getAnchorFromEvent(e);
     lastHoveredAnchor = a;
     if (!a) return;
+    saveRawHref(a);
     handleLinkUnshorten(a);
 }, { passive: true });
 
+let lastRightClickedLink = null;
+
 // Synchronously unwrap on right-click context menu so Chrome's native "Copy link address" captures clean URL
 document.addEventListener('contextmenu', (e) => {
-    const a = e.target.closest?.('a[href]');
-    if (!a || !a.href) return;
+    const a = getAnchorFromEvent(e);
+    if (!a || !a.href) {
+        lastRightClickedLink = null;
+        return;
+    }
+    saveRawHref(a);
+    lastRightClickedLink = {
+        rawUrl: a.dataset.rawHref || a.dataset.originalShortUrl || a.href,
+        currentUrl: a.href
+    };
     const unwrapped = unwrapGatewayUrl(a.href);
     if (unwrapped) {
         a.href = unwrapped;
@@ -314,9 +349,10 @@ document.addEventListener('contextmenu', (e) => {
 
 // Synchronously unwrap and prevent tracking scripts from rewriting URLs on mouse press
 document.addEventListener('mousedown', (e) => {
-    const a = e.target.closest?.('a[href]');
+    const a = getAnchorFromEvent(e);
     if (!a || !a.href) return;
 
+    saveRawHref(a);
     const unwrapped = unwrapGatewayUrl(a.href);
     if (unwrapped) {
         a.href = unwrapped;
@@ -359,9 +395,10 @@ document.addEventListener('copy', (e) => {
 // Non-intrusive left-click: synchronously unwrap tracking gateways and bypass tracking router in 0ms
 document.addEventListener('click', (e) => {
     if (e.button !== 0) return;
-    const a = e.target.closest?.('a[href]');
+    const a = getAnchorFromEvent(e);
     if (!a || !a.href) return;
 
+    saveRawHref(a);
     // Fast synchronous gateway unwrap in 0ms (e.g. google.com/url?q=... -> clean destination)
     const unwrapped = unwrapGatewayUrl(a.href);
     if (unwrapped) {
@@ -389,9 +426,10 @@ document.addEventListener('click', (e) => {
 // Non-intrusive middle-click: synchronously prepare clean URL for background tab
 document.addEventListener('auxclick', (e) => {
     if (e.button !== 1) return;
-    const a = e.target.closest?.('a[href]');
+    const a = getAnchorFromEvent(e);
     if (!a || !a.href) return;
 
+    saveRawHref(a);
     const unwrapped = unwrapGatewayUrl(a.href);
     if (unwrapped) {
         a.href = unwrapped;
@@ -410,3 +448,32 @@ document.addEventListener('auxclick', (e) => {
         e.stopImmediatePropagation();
     }
 }, { capture: true });
+
+function findRawUrlInCache(cleanUrl) {
+    if (!cleanUrl) return null;
+    for (const [raw, clean] of tabUnshortenCache.entries()) {
+        if (clean === cleanUrl) return raw;
+    }
+    return null;
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg?.action === 'get_raw_link') {
+        let rawUrl = lastRightClickedLink?.rawUrl;
+
+        if (!rawUrl && msg.linkUrl) {
+            for (const a of document.querySelectorAll('a[href]')) {
+                if (a.href === msg.linkUrl) {
+                    rawUrl = a.dataset.rawHref || a.dataset.originalShortUrl;
+                    if (rawUrl) break;
+                }
+            }
+            if (!rawUrl) {
+                rawUrl = findRawUrlInCache(msg.linkUrl);
+            }
+        }
+
+        sendResponse({ rawUrl: rawUrl || msg.linkUrl });
+        return false;
+    }
+});

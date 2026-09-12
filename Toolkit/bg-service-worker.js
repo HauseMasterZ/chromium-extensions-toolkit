@@ -230,6 +230,112 @@ async function showPillToast(tabId, message, durationMs = 1200) {
   } catch {}
 }
 
+function setupContextMenu() {
+  if (!chrome.contextMenus) return;
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: 'copy_raw_link',
+      title: 'Copy raw link address',
+      contexts: ['link']
+    }, () => {
+      if (chrome.runtime.lastError) {}
+    });
+  });
+}
+
+chrome.runtime.onInstalled.addListener(setupContextMenu);
+chrome.runtime.onStartup.addListener(setupContextMenu);
+setupContextMenu();
+
+async function copyTextToTabClipboard(tabId, frameId, text) {
+  const func = (t) => {
+    if (navigator.clipboard?.writeText) {
+      return navigator.clipboard.writeText(t).catch(() => {
+        const ta = document.createElement('textarea');
+        ta.value = t;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        (document.body || document.documentElement).appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      });
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = t;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      (document.body || document.documentElement).appendChild(ta);
+      ta.focus();
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+  };
+
+  try {
+    const target = { tabId };
+    if (typeof frameId === 'number' && frameId > 0) {
+      target.frameIds = [frameId];
+    }
+    await chrome.scripting.executeScript({
+      target,
+      func,
+      args: [text]
+    });
+    return true;
+  } catch {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        func,
+        args: [text]
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+async function handleCopyRawLink(info, tab) {
+  if (!tab?.id || !info?.linkUrl) return;
+
+  let rawUrl = null;
+  try {
+    const sendOptions = typeof info.frameId === 'number' && info.frameId > 0 ? { frameId: info.frameId } : {};
+    const res = await chrome.tabs.sendMessage(tab.id, { action: 'get_raw_link', linkUrl: info.linkUrl }, sendOptions);
+    if (res?.rawUrl) {
+      rawUrl = res.rawUrl;
+    }
+  } catch {}
+
+  if (!rawUrl && info.linkUrl) {
+    for (const [raw, clean] of unshortenCache.entries()) {
+      if (clean === info.linkUrl) {
+        rawUrl = raw;
+        break;
+      }
+    }
+  }
+
+  if (!rawUrl) {
+    rawUrl = info.linkUrl;
+  }
+
+  const copied = await copyTextToTabClipboard(tab.id, info.frameId, rawUrl);
+  if (copied) {
+    showPillToast(tab.id, 'Raw link copied', 1200);
+  }
+}
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId === 'copy_raw_link') {
+    handleCopyRawLink(info, tab);
+  }
+});
+
 chrome.commands.onCommand.addListener(async c => {
   const tab = await getActiveTab();
 
@@ -335,17 +441,58 @@ chrome.commands.onCommand.addListener(async c => {
       }).catch(() => {});
     }
 
+    const DEFAULT_PERSISTED_ORIGINS = [
+      'https://web.whatsapp.com',
+      'https://whatsapp.com',
+      'https://www.whatsapp.com',
+      'https://discord.com',
+      'https://ptb.discord.com',
+      'https://canary.discord.com',
+      'https://discordapp.com',
+      'https://status.discord.com',
+      'https://web.telegram.org',
+      'https://k.telegram.org',
+      'https://z.telegram.org',
+      'https://a.telegram.org',
+      'https://telegram.org',
+      'https://open.spotify.com',
+      'https://spotify.com',
+      'https://accounts.spotify.com',
+      'https://api.spotify.com',
+      'https://gae2-spclient.spotify.com',
+      'https://app.notesnook.com',
+      'https://notesnook.com',
+      'https://auth.notesnook.com',
+      'https://api.notesnook.com',
+      'https://app.slack.com',
+      'https://slack.com',
+      'https://www.notion.so',
+      'https://notion.so',
+      'https://vault.bitwarden.com',
+      'https://hausemasterz.github.io'
+    ];
+
     const { persisted_origins = [] } = await chrome.storage.local.get('persisted_origins');
-    const dynamicPersistedSet = new Set(persisted_origins);
-    dynamicPersistedSet.add('https://hausemasterz.github.io');
+    const dynamicPersistedSet = new Set([...DEFAULT_PERSISTED_ORIGINS, ...persisted_origins]);
 
     const allTabs = await chrome.tabs.query({});
     const probePromises = allTabs.map(async (t) => {
       if (!t.url || !t.url.startsWith('http') || !t.id) return;
-      const origin = new URL(t.url).origin;
+      let origin;
+      try {
+        origin = new URL(t.url).origin;
+      } catch {
+        return;
+      }
 
-      // Skip discarded/sleeping tabs to prevent multi-second forced page reloads
-      if (t.discarded) return;
+      // If tab is discarded/sleeping, we cannot run executeScript without triggering an expensive reload.
+      // But if its origin matches a known persistent app or is already tracked, ensure it is preserved.
+      if (t.discarded) {
+        if (DEFAULT_PERSISTED_ORIGINS.includes(origin) || dynamicPersistedSet.has(origin)) {
+          dynamicPersistedSet.add(origin);
+        }
+        return;
+      }
 
       try {
         const probeTask = chrome.scripting.executeScript({
@@ -372,7 +519,7 @@ chrome.commands.onCommand.addListener(async c => {
 
               // Tier 1 (Synchronous & Instant): Valid Cryptographic JWT / Auth Token Inspection
               const jwtRegex = /^[A-Za-z0-9-_=]{15,}\.[A-Za-z0-9-_=]{15,}\.?[A-Za-z0-9-_.+/=]*$/;
-              const authKeyPattern = /(token|auth|session|master_key|cipher|credentials|supabase\.auth|firebase:authUser)/i;
+              const authKeyPattern = /(token|auth|session|master_key|cipher|credentials|supabase\.auth|firebase:authUser|fingerprint|wa-|last-wid|signal|matrix)/i;
               const analyticsPattern = /^(_ga|_gid|amp|criteo|ajs_|cookie|theme|volume|banner|popup|sidebar)/i;
 
               for (let i = 0; i < localStorage.length; i++) {
@@ -405,7 +552,7 @@ chrome.commands.onCommand.addListener(async c => {
               if (!isCritical && window.indexedDB?.databases) {
                 const dbs = await window.indexedDB.databases();
                 const realDbs = dbs.filter(d => d.name && !/^(_ga|firebase-heartbeat|google-analytics)/i.test(d.name));
-                if (realDbs.length >= 2 || realDbs.some(d => /(notesnook|discord|slack|notion|vault|state|auth|session|localforage|matrix|rxdb)/i.test(d.name))) {
+                if (realDbs.length >= 2 || realDbs.some(d => /(wawc|model-storage|signal-protocol-store|whatsapp|notesnook|discord|slack|notion|vault|state|auth|session|localforage|matrix|rxdb|keyval-store)/i.test(d.name))) {
                   isCritical = true;
                 }
               }
@@ -420,7 +567,7 @@ chrome.commands.onCommand.addListener(async c => {
           }
         });
 
-        const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 1000));
+        const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 2000));
         const probeRes = await Promise.race([probeTask, timeoutPromise]);
         const res = probeRes?.[0]?.result;
 
@@ -474,11 +621,7 @@ chrome.commands.onCommand.addListener(async c => {
     if (tab?.id && tab.url && /^https?:\/\//i.test(tab.url)) {
       try {
         const cleanUrl = clearUrlsData ? cleanUrlWithClearUrls(tab.url, clearUrlsData) : tab.url;
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: (url) => navigator.clipboard.writeText(url),
-          args: [cleanUrl]
-        });
+        await copyTextToTabClipboard(tab.id, null, cleanUrl);
         showPillToast(tab.id, 'Clean URL copied', 1200);
       } catch {}
     }
@@ -534,11 +677,7 @@ chrome.commands.onCommand.addListener(async c => {
     if (tab?.id && tab.url && /^https?:\/\//i.test(tab.url)) {
       const cleanUrl = clearUrlsData ? cleanUrlWithClearUrls(tab.url, clearUrlsData) : tab.url;
       try {
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: (url) => navigator.clipboard.writeText(url),
-          args: [cleanUrl]
-        });
+        await copyTextToTabClipboard(tab.id, null, cleanUrl);
       } catch {}
 
       const buyhatkeUrl = `https://buyhatke.com/${cleanUrl}`;
@@ -596,7 +735,7 @@ chrome.commands.onCommand.addListener(async c => {
       } catch {}
     } else {
       try {
-        const res = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => navigator.clipboard.readText() });
+        const res = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => navigator.clipboard?.readText ? navigator.clipboard.readText() : null });
         result = res?.[0]?.result ?? null;
       } catch {
         try {

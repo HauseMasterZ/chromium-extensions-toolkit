@@ -196,27 +196,249 @@ const inject = () => {
 };
 
 // ==========================================
-// AUTOMATED THEATER MODE (LIGHTWEIGHT)
+// AUTOMATED THEATER MODE ENGINE
+// 1. In Active Playlist: Disable Theater Mode (Standard 2-Column View)
+// 2. Standalone Video: Enable Theater Mode (Full-Bleed View)
 // ==========================================
-const syncTheaterMode = () => {
-  if (!location.pathname.startsWith('/watch')) return;
-  const inPlaylist = location.search.includes('list=');
-  const watch = document.querySelector('ytd-watch-grid, ytd-watch-flexy');
-  const btn = document.querySelector('.ytp-size-button');
 
-  if (watch && btn) {
-    const isTheater = watch.hasAttribute('theater');
-    if ((inPlaylist && isTheater) || (!inPlaylist && !isTheater)) {
-      btn.click();
+let syncTimer = null;
+let activeSessionKey = '';
+let activeSessionId = 0;
+let userOverriddenSessionKey = '';
+
+function isWatchPage() {
+  return location.pathname.startsWith('/watch') || location.pathname.startsWith('/live');
+}
+
+function getVideoSessionKey() {
+  if (!isWatchPage()) return '';
+  const params = new URLSearchParams(location.search);
+  const v = params.get('v') || (location.pathname.startsWith('/live/') ? location.pathname.split('/')[2] : '');
+  const list = params.get('list') || '';
+  return `${v}::${list}`;
+}
+
+function isPlaylistContext() {
+  const params = new URLSearchParams(location.search);
+  const list = params.get('list');
+  if (list && list.trim() !== '') {
+    return true;
+  }
+  const playlistPanel = document.querySelector('ytd-playlist-panel-renderer:not([hidden]), #playlist:not([hidden])');
+  return Boolean(playlistPanel);
+}
+
+function isPlayerReady() {
+  const watch = document.querySelector('ytd-watch-grid, ytd-watch-flexy');
+  if (!watch) return false;
+  const player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+  if (!player) return false;
+  const sizeBtn = document.querySelector('.ytp-size-button');
+  const video = player.querySelector('video');
+  return Boolean(sizeBtn || video);
+}
+
+function isTheaterActive() {
+  const watch = document.querySelector('ytd-watch-grid, ytd-watch-flexy');
+  if (watch && (watch.hasAttribute('theater') || watch.hasAttribute('theater-requested_'))) {
+    return true;
+  }
+  const moviePlayer = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+  if (moviePlayer && moviePlayer.classList.contains('ytp-cinema-mode')) {
+    return true;
+  }
+  const sizeBtn = document.querySelector('.ytp-size-button');
+  if (sizeBtn) {
+    const label = (sizeBtn.getAttribute('aria-label') || sizeBtn.getAttribute('title') || sizeBtn.getAttribute('data-title-no-tooltip') || '').toLowerCase();
+    if (label.includes('default')) return true;
+    if (label.includes('theater')) return false;
+  }
+  return false;
+}
+
+function executeTheaterToggle(useFallback = false) {
+  const sizeBtn = document.querySelector('.ytp-size-button');
+  if (!useFallback && sizeBtn && typeof sizeBtn.click === 'function') {
+    sizeBtn.click();
+    return true;
+  }
+  const player = document.getElementById('movie_player') || document.querySelector('.html5-video-player') || document.body;
+  if (player) {
+    const keyOpts = {
+      key: 't',
+      code: 'KeyT',
+      keyCode: 84,
+      which: 84,
+      bubbles: true,
+      cancelable: true,
+      composed: true
+    };
+    player.dispatchEvent(new KeyboardEvent('keydown', keyOpts));
+    player.dispatchEvent(new KeyboardEvent('keyup', keyOpts));
+    if (sizeBtn && typeof sizeBtn.click === 'function') {
+      sizeBtn.click();
+    }
+    return true;
+  }
+  if (sizeBtn && typeof sizeBtn.click === 'function') {
+    sizeBtn.click();
+    return true;
+  }
+  return false;
+}
+
+function cancelTheaterSync() {
+  if (syncTimer !== null) {
+    clearInterval(syncTimer);
+    syncTimer = null;
+  }
+}
+
+function syncTheaterMode(force = false) {
+  if (!isWatchPage()) {
+    cancelTheaterSync();
+    activeSessionKey = '';
+    return;
+  }
+
+  const sessionKey = getVideoSessionKey();
+  if (!sessionKey) return;
+
+  // Don't fight manual user preference for this session
+  if (userOverriddenSessionKey === sessionKey) {
+    return;
+  }
+
+  // If already actively syncing this exact session, don't recreate interval unless forced
+  if (!force && syncTimer !== null && activeSessionKey === sessionKey) {
+    return;
+  }
+
+  cancelTheaterSync();
+  activeSessionKey = sessionKey;
+  const sessionId = ++activeSessionId;
+
+  let attempts = 0;
+  const maxAttempts = 30; // 30 * 100ms = 3.0s window
+  let lastToggleTime = 0;
+  let toggleCount = 0;
+  let settledSuccessCount = 0;
+
+  const tick = () => {
+    // Abort if session changed or navigated away
+    if (sessionId !== activeSessionId || getVideoSessionKey() !== sessionKey || !isWatchPage()) {
+      cancelTheaterSync();
+      return;
+    }
+
+    // Abort if user manually intervened during this session
+    if (userOverriddenSessionKey === sessionKey) {
+      cancelTheaterSync();
+      return;
+    }
+
+    attempts++;
+
+    // Wait until player and controls/video element are mounted
+    if (!isPlayerReady()) {
+      if (attempts >= maxAttempts) {
+        cancelTheaterSync();
+      }
+      return;
+    }
+
+    const inPlaylist = isPlaylistContext();
+    const targetTheater = !inPlaylist;
+    const currentTheater = isTheaterActive();
+
+    if (currentTheater === targetTheater) {
+      settledSuccessCount++;
+      // Require 3 consecutive checks (~300ms) of stable target state to ensure YouTube
+      // hasn't just briefly initialized before applying a stored preference
+      if (settledSuccessCount >= 3 || attempts >= maxAttempts) {
+        cancelTheaterSync();
+        return;
+      }
+    } else {
+      settledSuccessCount = 0;
+      const now = Date.now();
+      // Throttle toggle attempts by 250ms to allow DOM transitions to complete
+      if (now - lastToggleTime >= 250) {
+        lastToggleTime = now;
+        toggleCount++;
+        executeTheaterToggle(toggleCount >= 2);
+      }
+    }
+
+    if (attempts >= maxAttempts) {
+      cancelTheaterSync();
+    }
+  };
+
+  tick();
+  if (syncTimer === null && sessionId === activeSessionId && attempts < maxAttempts && settledSuccessCount < 3) {
+    syncTimer = setInterval(tick, 100);
+  }
+}
+
+// User manual override detection: never override physical user interaction
+const onUserToggle = (e) => {
+  if (!e.isTrusted) return;
+  if (e.type === 'keydown' && (e.key === 't' || e.key === 'T') && !e.ctrlKey && !e.altKey && !e.metaKey) {
+    const target = e.target;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+      return;
+    }
+    const sessionKey = getVideoSessionKey();
+    if (sessionKey) {
+      userOverriddenSessionKey = sessionKey;
+    }
+    cancelTheaterSync();
+  } else if (e.type === 'click') {
+    const target = e.target;
+    if (target && target.closest && target.closest('.ytp-size-button')) {
+      const sessionKey = getVideoSessionKey();
+      if (sessionKey) {
+        userOverriddenSessionKey = sessionKey;
+      }
+      cancelTheaterSync();
     }
   }
 };
+window.addEventListener('keydown', onUserToggle, { capture: true, passive: true });
+window.addEventListener('click', onUserToggle, { capture: true, passive: true });
 
-document.addEventListener('yt-navigate-finish', syncTheaterMode, { passive: true });
+// Lifecycle and navigation event listeners
+document.addEventListener('yt-navigate-finish', () => {
+  lastKnownHref = location.href;
+  syncTheaterMode(true);
+}, { passive: true });
+
+document.addEventListener('yt-page-data-updated', () => {
+  syncTheaterMode();
+}, { passive: true });
+
+window.addEventListener('popstate', () => {
+  lastKnownHref = location.href;
+  syncTheaterMode(true);
+}, { passive: true });
+
+// Continuous lightweight URL watcher for background auto-advance transitions & SPA navigation
+let lastKnownHref = location.href;
+setInterval(() => {
+  if (location.href !== lastKnownHref) {
+    lastKnownHref = location.href;
+    if (isWatchPage()) {
+      syncTheaterMode();
+    } else {
+      cancelTheaterSync();
+      activeSessionKey = '';
+    }
+  }
+}, 200);
 
 const init = () => {
-  syncTheaterMode();
-  setTimeout(syncTheaterMode, 1000);
+  syncTheaterMode(true);
   'requestIdleCallback' in window
     ? requestIdleCallback(inject, { timeout: 3000 })
     : window.addEventListener('load', inject, { once: true });

@@ -180,7 +180,7 @@ function showAndroidClipboardOverlay(text, mouseX, mouseY) {
             const newText = preview.innerText.trim();
             if (newText && newText !== currentRawText) {
                 currentRawText = newText;
-                navigator.clipboard.writeText(newText).catch(() => {});
+                navigator.clipboard?.writeText?.(newText)?.catch?.(() => {});
             }
 
             container.classList.remove('editing');
@@ -235,7 +235,7 @@ function showAndroidClipboardOverlay(text, mouseX, mouseY) {
 
             if (raw !== currentRawText) {
                 currentRawText = raw;
-                navigator.clipboard.writeText(raw).catch(() => {});
+                navigator.clipboard?.writeText?.(raw)?.catch?.(() => {});
             }
 
             container.classList.remove('visible', 'editing');
