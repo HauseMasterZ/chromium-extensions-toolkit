@@ -2,20 +2,23 @@
 html:not(.darkreader-ready):not(.darkreader--disabled),
 html:not(.darkreader-ready):not(.darkreader--disabled) body {
   background-color: #000000 !important;
+  background-image: none !important;
   color-scheme: dark !important;
 }
 
-html:not(.darkreader-ready):not(.darkreader--disabled) :not(img):not(video):not(canvas):not(svg):not(iframe) {
+html:not(.darkreader-ready):not(.darkreader--disabled) :not(img):not(video):not(canvas):not(svg):not(iframe):not(g-img):not([style*="background-image"]) {
   background-color: #000000 !important;
-  background-image: none !important;
   color: #e8eaed !important;
   border-color: #111111 !important;
 }
 
-/* Preserve media elements during pre-paint phase */
+/* Preserve media elements, custom image elements, and background images during pre-paint phase */
 html:not(.darkreader-ready):not(.darkreader--disabled) img,
 html:not(.darkreader-ready):not(.darkreader--disabled) video,
 html:not(.darkreader-ready):not(.darkreader--disabled) canvas,
-html:not(.darkreader-ready):not(.darkreader--disabled) svg {
+html:not(.darkreader-ready):not(.darkreader--disabled) svg,
+html:not(.darkreader-ready):not(.darkreader--disabled) g-img,
+html:not(.darkreader-ready):not(.darkreader--disabled) [style*="background-image"] {
   background-color: transparent !important;
+  mix-blend-mode: normal !important;
 }
