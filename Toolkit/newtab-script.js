@@ -98,34 +98,39 @@ let telemetryCells = null;
 function ensureTelemetryTable() {
     if (telemetryCells && hardwareEl.querySelector('table')) return;
     hardwareEl.innerHTML = `
-        <table style="margin: 6px auto 0 auto; border-collapse: collapse; font-size: 13px; line-height: 1.6; color: #ccc; text-align: left;">
+        <table style="table-layout: fixed; width: 750px; margin: 6px auto 0 auto; border-collapse: collapse; font-size: 13px; line-height: 1.6; color: #ccc; text-align: left; font-variant-numeric: tabular-nums; white-space: nowrap;">
+            <colgroup>
+                <col style="width: 220px;">
+                <col style="width: 340px;">
+                <col style="width: 190px;">
+            </colgroup>
             <thead>
                 <tr style="color: #fff;">
-                    <th style="padding: 2px 24px 4px 8px; font-weight: normal;">CPU</th>
-                    <th style="padding: 2px 24px 4px 20px; font-weight: normal; border-left: 1px solid rgba(255, 255, 255, 0.12);">GPU</th>
-                    <th style="padding: 2px 8px 4px 20px; font-weight: normal; border-left: 1px solid rgba(255, 255, 255, 0.12);">Others</th>
+                    <th style="padding: 2px 20px 4px 8px; font-weight: normal;">CPU</th>
+                    <th style="padding: 2px 20px 4px 20px; font-weight: normal; border-left: 1px solid rgba(255, 255, 255, 0.12);">GPU</th>
+                    <th style="padding: 2px 8px 4px 20px; font-weight: normal; border-left: 1px solid rgba(255, 255, 255, 0.12);">TJMax</th>
                 </tr>
             </thead>
             <tbody>
                 <tr>
-                    <td id="tc-c1" style="padding: 3px 24px 3px 8px;"></td>
-                    <td id="tc-g1" style="padding: 3px 24px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12);"></td>
-                    <td id="tc-o1" style="padding: 3px 8px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12);"></td>
+                    <td id="tc-c1" style="padding: 3px 20px 3px 8px; overflow: hidden;"></td>
+                    <td id="tc-g1" style="padding: 3px 20px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;"></td>
+                    <td id="tc-o1" style="padding: 3px 8px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;"></td>
                 </tr>
                 <tr>
-                    <td id="tc-c2" style="padding: 3px 24px 3px 8px;"></td>
-                    <td id="tc-g2" style="padding: 3px 24px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12);"></td>
-                    <td id="tc-o2" style="padding: 3px 8px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12);"></td>
+                    <td id="tc-c2" style="padding: 3px 20px 3px 8px; overflow: hidden;"></td>
+                    <td id="tc-g2" style="padding: 3px 20px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;"></td>
+                    <td id="tc-o2" style="padding: 3px 8px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;"></td>
                 </tr>
                 <tr>
-                    <td id="tc-c3" style="padding: 3px 24px 3px 8px;"></td>
-                    <td id="tc-g3" style="padding: 3px 24px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12);"></td>
-                    <td id="tc-o3" style="padding: 3px 8px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12);"></td>
+                    <td id="tc-c3" style="padding: 3px 20px 3px 8px; overflow: hidden;"></td>
+                    <td id="tc-g3" style="padding: 3px 20px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;"></td>
+                    <td id="tc-o3" style="padding: 3px 8px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;"></td>
                 </tr>
                 <tr>
-                    <td id="tc-c4" style="padding: 3px 24px 3px 8px;"></td>
-                    <td id="tc-g4" style="padding: 3px 24px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12);"></td>
-                    <td id="tc-o4" style="padding: 3px 8px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12);"></td>
+                    <td id="tc-c4" style="padding: 3px 20px 3px 8px; overflow: hidden;"></td>
+                    <td id="tc-g4" style="padding: 3px 20px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;"></td>
+                    <td id="tc-o4" style="padding: 3px 8px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;"></td>
                 </tr>
             </tbody>
         </table>
@@ -164,16 +169,16 @@ function renderTelemetry(response) {
     const isGpuThrottleActive = String(response.hwThermal || '').trim().toLowerCase() === 'active';
     const isVrmActive = String(response.vrmBrake || '').trim().toLowerCase() === 'active';
 
-    telemetryCells.c1.innerHTML = `Load: ${response.cpuLoad}% &nbsp;|&nbsp; ${response.cpuClock} MHz`;
-    telemetryCells.g1.innerHTML = `Load: ${response.gpuLoad}% &nbsp;|&nbsp; Core clk: ${response.coreClock} MHz`;
+    telemetryCells.c1.textContent = `Load: ${response.cpuLoad}% \u00A0|\u00A0 ${response.cpuClock} MHz`;
+    telemetryCells.g1.textContent = `Load: ${response.gpuLoad}% \u00A0|\u00A0 Core clk: ${response.coreClock} MHz`;
     telemetryCells.o1.textContent = `P-State: ${response.pState}`;
 
     telemetryCells.c2.textContent = response.peClock;
-    telemetryCells.g2.innerHTML = `Mem clk: ${response.memClock} MHz &nbsp;|&nbsp; Temp: ${response.gpuTemp}°C`;
+    telemetryCells.g2.textContent = `Mem clk: ${response.memClock} MHz \u00A0|\u00A0 Temp: ${response.gpuTemp}°C`;
     telemetryCells.o2.textContent = `CPU Throttle: ${cpuThrottleText}`;
 
-    telemetryCells.c3.textContent = `${response.cpuPower}W`;
-    telemetryCells.g3.textContent = `${response.gpuPower}W`;
+    telemetryCells.c3.textContent = `PKG: ${response.cpuPower}W`;
+    telemetryCells.g3.textContent = `iGPU: ${response.igpuPower}W (${response.igpuRam}) \u00A0|\u00A0 dGPU: ${response.gpuPower}W`;
     telemetryCells.o3.textContent = `GPU Throttle: ${isGpuThrottleActive ? 'Yes' : 'No'}`;
 
     telemetryCells.c4.textContent = `RAM: ${response.ramUsed}`;

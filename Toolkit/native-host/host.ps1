@@ -30,13 +30,15 @@ try {
 } catch {}
 
 # Fallback state values
-$cpuClock = 0
-$cpuPower = 0.0
-$cpuLimit = 100
-$cpuUtil  = 0
-$ramUsedGB = 0.0
-$ramPct   = 0
-$peClock  = "P: 0.0 GHz | E: 0.0 GHz"
+$cpuClock     = 0
+$cpuPower     = 0.0
+$igpuPower    = 0.0
+$igpuSharedMB = 0.0
+$cpuLimit     = 100
+$cpuUtil      = 0
+$ramUsedGB    = 0.0
+$ramPct       = 0
+$peClock      = "P: 0.0 GHz | E: 0.0 GHz"
 
 try {
     while ($true) {
@@ -45,7 +47,7 @@ try {
             exit 0
         }
 
-        # 1. Query GPU, VRAM, GPU Load, and P-State
+        # 1. Query dGPU, VRAM, GPU Load, and P-State
         $gpuRaw = & nvidia-smi --query-gpu=temperature.gpu,clocks.current.graphics,clocks.current.memory,power.draw,memory.used,memory.total,utilization.gpu,pstate,clocks_event_reasons.hw_power_brake_slowdown,clocks_event_reasons.hw_thermal_slowdown --format=csv,noheader,nounits 2>$null
         $gpuParts = if ($LASTEXITCODE -eq 0 -and $gpuRaw) { ($gpuRaw | Select-Object -First 1).Trim().Split(',') } else { @(0,0,0,0,0,0,0,'Unknown','Unknown','Unknown') }
 
@@ -55,58 +57,80 @@ try {
         $vramTotalGB = [math]::Round($vramTotalMB / 1024, 1)
         $vramPct     = if ($vramTotalMB -gt 0) { [math]::Round(($vramUsedMB / $vramTotalMB) * 100, 0) } else { 0 }
 
-        # 2. Query CPU & Memory Counters in a single batch
+        # 2. Query CPU, iGPU, & Memory Counters in a single batch
         $counters = $null
         try {
             $counters = (Get-Counter -Counter '\Processor Information(_Total)\Actual Frequency',
                                               '\Energy Meter(RAPL_Package0_PKG)\Power',
+                                              '\Energy Meter(RAPL_Package0_PP1)\Power',
                                               '\Processor Information(_Total)\% Performance Limit',
                                               '\Processor Information(_Total)\% Processor Utility',
                                               '\Processor Information(0,*)\Actual Frequency',
-                                              '\Memory\Available MBytes' -MaxSamples 1).CounterSamples
+                                              '\Memory\Available MBytes',
+                                              '\GPU Adapter Memory(*)\Shared Usage' -MaxSamples 1).CounterSamples
         } catch {}
 
         if ($counters) {
             $maxP = 0.0
             $maxE = 0.0
             $availMB = 0.0
+            $maxSharedMB = 0.0
 
-            # 3. High-speed single-pass counter extraction
+            # 3. High-speed single-pass counter extraction with hierarchical instance branching
             foreach ($s in $counters) {
                 $inst = $s.InstanceName
                 $path = $s.Path
                 $val  = $s.CookedValue
 
-                if ($inst -eq '_total') {
-                    if ($path.IndexOf('actual frequency') -ge 0) { $cpuClock = [math]::Round($val, 0) }
-                    elseif ($path.IndexOf('% processor utility') -ge 0) { $cpuUtil = [math]::Min(100, [math]::Round($val, 0)) }
-                    elseif ($path.IndexOf('% performance limit') -ge 0) { $cpuLimit = [math]::Round($val, 0) }
-                }
-                elseif ($path.IndexOf('rapl_package0_pkg') -ge 0) {
-                    $cpuPower = [math]::Round($val / 1000, 1)
-                }
-                elseif ($path.IndexOf('\memory\available') -ge 0) {
-                    $availMB = $val
-                }
-                elseif ($inst.StartsWith('0,')) {
-                    $sub = $inst.Substring(2)
-                    if ($sub -ne '_total') {
-                        $thId = [int]$sub
-                        if ($thId -lt $numPThreads) {
-                            if ($val -gt $maxP) { $maxP = $val }
-                        } else {
-                            if ($val -gt $maxE) { $maxE = $val }
+                if ($inst) {
+                    if ($inst.StartsWith('0,')) {
+                        $sub = $inst.Substring(2)
+                        if ($sub -ne '_total') {
+                            $thId = [int]$sub
+                            if ($thId -lt $numPThreads) {
+                                if ($val -gt $maxP) { $maxP = $val }
+                            } else {
+                                if ($val -gt $maxE) { $maxE = $val }
+                            }
                         }
+                    }
+                    elseif ($inst -eq '_total') {
+                        if ($path.IndexOf('actual frequency') -ge 0) { $cpuClock = [math]::Round($val, 0) }
+                        elseif ($path.IndexOf('% processor utility') -ge 0) { $cpuUtil = [math]::Min(100, [math]::Round($val, 0)) }
+                        elseif ($path.IndexOf('% performance limit') -ge 0) { $cpuLimit = [math]::Round($val, 0) }
+                    }
+                    elseif ($inst -eq 'rapl_package0_pkg') {
+                        $cpuPower = [math]::Round($val / 1000, 1)
+                    }
+                    elseif ($inst -eq 'rapl_package0_pp1') {
+                        $igpuPower = [math]::Round($val / 1000, 1)
+                    }
+                    elseif ($path.IndexOf('shared usage') -ge 0) {
+                        $mb = [math]::Round($val / 1MB, 0)
+                        if ($mb -gt $maxSharedMB) { $maxSharedMB = $mb }
+                    }
+                } else {
+                    if ($path.IndexOf('rapl_package0_pkg') -ge 0) {
+                        $cpuPower = [math]::Round($val / 1000, 1)
+                    }
+                    elseif ($path.IndexOf('rapl_package0_pp1') -ge 0) {
+                        $igpuPower = [math]::Round($val / 1000, 1)
+                    }
+                    elseif ($path.IndexOf('\memory\available') -ge 0) {
+                        $availMB = $val
                     }
                 }
             }
 
+            $igpuSharedMB = $maxSharedMB
             $ramUsedGB = [math]::Round($totalRamGB - ($availMB / 1024), 1)
             $ramPct    = if ($totalRamGB -gt 0) { [math]::Round(($ramUsedGB / $totalRamGB) * 100, 0) } else { 0 }
             $pGhzStr   = "{0:N1}" -f ($maxP / 1000)
             $eGhzStr   = "{0:N1}" -f ($maxE / 1000)
             $peClock   = if ($maxE -gt 0) { "P: $pGhzStr GHz | E: $eGhzStr GHz" } else { "P: $pGhzStr GHz" }
         }
+
+        $igpuRamStr = if ($igpuSharedMB -ge 1024) { "{0:N1} GB" -f ($igpuSharedMB / 1024) } else { "$igpuSharedMB MB" }
 
         # 4. Construct Transposed Matrix Payload
         $payload = [PSCustomObject]@{
@@ -115,6 +139,8 @@ try {
             cpuLoad   = $cpuUtil
             peClock   = $peClock
             cpuPower  = $cpuPower
+            igpuPower = $igpuPower
+            igpuRam   = $igpuRamStr
             cpuLimit  = $cpuLimit
             ramUsed   = "$ramUsedGB / $totalRamGB GB ($ramPct%)"
             gpuTemp   = [int]$gpuParts[0].Trim()
