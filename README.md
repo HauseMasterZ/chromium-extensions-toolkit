@@ -22,3 +22,15 @@ Into single bundle
 - Extract zip to any folder
 - Enable Developer mode in extension setting at ```chrome://extensions```
 - Select load Unpacked Extension and select the extracted folder.
+
+ # Native Host Registration Commands
+
+Execute the following commands in PowerShell or Command Prompt to register the native messaging host:
+
+#### For Chromium / Helium:
+
+reg add "HKCU\Software\Chromium\NativeMessagingHosts\com.gpu.telemetry" /ve /t REG_SZ /d "C:\Users\HauseMaster\Documents\Code\CToolkit\Toolkit\native-host\com.gpu.telemetry.json" /f
+
+#### For Google Chrome:
+
+reg add "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.gpu.telemetry" /ve /t REG_SZ /d "C:\Users\HauseMaster\Documents\Code\CToolkit\Toolkit\native-host\com.gpu.telemetry.json" /f

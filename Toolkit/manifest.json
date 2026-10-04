@@ -2,6 +2,7 @@
   "manifest_version": 3,
   "name": "Unified Toolkit",
   "version": "2.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvbix44Bc2Zrt6iIUJgbMq2oStI6zwI/ASu99RaMjh1TG2tey2cn67GS3XvnZSi24Z+jOUlaMD4k8PFii6XU0uUgDY2mwbmT0iRxREHGbMObhEzV2bpWkQFe/eswHraDNu+0/AjpcHbTtTbXg6aU/MnkFDkMuLTMKl89L0NbPUtwKpbfJP/sOQPdU8n7mBGdhcdh2ElruKDj/kncbdAeEwhIkwn5V59Cgi0a9EE1aFEHxTZZUySiKbksnMqtXgSV0JZrtzAamm/f3HNQ6ycWGgMoepp16yLprXkjFupnah5hV2Om6mSf2fiWu7VOU0n+6FBYzWwUrzadB3JVbV5ojjQIDAQAB",
   "description": "Auto Copy, Paste & Go, New Tab, YT Music Audio, YT Float Search, WhatsApp Web Tweaks, and On-Demand Dark Mode.",
   "permissions": [
     "tabs",
@@ -13,7 +14,8 @@
     "sessions",
     "alarms",
     "offscreen",
-    "contextMenus"
+    "contextMenus",
+    "nativeMessaging"
   ],
   "host_permissions": [
     "<all_urls>"

@@ -88,12 +88,187 @@ async function fetchWeather() {
 }
 fetchWeather();
 
+// Hardware Telemetry & Info-Panel 3-State Cycle (Streaming 0.5Hz)
+const hardwareEl = document.getElementById('hardware');
+let infoState = 1; // 1: Weather (Default), 2: Empty / Hidden, 3: Sensors
+let telemetryPort = null;
+
+let telemetryCells = null;
+
+function ensureTelemetryTable() {
+    if (telemetryCells && hardwareEl.querySelector('table')) return;
+    hardwareEl.innerHTML = `
+        <table style="margin: 6px auto 0 auto; border-collapse: collapse; font-size: 13px; line-height: 1.6; color: #ccc; text-align: left;">
+            <thead>
+                <tr style="color: #fff;">
+                    <th style="padding: 2px 24px 4px 8px; font-weight: normal;">CPU</th>
+                    <th style="padding: 2px 24px 4px 20px; font-weight: normal; border-left: 1px solid rgba(255, 255, 255, 0.12);">GPU</th>
+                    <th style="padding: 2px 8px 4px 20px; font-weight: normal; border-left: 1px solid rgba(255, 255, 255, 0.12);">Others</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td id="tc-c1" style="padding: 3px 24px 3px 8px;"></td>
+                    <td id="tc-g1" style="padding: 3px 24px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12);"></td>
+                    <td id="tc-o1" style="padding: 3px 8px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12);"></td>
+                </tr>
+                <tr>
+                    <td id="tc-c2" style="padding: 3px 24px 3px 8px;"></td>
+                    <td id="tc-g2" style="padding: 3px 24px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12);"></td>
+                    <td id="tc-o2" style="padding: 3px 8px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12);"></td>
+                </tr>
+                <tr>
+                    <td id="tc-c3" style="padding: 3px 24px 3px 8px;"></td>
+                    <td id="tc-g3" style="padding: 3px 24px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12);"></td>
+                    <td id="tc-o3" style="padding: 3px 8px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12);"></td>
+                </tr>
+                <tr>
+                    <td id="tc-c4" style="padding: 3px 24px 3px 8px;"></td>
+                    <td id="tc-g4" style="padding: 3px 24px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12);"></td>
+                    <td id="tc-o4" style="padding: 3px 8px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12);"></td>
+                </tr>
+            </tbody>
+        </table>
+    `;
+    telemetryCells = {
+        c1: document.getElementById('tc-c1'),
+        g1: document.getElementById('tc-g1'),
+        o1: document.getElementById('tc-o1'),
+        c2: document.getElementById('tc-c2'),
+        g2: document.getElementById('tc-g2'),
+        o2: document.getElementById('tc-o2'),
+        c3: document.getElementById('tc-c3'),
+        g3: document.getElementById('tc-g3'),
+        o3: document.getElementById('tc-o3'),
+        c4: document.getElementById('tc-c4'),
+        g4: document.getElementById('tc-g4'),
+        o4: document.getElementById('tc-o4')
+    };
+}
+
+function renderTelemetry(response) {
+    if (!hardwareEl || infoState !== 3) return;
+
+    if (!response || response.error) {
+        const msg = (response && response.message) ? response.message : 'Sensor Read Failed';
+        hardwareEl.textContent = `Host Offline (${msg})`;
+        telemetryCells = null;
+        return;
+    }
+
+    ensureTelemetryTable();
+    if (!telemetryCells) return;
+
+    const cpuLimitVal = Number(response.cpuLimit);
+    const cpuThrottleText = cpuLimitVal < 100 ? `Yes (${cpuLimitVal}%)` : `No (${cpuLimitVal}%)`;
+    const isGpuThrottleActive = String(response.hwThermal || '').trim().toLowerCase() === 'active';
+    const isVrmActive = String(response.vrmBrake || '').trim().toLowerCase() === 'active';
+
+    telemetryCells.c1.innerHTML = `Load: ${response.cpuLoad}% &nbsp;|&nbsp; ${response.cpuClock} MHz`;
+    telemetryCells.g1.innerHTML = `Load: ${response.gpuLoad}% &nbsp;|&nbsp; Core clk: ${response.coreClock} MHz`;
+    telemetryCells.o1.textContent = `P-State: ${response.pState}`;
+
+    telemetryCells.c2.textContent = response.peClock;
+    telemetryCells.g2.innerHTML = `Mem clk: ${response.memClock} MHz &nbsp;|&nbsp; Temp: ${response.gpuTemp}°C`;
+    telemetryCells.o2.textContent = `CPU Throttle: ${cpuThrottleText}`;
+
+    telemetryCells.c3.textContent = `${response.cpuPower}W`;
+    telemetryCells.g3.textContent = `${response.gpuPower}W`;
+    telemetryCells.o3.textContent = `GPU Throttle: ${isGpuThrottleActive ? 'Yes' : 'No'}`;
+
+    telemetryCells.c4.textContent = `RAM: ${response.ramUsed}`;
+    telemetryCells.g4.textContent = `VRAM: ${response.vramUsed}`;
+    telemetryCells.o4.textContent = `VRM Throttle: ${isVrmActive ? 'Yes' : 'No'}`;
+}
+
+function startTelemetryStream() {
+    if (telemetryPort || document.hidden) return;
+    if (hardwareEl && !hardwareEl.querySelector('table')) {
+        hardwareEl.textContent = 'Connecting sensors...';
+    }
+
+    try {
+        telemetryPort = chrome.runtime.connect({ name: 'telemetry' });
+
+        telemetryPort.onMessage.addListener((data) => {
+            renderTelemetry(data);
+        });
+
+        telemetryPort.onDisconnect.addListener(() => {
+            telemetryPort = null;
+            if (infoState === 3 && !document.hidden) {
+                // Auto-reconnect after 1 second if service worker was recycled by Chrome
+                setTimeout(() => {
+                    if (infoState === 3 && !document.hidden && !telemetryPort) {
+                        startTelemetryStream();
+                    }
+                }, 1000);
+            }
+        });
+    } catch (e) {
+        telemetryPort = null;
+        if (hardwareEl) hardwareEl.textContent = 'Connection Error';
+    }
+}
+
+function stopTelemetryStream() {
+    if (telemetryPort) {
+        try {
+            telemetryPort.disconnect();
+        } catch (e) {}
+        telemetryPort = null;
+    }
+}
+
+function setInfoState(state) {
+    infoState = state;
+    if (infoState === 1 || infoState === 2) {
+        telemetryCells = null;
+    }
+    if (infoState === 1) {
+        // State 1: Weather
+        stopTelemetryStream();
+        if (weatherEl) {
+            weatherEl.style.display = 'block';
+            weatherEl.style.visibility = 'visible';
+        }
+        if (hardwareEl) hardwareEl.style.display = 'none';
+    } else if (infoState === 2) {
+        // State 2: Empty (Show Nothing)
+        stopTelemetryStream();
+        if (weatherEl) weatherEl.style.display = 'none';
+        if (hardwareEl) hardwareEl.style.display = 'none';
+    } else if (infoState === 3) {
+        // State 3: Sensors
+        if (weatherEl) weatherEl.style.display = 'none';
+        if (hardwareEl) {
+            hardwareEl.style.display = 'block';
+            startTelemetryStream();
+        }
+    }
+}
+
 const logoEl = document.querySelector('.logo');
-if (logoEl && weatherEl) {
+if (logoEl) {
     logoEl.addEventListener('click', () => {
-        weatherEl.style.visibility = weatherEl.style.visibility === 'hidden' ? 'visible' : 'hidden';
+        const nextState = (infoState % 3) + 1;
+        setInfoState(nextState);
     });
 }
+
+// Pause/disconnect telemetry when tab is hidden or minimized; resume when visible
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        stopTelemetryStream();
+    } else if (infoState === 3 && !telemetryPort) {
+        startTelemetryStream();
+    }
+});
+
+// Clean up OS pipe on tab close or navigation
+window.addEventListener('beforeunload', () => {
+    stopTelemetryStream();
+});
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.action === 'read_clipboard') {

@@ -1187,3 +1187,85 @@ function rehydrateDarkScripts() {
     if (res?.darkmode_domains) updateRegisteredDarkModeScript(res.darkmode_domains);
   });
 }
+
+// ============================================================================
+// Hardware Telemetry Native Host Multiplexer (Singleton)
+// ============================================================================
+let nativeTelemetryPort = null;
+const telemetryClients = new Set();
+let lastTelemetryData = null;
+
+chrome.runtime.onConnect.addListener((clientPort) => {
+  if (clientPort.name !== 'telemetry') return;
+
+  telemetryClients.add(clientPort);
+
+  // Instantly send cached telemetry so new tabs render without delay
+  if (lastTelemetryData) {
+    try {
+      clientPort.postMessage(lastTelemetryData);
+    } catch (e) {}
+  }
+
+  // Start single native host instance if not already running
+  if (!nativeTelemetryPort) {
+    startNativeTelemetry();
+  }
+
+  clientPort.onDisconnect.addListener(() => {
+    telemetryClients.delete(clientPort);
+    // If no tabs are viewing telemetry, terminate the PowerShell process immediately
+    if (telemetryClients.size === 0) {
+      stopNativeTelemetry();
+    }
+  });
+});
+
+function startNativeTelemetry() {
+  if (nativeTelemetryPort) return;
+
+  try {
+    nativeTelemetryPort = chrome.runtime.connectNative('com.gpu.telemetry');
+
+    nativeTelemetryPort.onMessage.addListener((data) => {
+      lastTelemetryData = data;
+      for (const client of Array.from(telemetryClients)) {
+        try {
+          client.postMessage(data);
+        } catch (e) {
+          telemetryClients.delete(client);
+        }
+      }
+    });
+
+    nativeTelemetryPort.onDisconnect.addListener(() => {
+      const err = chrome.runtime.lastError ? chrome.runtime.lastError.message : 'Host Disconnected';
+      nativeTelemetryPort = null;
+      lastTelemetryData = null;
+      for (const client of Array.from(telemetryClients)) {
+        try {
+          client.postMessage({ error: true, message: err });
+        } catch (e) {
+          telemetryClients.delete(client);
+        }
+      }
+    });
+  } catch (e) {
+    nativeTelemetryPort = null;
+    for (const client of Array.from(telemetryClients)) {
+      try {
+        client.postMessage({ error: true, message: e.message || 'Host Launch Failed' });
+      } catch (err) {}
+    }
+  }
+}
+
+function stopNativeTelemetry() {
+  if (nativeTelemetryPort) {
+    try {
+      nativeTelemetryPort.disconnect();
+    } catch (e) {}
+    nativeTelemetryPort = null;
+    lastTelemetryData = null;
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "com.gpu.telemetry",
+  "description": "GPU Telemetry Native Messaging Host for Unified Toolkit",
+  "path": "C:\\Users\\HauseMaster\\Documents\\Code\\CToolkit\\Toolkit\\native-host\\host.bat",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://oacbdihdgnkkahlefifoknnfpeciidnj/"
+  ]
+}
