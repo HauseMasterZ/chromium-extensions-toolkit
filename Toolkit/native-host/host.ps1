@@ -40,6 +40,12 @@ $ramUsedGB    = 0.0
 $ramPct       = 0
 $peClock      = "P: 0.0 GHz | E: 0.0 GHz"
 
+# Lumped-Parameter Thermal Model State Variables (Persistent across sampling ticks)
+$sinkTemp    = 42.0
+$cpuEstTemp  = 46.0
+$prevCpuP    = 0.0
+$isFirstTick = $true
+
 try {
     while ($true) {
         # Instant watchdog check via native kernel handle (locks PID, zero process-table scanning)
@@ -132,13 +138,67 @@ try {
 
         $igpuRamStr = if ($igpuSharedMB -ge 1024) { "{0:N1} GB" -f ($igpuSharedMB / 1024) } else { "$igpuSharedMB MB" }
 
-        # 4. Construct Transposed Matrix Payload
+        # 4. Pure State-Space Continuous Thermal Observer (<0.02ms scalar arithmetic)
+        $rawGpuTemp = [double]$gpuParts[0].Trim()
+        $rawGpuWatt = [double]$gpuParts[3].Trim()
+
+        # 1. Total chassis thermal dissipation
+        $pTotal = $cpuPower + $rawGpuWatt
+
+        # 2. Continuous Convective Cooling Curve (Dell EC Fan RPM Power-Law)
+        $rConv = 0.22 + (0.58 / (1.0 + [math]::Pow(($pTotal / 46.0), 1.4)))
+
+        # 3. Continuous Shared Vapor Chamber Anchor with Asymmetric Decoupling
+        $sinkConv   = 24.0 + ($pTotal * $rConv)
+        $sinkGpu    = if ($rawGpuTemp -ge 28.0) { [math]::Max(24.0, $rawGpuTemp - ($rawGpuWatt * 0.14) + ($cpuPower * 0.06)) } else { $sinkConv }
+        $sinkTarget = if ($rawGpuTemp -ge 28.0) { $sinkGpu } else { $sinkConv }
+
+        if ($isFirstTick) {
+            $sinkTemp = $sinkTarget
+        } else {
+            $sinkTemp += 0.080 * ($sinkTarget - $sinkTemp)
+        }
+
+        # 4. Continuous Core Flux Density (Alder Lake localized turbo hotspot)
+        $boostFactor = [math]::Max(0.0, [math]::Min(1.0, (($maxP - 3200.0) / 1500.0)))
+        $utilFactor  = 1.0 - [math]::Max(0.0, [math]::Min(1.0, ($cpuUtil / 100.0)))
+        $rDie        = 0.32 + (0.14 * $boostFactor * $utilFactor)
+
+        # Die junction sits continuously on the instantaneous physical heatsink temperature
+        $cpuTarget = $sinkTemp + ($cpuPower * $rDie)
+
+        # 5. Hardware PROCHOT Ground Truth Floor
+        if ($cpuLimit -lt 100 -and $cpuPower -gt 35.0) {
+            $prochotFloor = 98.0 + [math]::Min(2.0, (100.0 - $cpuLimit) * 0.1)
+            if ($cpuTarget -lt $prochotFloor) { $cpuTarget = $prochotFloor }
+        }
+
+        # 6. Continuous Asymmetric Thermal Inertia (dt = 2.0s: tau_rise=1s, tau_cool=5s)
+        # Dynamic alpha_cool during high-to-low power step functions accounts for lingering silicon enthalpy
+        $dP = if ($isFirstTick) { 0.0 } else { $cpuPower - $prevCpuP }
+        $prevCpuP = $cpuPower
+        $alphaCool = if ($dP -lt -5.0) { [math]::Max(0.12, 0.33 + ($dP * 0.012)) } else { 0.33 }
+
+        if ($isFirstTick) {
+            $cpuEstTemp  = $cpuTarget
+            $isFirstTick = $false
+        } else {
+            $alphaDie = if ($cpuTarget -gt $cpuEstTemp) { 0.86 } else { $alphaCool }
+            $cpuEstTemp += $alphaDie * ($cpuTarget - $cpuEstTemp)
+        }
+
+        # 7. Physical boundary guards
+        $cpuEstTemp = [math]::Max([math]::Max(24.0, $sinkTemp), [math]::Min(101.0, $cpuEstTemp))
+        $cpuTempInt = [int][math]::Round($cpuEstTemp, 0)
+
+        # 5. Construct Transposed Matrix Payload
         $payload = [PSCustomObject]@{
             timestamp = (Get-Date).ToString("HH:mm:ss")
             cpuClock  = $cpuClock
             cpuLoad   = $cpuUtil
             peClock   = $peClock
             cpuPower  = $cpuPower
+            cpuTemp   = $cpuTempInt
             igpuPower = $igpuPower
             igpuRam   = $igpuRamStr
             cpuLimit  = $cpuLimit

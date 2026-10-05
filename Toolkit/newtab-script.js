@@ -177,7 +177,7 @@ function renderTelemetry(response) {
     telemetryCells.g2.textContent = `Mem clk: ${response.memClock} MHz \u00A0|\u00A0 Temp: ${response.gpuTemp}°C`;
     telemetryCells.o2.textContent = `CPU Throttle: ${cpuThrottleText}`;
 
-    telemetryCells.c3.textContent = `PKG: ${response.cpuPower}W`;
+    telemetryCells.c3.textContent = `PKG: ${response.cpuPower}W \u00A0|\u00A0 Temp: ${response.cpuTemp}°C`;
     telemetryCells.g3.textContent = `iGPU: ${response.igpuPower}W (${response.igpuRam}) \u00A0|\u00A0 dGPU: ${response.gpuPower}W`;
     telemetryCells.o3.textContent = `GPU Throttle: ${isGpuThrottleActive ? 'Yes' : 'No'}`;
 
