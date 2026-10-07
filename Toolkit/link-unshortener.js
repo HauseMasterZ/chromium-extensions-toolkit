@@ -44,7 +44,8 @@ const shortTlds = /\.(gg|ly|to|co|is|gd|cc|link|me|click|fi|ms|it|st|app|bio|us|
 
 const excludedAuthHosts = new Set([
     'accounts.google.com', 'myaccount.google.com', 'support.google.com', 'mail.google.com',
-    'login.microsoftonline.com', 'account.microsoft.com', 'appleid.apple.com'
+    'chromewebstore.google.com', 'chrome.google.com', 'clients2.google.com',
+    'microsoftedge.microsoft.com', 'login.microsoftonline.com', 'account.microsoft.com', 'appleid.apple.com'
 ]);
 
 function getBaseDomain(h) {
@@ -62,8 +63,11 @@ function isShortOrGatewayLink(rawUrl) {
         const host = url.hostname.toLowerCase().replace(/^www\./, '');
         const pathname = url.pathname;
 
-        // Never touch authentication, account switcher, or login service domains
+        // Never touch authentication, account switcher, web store, or login service domains
         if (excludedAuthHosts.has(host)) return false;
+        if (host.endsWith('.google.com') && host !== 'goo.gl') return false;
+        if (host.endsWith('.microsoft.com') && host !== 'msft.it') return false;
+        if (host.endsWith('.apple.com') && host !== 'apple.co') return false;
 
         // Never treat same-domain or same base-domain internal links as shorteners (e.g. mail.google.com -> accounts.google.com)
         const currentHost = window.location.hostname.toLowerCase().replace(/^www\./, '');
@@ -92,10 +96,9 @@ function isShortOrGatewayLink(rawUrl) {
             return true;
         }
 
-        // Tier 3: External cross-origin paths for unshortening, vanity links, and tracking stripping (e.g. search result links)
-        if ((pathname && pathname.length > 1 && pathname !== '/' && !pathname.includes('//')) ||
-            (url.search && url.search.length > 1) ||
-            currentHost.includes('google.') || currentHost.includes('bing.') || currentHost.includes('duckduckgo.')) {
+        // Search engine result redirection queries (e.g. google.com/url?q=..., bing.com redirection)
+        if ((currentHost.includes('google.') || currentHost.includes('bing.') || currentHost.includes('duckduckgo.')) &&
+            (url.search && (url.searchParams.has('url') || url.searchParams.has('q') || url.searchParams.has('rwt')))) {
             return true;
         }
     } catch {}

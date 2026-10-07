@@ -5,6 +5,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const btnEditShortcuts = document.getElementById('btnEditShortcuts');
     const inputSeekSeconds = document.getElementById('inputSeekSeconds');
     const toggleCustomSeek = document.getElementById('toggleCustomSeek');
+    const rowDefaultZoom = document.getElementById('rowDefaultZoom');
+    const inputDefaultZoom = document.getElementById('inputDefaultZoom');
+    const toggleDefaultZoom = document.getElementById('toggleDefaultZoom');
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const isInjectable = tab?.url && !/^(chrome|edge|devtools|about):|chrome\.google\.com\/webstore/.test(tab.url);
@@ -95,6 +98,30 @@ document.addEventListener('DOMContentLoaded', async () => {
         inputSeekSeconds.addEventListener('click', (e) => e.stopPropagation());
     }
 
+    // Default Zoom: % Controller (Ephemeral internal display auto-zoom)
+    const updateZoomInputState = () => {
+        if (toggleDefaultZoom && inputDefaultZoom) {
+            inputDefaultZoom.disabled = !toggleDefaultZoom.checked;
+            const box = inputDefaultZoom.closest('.seek-input-box');
+            if (box) box.style.opacity = toggleDefaultZoom.checked ? '1' : '0.4';
+        }
+    };
+
+    if (rowDefaultZoom && toggleDefaultZoom && inputDefaultZoom) {
+        rowDefaultZoom.addEventListener('click', (e) => {
+            if (e.target.closest('.seek-input-box') || e.target.closest('.switch')) return;
+            toggleDefaultZoom.checked = !toggleDefaultZoom.checked;
+            toggleDefaultZoom.dispatchEvent(new Event('change'));
+        });
+
+        inputDefaultZoom.addEventListener('click', (e) => e.stopPropagation());
+        inputDefaultZoom.addEventListener('change', () => {
+            const val = Math.max(100, Math.min(200, parseInt(inputDefaultZoom.value, 10) || 120));
+            inputDefaultZoom.value = val;
+            chrome.storage.local.set({ defaultZoomLevel: val });
+        });
+    }
+
     // Context-Aware UI: Grey out irrelevant toggles
     const url = tab?.url || '';
     if (!url.includes('youtube.com') || url.includes('music.youtube.com')) {
@@ -114,7 +141,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         toggleYtMusic: 'featureYtMusic',
         toggleNewTabPage: 'featureNewTabPage',
         toggleWhatsapp: 'featureWhatsapp',
-        togglePasteGo: 'featurePasteGo'
+        togglePasteGo: 'featurePasteGo',
+        toggleDefaultZoom: 'featureDefaultZoom'
     };
 
     const scriptActionMap = {
@@ -129,10 +157,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         featureYtMusic: true,
         featureNewTabPage: true,
         featureWhatsapp: true,
-        featurePasteGo: true
+        featurePasteGo: true,
+        featureDefaultZoom: true,
+        defaultZoomLevel: 120
     };
 
     chrome.storage.local.get(defaultSettings, (res) => {
+        if (inputDefaultZoom) {
+            inputDefaultZoom.value = res.defaultZoomLevel || 120;
+        }
         for (const [id, key] of Object.entries(toggles)) {
             const el = document.getElementById(id);
             if (!el) continue;
@@ -140,11 +173,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             el.addEventListener('change', (e) => {
                 const enabled = e.target.checked;
                 chrome.storage.local.set({ [key]: enabled });
+                if (id === 'toggleDefaultZoom') {
+                    updateZoomInputState();
+                }
                 if (scriptActionMap[key]) {
                     chrome.runtime.sendMessage({ action: scriptActionMap[key], enabled });
                 }
             });
         }
+        updateZoomInputState();
     });
 
     btnEditShortcuts?.addEventListener('click', () => {

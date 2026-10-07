@@ -1,4 +1,5 @@
 importScripts('clearurls-engine.js');
+importScripts('display-zoom.js');
 
 let clearUrlsData = null;
 let shortenersSet = new Set();
@@ -991,11 +992,31 @@ function unwrapGatewayUrl(rawUrl) {
   return null;
 }
 
+const forbiddenFetchHosts = new Set([
+  'chromewebstore.google.com',
+  'chrome.google.com',
+  'clients2.google.com',
+  'microsoftedge.microsoft.com',
+  'accounts.google.com',
+  'myaccount.google.com',
+  'support.google.com',
+  'mail.google.com',
+  'login.microsoftonline.com',
+  'account.microsoft.com',
+  'appleid.apple.com'
+]);
+
 function isShortenerUrl(urlStr) {
   try {
     const url = new URL(urlStr);
     const host = url.hostname.toLowerCase().replace(/^www\./, '');
     const pathname = url.pathname;
+
+    // Never fetch forbidden / internal / store / auth domains
+    if (forbiddenFetchHosts.has(host)) return false;
+    if (host.endsWith('.google.com') && host !== 'goo.gl') return false;
+    if (host.endsWith('.microsoft.com') && host !== 'msft.it') return false;
+    if (host.endsWith('.apple.com') && host !== 'apple.co') return false;
 
     if (shortenersSet.has(host)) return true;
 
@@ -1029,55 +1050,56 @@ async function resolveAndCleanShortUrl(rawUrl) {
 
     let finalUrl = currentUrl;
 
-    const requestHeaders = {
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'cross-site'
-    };
+    // Step 2: Only perform network resolution if the URL is an actual shortener (skips standard URLs, Web Store, etc.)
+    if (isShortenerUrl(currentUrl)) {
+      const requestHeaders = {
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'cross-site'
+      };
 
-    // Step 2: Resolve via fast HTTP HEAD (with GET fallback and stream abortion)
-    const headController = new AbortController();
-    const headTimeoutId = setTimeout(() => headController.abort(), 2000);
+      const headController = new AbortController();
+      const headTimeoutId = setTimeout(() => headController.abort(), 2000);
 
-    try {
-      let res = await fetch(currentUrl, {
-        method: 'HEAD',
-        redirect: 'follow',
-        headers: requestHeaders,
-        signal: headController.signal
-      });
-      clearTimeout(headTimeoutId);
-      
-      if (res.url && res.url !== currentUrl) {
-        finalUrl = res.url;
-      } else if (!res.ok && res.status !== 404) {
-        const getController = new AbortController();
-        const getTimeoutId = setTimeout(() => getController.abort(), 2000);
-        res = await fetch(currentUrl, {
-          method: 'GET',
+      try {
+        let res = await fetch(currentUrl, {
+          method: 'HEAD',
           redirect: 'follow',
           headers: requestHeaders,
-          signal: getController.signal
+          signal: headController.signal
         });
-        clearTimeout(getTimeoutId);
-        finalUrl = res.url || currentUrl;
-        // Immediately cancel the response stream to save memory & bandwidth
-        try { if (res.body?.cancel) res.body.cancel(); } catch {}
-      } else {
-        finalUrl = res.url || currentUrl;
+        clearTimeout(headTimeoutId);
+        
+        if (res.url && res.url !== currentUrl) {
+          finalUrl = res.url;
+        } else if (!res.ok && res.status !== 404) {
+          const getController = new AbortController();
+          const getTimeoutId = setTimeout(() => getController.abort(), 2000);
+          res = await fetch(currentUrl, {
+            method: 'GET',
+            redirect: 'follow',
+            headers: requestHeaders,
+            signal: getController.signal
+          });
+          clearTimeout(getTimeoutId);
+          finalUrl = res.url || currentUrl;
+          try { if (res.body?.cancel) res.body.cancel(); } catch {}
+        } else {
+          finalUrl = res.url || currentUrl;
+        }
+      } catch {
+        clearTimeout(headTimeoutId);
+        finalUrl = currentUrl;
       }
-    } catch {
-      clearTimeout(headTimeoutId);
-      finalUrl = currentUrl;
+
+      // Check for nested inner gateway
+      const secondUnwrap = unwrapGatewayUrl(finalUrl);
+      if (secondUnwrap) finalUrl = secondUnwrap;
     }
 
-    // Step 3: Check for nested inner gateway
-    const secondUnwrap = unwrapGatewayUrl(finalUrl);
-    if (secondUnwrap) finalUrl = secondUnwrap;
-
-    // Step 4: Sanitize through ClearURLs engine
+    // Step 3: Sanitize through ClearURLs engine
     const cleanUrl = typeof cleanUrlWithClearUrls === 'function' ? cleanUrlWithClearUrls(finalUrl, clearUrlsData) : finalUrl;
 
     if (unshortenCache.size > 1000) unshortenCache.delete(unshortenCache.keys().next().value);

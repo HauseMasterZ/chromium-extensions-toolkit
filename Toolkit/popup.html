@@ -224,7 +224,7 @@
         }
 
         .seek-input-box input {
-            width: 28px;
+            width: 30px;
             background: transparent;
             border: none;
             outline: none;
@@ -334,6 +334,20 @@
                     </div>
                     <label class="switch" for="toggleCustomSeek">
                         <input type="checkbox" id="toggleCustomSeek">
+                        <span class="slider-round"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="toggle-row" id="rowDefaultZoom">
+                <span>Default Zoom: %</span>
+                <div class="toggle-controls-wrap">
+                    <div class="seek-input-box" title="Default zoom percentage on internal display">
+                        <input type="number" id="inputDefaultZoom" min="100" max="200" step="5" value="120">
+                        <span class="seek-unit">%</span>
+                    </div>
+                    <label class="switch" for="toggleDefaultZoom">
+                        <input type="checkbox" id="toggleDefaultZoom" checked>
                         <span class="slider-round"></span>
                     </label>
                 </div>
