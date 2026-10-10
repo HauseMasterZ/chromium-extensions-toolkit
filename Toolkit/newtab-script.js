@@ -100,9 +100,9 @@ function ensureTelemetryTable() {
     hardwareEl.innerHTML = `
         <table style="table-layout: fixed; width: 750px; margin: 6px auto 0 auto; border-collapse: collapse; font-size: 13px; line-height: 1.6; color: #ccc; text-align: left; font-variant-numeric: tabular-nums; white-space: nowrap;">
             <colgroup>
+                <col style="width: 215px;">
+                <col style="width: 315px;">
                 <col style="width: 220px;">
-                <col style="width: 340px;">
-                <col style="width: 190px;">
             </colgroup>
             <thead>
                 <tr style="color: #fff;">
@@ -168,22 +168,30 @@ function renderTelemetry(response) {
     const cpuThrottleText = cpuLimitVal < 100 ? `Yes (${cpuLimitVal}%)` : `No (${cpuLimitVal}%)`;
     const isGpuThrottleActive = String(response.hwThermal || '').trim().toLowerCase() === 'active';
     const isVrmActive = String(response.vrmBrake || '').trim().toLowerCase() === 'active';
+    const gpuThrottleText = isGpuThrottleActive ? 'Yes' : 'No';
+    const vrmThrottleText = isVrmActive ? 'Yes' : 'No';
 
-    telemetryCells.c1.textContent = `Load: ${response.cpuLoad}% \u00A0|\u00A0 ${response.cpuClock} MHz`;
-    telemetryCells.g1.textContent = `Load: ${response.gpuLoad}% \u00A0|\u00A0 Core clk: ${response.coreClock} MHz`;
-    telemetryCells.o1.textContent = `P-State: ${response.pState}`;
+    const setCell = (cell, text) => {
+        if (cell && cell.textContent !== text) {
+            cell.textContent = text;
+        }
+    };
 
-    telemetryCells.c2.textContent = response.peClock;
-    telemetryCells.g2.textContent = `Mem clk: ${response.memClock} MHz \u00A0|\u00A0 Temp: ${response.gpuTemp}°C`;
-    telemetryCells.o2.textContent = `CPU Throttle: ${cpuThrottleText}`;
+    setCell(telemetryCells.c1, `Load: ${response.cpuLoad}% \u00A0|\u00A0 ${response.cpuClock} MHz`);
+    setCell(telemetryCells.g1, `Load: ${response.gpuLoad}% \u00A0|\u00A0 Core clk: ${response.coreClock} MHz`);
+    setCell(telemetryCells.o1, `P-State: ${response.pState}`);
 
-    telemetryCells.c3.textContent = `PKG: ${response.cpuPower}W \u00A0|\u00A0 Temp: ${response.cpuTemp}°C`;
-    telemetryCells.g3.textContent = `iGPU: ${response.igpuPower}W (${response.igpuRam}) \u00A0|\u00A0 dGPU: ${response.gpuPower}W`;
-    telemetryCells.o3.textContent = `GPU Throttle: ${isGpuThrottleActive ? 'Yes' : 'No'}`;
+    setCell(telemetryCells.c2, response.peClock);
+    setCell(telemetryCells.g2, `Mem clk: ${response.memClock} MHz \u00A0|\u00A0 Temp: ${response.gpuTemp}°C`);
+    setCell(telemetryCells.o2, `CPU Throttle: ${cpuThrottleText}`);
 
-    telemetryCells.c4.textContent = `RAM: ${response.ramUsed}`;
-    telemetryCells.g4.textContent = `VRAM: ${response.vramUsed}`;
-    telemetryCells.o4.textContent = `VRM Throttle: ${isVrmActive ? 'Yes' : 'No'}`;
+    setCell(telemetryCells.c3, `PKG: ${response.cpuPower}W \u00A0|\u00A0 Temp: ${response.cpuTemp}°C`);
+    setCell(telemetryCells.g3, `iGPU: ${response.igpuPower}W (${response.igpuRam}) \u00A0|\u00A0 dGPU: ${response.gpuPower}W`);
+    setCell(telemetryCells.o3, `GPU: ${gpuThrottleText} \u00A0|\u00A0 VRM: ${vrmThrottleText}`);
+
+    setCell(telemetryCells.c4, `RAM: ${response.ramUsed}`);
+    setCell(telemetryCells.g4, `VRAM: ${response.vramUsed}`);
+    setCell(telemetryCells.o4, `Page: ${response.pageUsed || 'N/A'}`);
 }
 
 function startTelemetryStream() {
