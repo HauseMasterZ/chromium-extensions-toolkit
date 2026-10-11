@@ -864,6 +864,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'toggleDarkMode':
       if (msg.tabId) toggleDarkMode(msg.tabId);
       break;
+    case 'set_monitor_brightness':
+      if (!nativeTelemetryPort) {
+        startNativeTelemetry();
+      }
+      if (nativeTelemetryPort) {
+        try {
+          nativeTelemetryPort.postMessage({ action: 'set_brightness', value: Number(msg.value) });
+        } catch (e) {
+          console.error('Failed to post message to native host:', e);
+        }
+      }
+      sendResponse({ success: true });
+      return false;
     case 'pasteAndGo':
       if (msg.url) {
         const targetUrl = resolvePasteUrl(msg.url);

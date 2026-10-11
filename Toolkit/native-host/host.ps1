@@ -127,6 +127,156 @@ public class NvmlHost {
     $nvmlLoaded = $false
 }
 
+# 1b. In-process native DDC/CI monitor brightness controller & bidirectional Stdin listener
+try {
+    if (-not ([System.Management.Automation.PSTypeName]'MonitorController').Type) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using System.IO;
+using System.Threading;
+using System.Text;
+
+public class MonitorController {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+    public struct PHYSICAL_MONITOR {
+        public IntPtr hPhysicalMonitor;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string szPhysicalMonitorDescription;
+    }
+
+    public delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdcMonitor, IntPtr lprcMonitor, IntPtr dwData);
+
+    [DllImport("user32.dll")]
+    public static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MonitorEnumProc lpfnEnum, IntPtr dwData);
+
+    [DllImport("dxva2.dll", SetLastError = true)]
+    public static extern bool GetNumberOfPhysicalMonitorsFromHMONITOR(IntPtr hMonitor, out uint pdwNumberOfPhysicalMonitors);
+
+    [DllImport("dxva2.dll", SetLastError = true)]
+    public static extern bool GetPhysicalMonitorsFromHMONITOR(IntPtr hMonitor, uint dwPhysicalMonitorArraySize, [Out] PHYSICAL_MONITOR[] pPhysicalMonitorArray);
+
+    [DllImport("dxva2.dll", SetLastError = true)]
+    public static extern bool DestroyPhysicalMonitors(uint dwPhysicalMonitorArraySize, [In] PHYSICAL_MONITOR[] pPhysicalMonitorArray);
+
+    [DllImport("dxva2.dll", SetLastError = true)]
+    public static extern bool GetMonitorBrightness(IntPtr hMonitor, out uint pdwMinimumBrightness, out uint pdwCurrentBrightness, out uint pdwMaximumBrightness);
+
+    [DllImport("dxva2.dll", SetLastError = true)]
+    public static extern bool SetMonitorBrightness(IntPtr hMonitor, uint dwNewBrightness);
+
+    public static volatile int CurrentBrightness = -1;
+    public static volatile bool IsRunning = true;
+
+    public static void InitBrightness() {
+        try {
+            EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (hMonitor, hdc, lprc, data) => {
+                uint count = 0;
+                if (GetNumberOfPhysicalMonitorsFromHMONITOR(hMonitor, out count) && count > 0) {
+                    var physicalMonitors = new PHYSICAL_MONITOR[count];
+                    if (GetPhysicalMonitorsFromHMONITOR(hMonitor, count, physicalMonitors)) {
+                        for (int i = 0; i < count; i++) {
+                            uint min = 0, cur = 0, max = 0;
+                            if (GetMonitorBrightness(physicalMonitors[i].hPhysicalMonitor, out min, out cur, out max)) {
+                                CurrentBrightness = (int)cur;
+                                DestroyPhysicalMonitors(count, physicalMonitors);
+                                return false;
+                            }
+                        }
+                        DestroyPhysicalMonitors(count, physicalMonitors);
+                    }
+                }
+                return true;
+            }, IntPtr.Zero);
+        } catch {}
+    }
+
+    public static bool SetBrightness(int val) {
+        if (val < 0) val = 0;
+        if (val > 100) val = 100;
+        bool success = false;
+        try {
+            EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (hMonitor, hdc, lprc, data) => {
+                uint count = 0;
+                if (GetNumberOfPhysicalMonitorsFromHMONITOR(hMonitor, out count) && count > 0) {
+                    var physicalMonitors = new PHYSICAL_MONITOR[count];
+                    if (GetPhysicalMonitorsFromHMONITOR(hMonitor, count, physicalMonitors)) {
+                        for (int i = 0; i < count; i++) {
+                            uint min = 0, cur = 0, max = 0;
+                            if (GetMonitorBrightness(physicalMonitors[i].hPhysicalMonitor, out min, out cur, out max)) {
+                                if (SetMonitorBrightness(physicalMonitors[i].hPhysicalMonitor, (uint)val)) {
+                                    CurrentBrightness = val;
+                                    success = true;
+                                }
+                                DestroyPhysicalMonitors(count, physicalMonitors);
+                                return false;
+                            }
+                        }
+                        DestroyPhysicalMonitors(count, physicalMonitors);
+                    }
+                }
+                return true;
+            }, IntPtr.Zero);
+        } catch {}
+        return success;
+    }
+
+    public static void StartStdinListener() {
+        Thread thread = new Thread(() => {
+            try {
+                Stream stdin = Console.OpenStandardInput();
+                byte[] lenBuf = new byte[4];
+                while (IsRunning) {
+                    int read = 0;
+                    while (read < 4) {
+                        int r = stdin.Read(lenBuf, read, 4 - read);
+                        if (r <= 0) return;
+                        read += r;
+                    }
+                    int len = BitConverter.ToInt32(lenBuf, 0);
+                    if (len <= 0 || len > 1024 * 1024) continue;
+
+                    byte[] jsonBuf = new byte[len];
+                    read = 0;
+                    while (read < len) {
+                        int r = stdin.Read(jsonBuf, read, len - read);
+                        if (r <= 0) return;
+                        read += r;
+                    }
+                    string json = Encoding.UTF8.GetString(jsonBuf);
+                    int actionIdx = json.IndexOf("\"set_brightness\"");
+                    if (actionIdx >= 0) {
+                        int valIdx = json.IndexOf("\"value\"");
+                        if (valIdx >= 0) {
+                            int colon = json.IndexOf(':', valIdx);
+                            if (colon >= 0) {
+                                int start = colon + 1;
+                                while (start < json.Length && (json[start] == ' ' || json[start] == '\t')) start++;
+                                int end = start;
+                                while (end < json.Length && (char.IsDigit(json[end]) || json[end] == '-')) end++;
+                                if (end > start) {
+                                    int bVal;
+                                    if (int.TryParse(json.Substring(start, end - start), out bVal)) {
+                                        SetBrightness(bVal);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch {}
+        });
+        thread.IsBackground = true;
+        thread.Name = "MonitorStdinListener";
+        thread.Start();
+    }
+}
+"@ -ErrorAction SilentlyContinue
+    }
+    [MonitorController]::InitBrightness()
+    [MonitorController]::StartStdinListener()
+} catch {}
+
 # 2. Persistent .NET PerformanceCounters (Pre-allocated once at startup, eliminates 1000ms PDH query sleep)
 $perfCountersReady = $false
 try {
@@ -470,6 +620,7 @@ try {
             pState    = $pStateStr
             vrmBrake  = $vrmBrakeStr
             hwThermal = $hwThermalStr
+            monitorBrightness = [MonitorController]::CurrentBrightness
         } | ConvertTo-Json -Compress
 
         # 5. Framed stdout output (32-bit little-endian prefix)
@@ -489,6 +640,7 @@ catch {
     exit 0
 }
 finally {
+    [MonitorController]::IsRunning = $false
     if ($nvmlLoaded) {
         try { [NvmlHost]::Shutdown() | Out-Null } catch {}
     }

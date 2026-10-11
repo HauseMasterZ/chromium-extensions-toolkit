@@ -90,6 +90,28 @@ fetchWeather();
 
 // Hardware Telemetry & Info-Panel 3-State Cycle (Streaming 0.5Hz)
 const hardwareEl = document.getElementById('hardware');
+const brightnessContainer = document.getElementById('brightness-container');
+const brightnessSlider = document.getElementById('brightnessSlider');
+const brightnessVal = document.getElementById('brightnessValue');
+let isUserDraggingBrightness = false;
+let brightnessDebounce = null;
+
+if (brightnessSlider && brightnessVal) {
+    brightnessSlider.addEventListener('input', (e) => {
+        isUserDraggingBrightness = true;
+        const val = Number(e.target.value);
+        brightnessVal.textContent = `${val}%`;
+        clearTimeout(brightnessDebounce);
+        brightnessDebounce = setTimeout(() => {
+            chrome.runtime.sendMessage({ action: 'set_monitor_brightness', value: val });
+            setTimeout(() => { isUserDraggingBrightness = false; }, 300);
+        }, 60);
+    });
+    brightnessSlider.addEventListener('change', () => {
+        setTimeout(() => { isUserDraggingBrightness = false; }, 300);
+    });
+}
+
 let infoState = 1; // 1: Weather (Default), 2: Empty / Hidden, 3: Sensors
 let telemetryPort = null;
 
@@ -192,6 +214,16 @@ function renderTelemetry(response) {
     setCell(telemetryCells.c4, `RAM: ${response.ramUsed}`);
     setCell(telemetryCells.g4, `VRAM: ${response.vramUsed}`);
     setCell(telemetryCells.o4, `Page: ${response.pageUsed || 'N/A'}`);
+
+    if (response.monitorBrightness !== undefined && response.monitorBrightness >= 0) {
+        if (!isUserDraggingBrightness && brightnessSlider && brightnessVal) {
+            const bVal = Number(response.monitorBrightness);
+            if (Number(brightnessSlider.value) !== bVal) {
+                brightnessSlider.value = bVal;
+                brightnessVal.textContent = `${bVal}%`;
+            }
+        }
+    }
 }
 
 function startTelemetryStream() {
@@ -246,11 +278,13 @@ function setInfoState(state) {
             weatherEl.style.visibility = 'visible';
         }
         if (hardwareEl) hardwareEl.style.display = 'none';
+        if (brightnessContainer) brightnessContainer.style.display = 'none';
     } else if (infoState === 2) {
         // State 2: Empty (Show Nothing)
         stopTelemetryStream();
         if (weatherEl) weatherEl.style.display = 'none';
         if (hardwareEl) hardwareEl.style.display = 'none';
+        if (brightnessContainer) brightnessContainer.style.display = 'none';
     } else if (infoState === 3) {
         // State 3: Sensors
         if (weatherEl) weatherEl.style.display = 'none';
@@ -258,6 +292,7 @@ function setInfoState(state) {
             hardwareEl.style.display = 'block';
             startTelemetryStream();
         }
+        if (brightnessContainer) brightnessContainer.style.display = 'flex';
     }
 }
 
