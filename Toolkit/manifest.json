@@ -1,0 +1,98 @@
+﻿{
+  "manifest_version": 3,
+  "name": "Unified Toolkit",
+  "version": "2.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAptM7CO45prEr+UF1aYWUyKKgylZ6CXeAEQ2ZKEGz+vOVwj5+LPqEO7o9vlXLccpgs1QrFEn21amcosmwb/3NudCcEW5CJL21swyzZ43jQd4U6hyVQrGc258fWSjg4IOIQ1QMJfTsdlUGCwiH7tJmwabTlCDTqHLZZjZRG2TqW6UkkIN/7uKFE3ADRyqruO9u9bhFDS1KOmSxora9qGi/OjMY2a8YkJxDhgDvw0i/I8B+1/SfQ/ImlCTMZrRIocPcbAlS/VKuPk88glEk7TZK6Z35H4lYYDio8pOvKHEY8pqQyjSqV1pbhp15IlY1jxSY3IQL6vnfp9+EiAe/VdoC/QIDAQAB",
+  "description": "Auto Copy, Paste & Go, New Tab, YT Music Audio, YT Float Search, WhatsApp Web Tweaks, and On-Demand Dark Mode.",
+  "permissions": [
+    "tabs",
+    "system.display",
+    "scripting", 
+    "clipboardRead", 
+    "activeTab",
+    "storage",
+    "browsingData",
+    "sessions",
+    "alarms",
+    "offscreen",
+    "contextMenus",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "bg-service-worker.js"
+  },
+  "chrome_url_overrides": {
+    "newtab": "newtab-page.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "icons": {
+    "16": "Images/icon16.png",
+    "48": "Images/icon48.png",
+    "128": "Images/icon128.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "Images/icon16.png",
+      "48": "Images/icon48.png",
+      "128": "Images/icon128.png"
+    },
+    "default_title": "Unified Toolkit",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["global-auto-copy.js", "link-unshortener.js", "ocr-dom-overlay.js"],
+      "css": ["ocr-dom-overlay.css"]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["ocr/*"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "commands": {
+    "run": {
+      "description": "Paste and go"
+    },
+    "run_yt": {
+      "description": "Paste and search YouTube"
+    },
+    "run_incognito": {
+      "description": "Paste and search in Incognito"
+    },
+    "duplicate_tab": {
+      "description": "Duplicate current tab"
+    },
+    "toggle_dark_mode": {
+      "description": "Toggle Dark Mode"
+    },
+    "close_other_tabs": {
+      "description": "Close other tabs"
+    },
+    "copy_clean_url": {
+      "description": "Copy clean URL"
+    },
+    "close_all_windows": {
+      "description": "Close all & clear data"
+    },
+    "discard_background_tabs": {
+      "description": "Sleep tabs"
+    },
+    "price_history": {
+      "description": "Compare price history"
+    },
+    "restore_last_closed_window": {
+      "description": "Reopen last closed window"
+    },
+    "ocr_dom": {
+      "description": "Toggle DOM Image OCR"
+    }
+  }
+}

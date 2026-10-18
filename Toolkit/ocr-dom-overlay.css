@@ -1,0 +1,148 @@
+/* ocr-dom-overlay.css */
+/* Interactive Live Text Overlay Styles for Unified Toolkit */
+
+.toolkit-ocr-layer {
+  position: fixed !important;
+  pointer-events: none !important;
+  z-index: 2147483640 !important;
+  overflow: hidden !important;
+  border-radius: inherit !important;
+  box-sizing: border-box !important;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+
+.toolkit-ocr-layer.dragging {
+  pointer-events: auto !important;
+  cursor: text !important;
+}
+
+.toolkit-ocr-line {
+  position: absolute !important;
+  pointer-events: auto !important;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  white-space: nowrap !important;
+  box-sizing: border-box !important;
+}
+
+.toolkit-ocr-word {
+  position: absolute !important;
+  display: inline-block !important;
+  pointer-events: auto !important;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  color: transparent !important;
+  background: rgba(56, 189, 248, 0.12) !important;
+  border-radius: 2px !important;
+  outline: 1px solid rgba(56, 189, 248, 0.35) !important;
+  cursor: text !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+  transform-origin: 0 50% !important;
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, "DejaVu Sans Mono", monospace, system-ui, sans-serif !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  letter-spacing: 0 !important;
+  transition: background 0.12s ease, outline 0.12s ease !important;
+}
+
+.toolkit-ocr-word::after {
+  content: ' ';
+}
+
+.toolkit-ocr-word:hover {
+  background: rgba(56, 189, 248, 0.28) !important;
+  outline: 1.5px solid rgba(56, 189, 248, 0.8) !important;
+}
+
+.toolkit-ocr-word::selection {
+  background: rgba(59, 130, 246, 0.65) !important;
+  color: #ffffff !important;
+  outline: none !important;
+}
+
+.toolkit-ocr-word::-moz-selection {
+  background: rgba(59, 130, 246, 0.65) !important;
+  color: #ffffff !important;
+  outline: none !important;
+}
+
+/* Ctrl+Click Multi-Select / Quick-Copy Active State */
+.toolkit-ocr-word.selected {
+  background: rgba(16, 185, 129, 0.32) !important;
+  outline: 2px solid #10b981 !important;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.5) !important;
+  z-index: 50 !important;
+}
+
+.toolkit-ocr-word.selected::before {
+  content: attr(data-ocr-index);
+  position: absolute !important;
+  top: -14px !important;
+  left: -2px !important;
+  background: #10b981 !important;
+  color: #ffffff !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  line-height: 1 !important;
+  padding: 1px 4px !important;
+  border-radius: 3px !important;
+  pointer-events: none !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45) !important;
+  z-index: 100 !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+}
+
+/* Subtle badge indicator on OCR-processed images */
+.toolkit-ocr-badge {
+  position: absolute !important;
+  top: 4px !important;
+  right: 4px !important;
+  background: rgba(15, 23, 42, 0.8) !important;
+  backdrop-filter: blur(4px) !important;
+  -webkit-backdrop-filter: blur(4px) !important;
+  color: #38bdf8 !important;
+  border: 1px solid rgba(56, 189, 248, 0.35) !important;
+  border-radius: 4px !important;
+  padding: 2px 5px !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif !important;
+  letter-spacing: 0.5px !important;
+  pointer-events: none !important;
+  opacity: 0.75 !important;
+  transition: opacity 0.2s !important;
+}
+
+/* Discreet Toast Feedback */
+#toolkit-ocr-toast {
+  position: fixed !important;
+  top: 20px !important;
+  left: 50% !important;
+  transform: translateX(-50%) translateY(-10px) !important;
+  background: rgba(18, 18, 24, 0.92) !important;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+  color: #f1f5f9 !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-radius: 9999px !important;
+  padding: 7px 16px !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  font-size: 12.5px !important;
+  font-weight: 500 !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5) !important;
+  z-index: 2147483647 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  opacity: 0 !important;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  pointer-events: none !important;
+}
+
+#toolkit-ocr-toast.visible {
+  opacity: 1 !important;
+  transform: translateX(-50%) translateY(0) !important;
+}

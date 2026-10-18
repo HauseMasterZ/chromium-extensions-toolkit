@@ -1,0 +1,9 @@
+{
+  "name": "com.gpu.telemetry",
+  "description": "GPU Telemetry Native Messaging Host for Unified Toolkit",
+  "path": "<RUN_INSTALL_HOST_BAT_TO_GENERATE_LOCAL_PATH>",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://<RUN_INSTALL_HOST_BAT_TO_PAIR_ORIGIN>/"
+  ]
+}

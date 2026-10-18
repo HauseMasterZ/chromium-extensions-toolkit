@@ -1,0 +1,13 @@
+# Local native messaging host manifest containing local file paths
+Toolkit/native-host/com.gpu.telemetry.json
+
+# Local scratch and debug files
+scratch/
+.system_generated/
+
+# Operating System & Temporary Files
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.tmp
+*.log
