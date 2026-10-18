@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Unified Toolkit</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --surface-color: #1c1c1e;
+            --border-color: #2c2c2e;
+            --text-main: #ffffff;
+            --text-secondary: #8e8e93;
+            --accent-color: #0a84ff;
+            --accent-hover: #409cff;
+            --toggle-bg: #3a3a3c;
+        }
+
+        body {
+            width: 280px;
+            padding: 16px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            user-select: none;
+        }
+
+        /* Typography & Headers */
+        .section-header {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            padding-left: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .edit-shortcuts-btn {
+            color: var(--accent-color);
+            text-decoration: none;
+            text-transform: none;
+            letter-spacing: normal;
+            font-size: 11px;
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+
+        .edit-shortcuts-btn:hover {
+            color: var(--accent-hover);
+        }
+
+        /* Sections */
+        .card {
+            background-color: var(--surface-color);
+            border-radius: 12px;
+            padding: 12px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        /* Volume Slider */
+        .slider-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        #volumeValue {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--accent-color);
+            min-width: 42px;
+            text-align: right;
+        }
+
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+
+        input[type="range"]:focus {
+            outline: none;
+        }
+
+        input[type="range"]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: var(--toggle-bg);
+            border-radius: 2px;
+            transition: background 0.2s;
+        }
+
+        input[type="range"]:hover::-webkit-slider-runnable-track {
+            background: var(--border-color);
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 16px;
+            width: 16px;
+            border-radius: 50%;
+            background: var(--text-main);
+            cursor: pointer;
+            margin-top: -6px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+            transition: transform 0.1s;
+        }
+
+        input[type="range"]:active::-webkit-slider-thumb {
+            transform: scale(1.1);
+        }
+
+        /* Toggles */
+        .toggle-group {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+            background-color: var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .toggle-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: var(--surface-color);
+            padding: 12px 16px;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-main);
+            transition: opacity 0.2s ease, background-color 0.2s ease;
+            cursor: pointer;
+        }
+
+        .toggle-row:hover {
+            background-color: #222224;
+        }
+
+        .toggle-row.disabled {
+            opacity: 0.4;
+            pointer-events: none;
+        }
+
+        /* Switch UI */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 40px;
+            height: 24px;
+            flex-shrink: 0;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider-round {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: var(--toggle-bg);
+            transition: 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
+            border-radius: 24px;
+        }
+
+        .slider-round:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: var(--text-main);
+            transition: 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
+            border-radius: 50%;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+
+        input:checked + .slider-round {
+            background-color: var(--accent-color);
+        }
+
+        input:checked + .slider-round:before {
+            transform: translateX(16px);
+        }
+
+        input:focus + .slider-round {
+            box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.3);
+        }
+
+        .toggle-controls-wrap {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .seek-input-box {
+            display: flex;
+            align-items: center;
+            background: var(--toggle-bg);
+            border-radius: 6px;
+            padding: 2px 6px;
+            border: 1px solid var(--border-color);
+            transition: border-color 0.2s, background-color 0.2s;
+        }
+
+        .seek-input-box:focus-within {
+            border-color: var(--accent-color);
+            background: #252528;
+        }
+
+        .seek-input-box input {
+            width: 30px;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: var(--text-main);
+            font-size: 12px;
+            font-weight: 600;
+            text-align: right;
+            padding: 0 2px 0 0;
+            -moz-appearance: textfield;
+        }
+
+        .seek-input-box input::-webkit-outer-spin-button,
+        .seek-input-box input::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+
+        .seek-unit {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-weight: 500;
+            user-select: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div>
+        <div class="section-header">
+            <span>Tab Volume</span>
+            <a id="btnEditShortcuts" class="edit-shortcuts-btn" title="Edit keyboard shortcuts">Edit Shortcuts</a>
+        </div>
+        <div class="card">
+            <div class="slider-wrapper">
+                <input type="range" id="volumeSlider" min="0" max="100" value="100">
+                <div id="volumeValue">100%</div>
+            </div>
+        </div>
+    </div>
+
+    <div>
+        <div class="section-header">Features</div>
+        <div class="toggle-group">
+            
+            <label class="toggle-row" for="toggleDarkMode">
+                <span>On-Demand Dark Mode</span>
+                <div class="switch">
+                    <input type="checkbox" id="toggleDarkMode">
+                    <span class="slider-round"></span>
+                </div>
+            </label>
+
+            <label class="toggle-row" for="toggleAutoCopy">
+                <span>Auto Copy on Select</span>
+                <div class="switch">
+                    <input type="checkbox" id="toggleAutoCopy" checked>
+                    <span class="slider-round"></span>
+                </div>
+            </label>
+            
+            <label class="toggle-row" for="toggleYtFloatSearch">
+                <span>YouTube Float Search</span>
+                <div class="switch">
+                    <input type="checkbox" id="toggleYtFloatSearch" checked>
+                    <span class="slider-round"></span>
+                </div>
+            </label>
+
+            <label class="toggle-row" for="toggleYtMusic">
+                <span>YouTube Music Audio-Only</span>
+                <div class="switch">
+                    <input type="checkbox" id="toggleYtMusic" checked>
+                    <span class="slider-round"></span>
+                </div>
+            </label>
+
+            <label class="toggle-row" for="toggleNewTabPage">
+                <span>Custom New Tab Page</span>
+                <div class="switch">
+                    <input type="checkbox" id="toggleNewTabPage" checked>
+                    <span class="slider-round"></span>
+                </div>
+            </label>
+
+            <label class="toggle-row" for="toggleWhatsapp">
+                <span>WhatsApp Tweaks</span>
+                <div class="switch">
+                    <input type="checkbox" id="toggleWhatsapp" checked>
+                    <span class="slider-round"></span>
+                </div>
+            </label>
+
+            <label class="toggle-row" for="togglePasteGo">
+                <span>Paste & Go Shortcuts</span>
+                <div class="switch">
+                    <input type="checkbox" id="togglePasteGo" checked>
+                    <span class="slider-round"></span>
+                </div>
+            </label>
+
+            <div class="toggle-row" id="rowCustomSeek">
+                <span>Custom Seek Duration</span>
+                <div class="toggle-controls-wrap">
+                    <div class="seek-input-box" title="Skip duration in seconds">
+                        <input type="number" id="inputSeekSeconds" min="1" max="300" value="1">
+                        <span class="seek-unit">s</span>
+                    </div>
+                    <label class="switch" for="toggleCustomSeek">
+                        <input type="checkbox" id="toggleCustomSeek">
+                        <span class="slider-round"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="toggle-row" id="rowDefaultZoom">
+                <span>Default Zoom: %</span>
+                <div class="toggle-controls-wrap">
+                    <div class="seek-input-box" title="Default zoom percentage on internal display">
+                        <input type="number" id="inputDefaultZoom" min="100" max="200" step="5" value="120">
+                        <span class="seek-unit">%</span>
+                    </div>
+                    <label class="switch" for="toggleDefaultZoom">
+                        <input type="checkbox" id="toggleDefaultZoom" checked>
+                        <span class="slider-round"></span>
+                    </label>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>
