@@ -311,72 +311,261 @@ function getFeaturesForMonitor(m) {
     return DEFAULT_MONITOR_FEATURES;
 }
 
-function isUserColorPreset(val) {
-    const n = Number(val);
-    return n === 11 || n === 12;
-}
+const ColorPresetAdapter = {
+    normalize(val) {
+        const n = Number(val);
+        if (n === 12) return 11;
+        return isNaN(n) ? 5 : n;
+    },
+    isUserMode(val) {
+        const n = Number(val);
+        return n === 11 || n === 12;
+    }
+};
 
 let infoState = 1; // 1: Weather (Default), 2: Panel Controls, 3: Empty, 4: Sensors
 let telemetryPort = null;
-let currentPanelMonitorSignature = null;
-let panelDebounceTimers = {};
+let currentPanelTopologySignature = null;
 let latestMonitors = [];
 
-function getActiveFeaturesForMonitor(m) {
-    if (!m) return [];
-    const rawFeats = getFeaturesForMonitor(m);
-    const isUser = isUserColorPreset(m.colorPreset);
-    return rawFeats.filter(f => !f.requiresUserMode || isUser);
+// Explicit In-Flight Lease Manager to eliminate telemetry race conditions & rubber-banding
+class InFlightLeaseManager {
+    constructor() {
+        this.leases = new Map();
+        this.LEASE_DURATION_MS = 3500;
+    }
+
+    grant(mid, ctrl, targetValue) {
+        const key = `${mid}_${ctrl}`;
+        this.leases.set(key, {
+            targetValue: Number(targetValue),
+            leaseExpiryTimestamp: Date.now() + this.LEASE_DURATION_MS,
+            status: 'pending'
+        });
+    }
+
+    hasActiveLease(mid, ctrl) {
+        const key = `${mid}_${ctrl}`;
+        const lease = this.leases.get(key);
+        if (!lease) return false;
+        if (Date.now() > lease.leaseExpiryTimestamp) {
+            this.leases.delete(key);
+            return false;
+        }
+        return true;
+    }
+
+    reconcileIncoming(mid, ctrl, incomingValue) {
+        const key = `${mid}_${ctrl}`;
+        const lease = this.leases.get(key);
+        const incomingNum = Number(incomingValue);
+        if (!lease) {
+            return { shouldUpdateUI: true, value: incomingNum };
+        }
+        const now = Date.now();
+
+        // 1. Hardware confirmed target value
+        if (incomingNum === lease.targetValue) {
+            this.leases.delete(key);
+            return { shouldUpdateUI: true, value: incomingNum, confirmed: true };
+        }
+
+        // 2. Hardware has not confirmed yet, but lease is still active -> suppress telemetry bounce
+        if (now <= lease.leaseExpiryTimestamp) {
+            return { shouldUpdateUI: false, value: lease.targetValue, suppressed: true };
+        }
+
+        // 3. Lease expired without hardware confirmation -> rollback to verified hardware state
+        this.leases.delete(key);
+        return { shouldUpdateUI: true, value: incomingNum, expired: true };
+    }
+
+    clear(mid, ctrl) {
+        this.leases.delete(`${mid}_${ctrl}`);
+    }
 }
 
-function dispatchPanelControl(monitorId, control, value) {
-    const numVal = Number(value);
+const leaseManager = new InFlightLeaseManager();
+
+// Wheel Delta Physics Accumulator for smooth trackpads and notched wheels
+const wheelAccumulators = new Map();
+const WHEEL_PIXEL_THRESHOLD = 36;
+
+function processWheelDelta(key, e) {
+    const delta = e.deltaY;
+    if (delta === 0) return 0;
+
+    // Standard notched line scroll (mouse wheels)
+    if (e.deltaMode === 1) {
+        return delta < 0 ? 1 : -1;
+    }
+    // Page scroll mode
+    if (e.deltaMode === 2) {
+        return delta < 0 ? 3 : -3;
+    }
+
+    // High delta (traditional mouse wheel emitting 100 or 120 pixels per notch)
+    if (Math.abs(delta) >= 80) {
+        wheelAccumulators.delete(key);
+        return delta < 0 ? 1 : -1;
+    }
+
+    // Micro-delta pixel mode (precision trackpad or free-spinning precision wheel)
+    let accum = (wheelAccumulators.get(key) || 0) + delta;
+    let steps = 0;
+    if (Math.abs(accum) >= WHEEL_PIXEL_THRESHOLD) {
+        steps = -Math.trunc(accum / WHEEL_PIXEL_THRESHOLD);
+        accum = accum % WHEEL_PIXEL_THRESHOLD;
+    }
+    wheelAccumulators.set(key, accum);
+    return steps;
+}
+
+// Coalescing Dispatch & Debounce Controller
+const pendingDispatches = new Map();
+
+function executeHardwareDispatch(mid, ctrl, numVal) {
     const payload = {
         action: 'set_panel_control',
-        monitorId: monitorId,
-        control: control,
+        monitorId: mid,
+        control: ctrl,
         value: numVal
     };
 
-    // 1. Direct stream over active telemetryPort
-    let sentOverPort = false;
+    let sent = false;
     if (telemetryPort) {
         try {
             telemetryPort.postMessage(payload);
-            sentOverPort = true;
+            sent = true;
         } catch (e) {
             telemetryPort = null;
         }
     }
 
-    // 2. Direct broadcast via runtime message if port wasn't available
-    if (!sentOverPort) {
+    if (!sent) {
         try {
             chrome.runtime.sendMessage(payload, () => {
                 if (chrome.runtime.lastError) {}
             });
         } catch (e) {}
     }
+}
 
-    // 3. Optimistic local cache update
-    try {
-        const cached = localStorage.getItem('panelControlsCache');
-        if (cached) {
-            const list = JSON.parse(cached);
-            const m = list.find(item => item.id === monitorId);
-            if (m) {
-                m[control] = numVal;
-                localStorage.setItem('panelControlsCache', JSON.stringify(list));
+function cancelPendingDispatch(key) {
+    const pending = pendingDispatches.get(key);
+    if (pending) {
+        clearTimeout(pending.timerId);
+        pendingDispatches.delete(key);
+    }
+}
+
+function scheduleDispatch(mid, ctrl, value, delayMs = 75) {
+    const key = `${mid}_${ctrl}`;
+    const numVal = Number(value);
+
+    // Grant optimistic lease immediately
+    leaseManager.grant(mid, ctrl, numVal);
+
+    // Cancel existing pending dispatch for this register
+    cancelPendingDispatch(key);
+
+    if (delayMs <= 0) {
+        executeHardwareDispatch(mid, ctrl, numVal);
+        return;
+    }
+
+    const timerId = setTimeout(() => {
+        pendingDispatches.delete(key);
+        executeHardwareDispatch(mid, ctrl, numVal);
+    }, delayMs);
+
+    pendingDispatches.set(key, { timerId, value: numVal });
+}
+
+function flushPendingDispatch(mid, ctrl, fallbackValue = null) {
+    const key = `${mid}_${ctrl}`;
+    const pending = pendingDispatches.get(key);
+    if (pending) {
+        clearTimeout(pending.timerId);
+        pendingDispatches.delete(key);
+        executeHardwareDispatch(mid, ctrl, pending.value);
+        return true;
+    }
+    if (fallbackValue !== null) {
+        const numVal = Number(fallbackValue);
+        leaseManager.grant(mid, ctrl, numVal);
+        executeHardwareDispatch(mid, ctrl, numVal);
+        return true;
+    }
+    return false;
+}
+
+function getUnifiedFeatureList(monitors) {
+    const seen = new Set();
+    const list = [];
+    for (const m of monitors) {
+        const feats = getFeaturesForMonitor(m);
+        for (const f of feats) {
+            if (!seen.has(f.key)) {
+                seen.add(f.key);
+                list.push(f.key);
             }
         }
-    } catch (e) {}
-
-    if (Array.isArray(latestMonitors)) {
-        const m = latestMonitors.find(item => item.id === monitorId);
-        if (m) {
-            m[control] = numVal;
-        }
     }
+    const priority = [
+        'brightness', 'contrast', 'gamma', 'darkBoost', 'blackBoost', 'blackLevel',
+        'colorPreset', 'gainR', 'gainG', 'gainB',
+        'overdrive', 'strobing', 'mprt', 'freeSync',
+        'superSharpness', 'blueLight',
+        'volume', 'inputSource', 'powerMode'
+    ];
+    list.sort((a, b) => {
+        const idxA = priority.indexOf(a);
+        const idxB = priority.indexOf(b);
+        return (idxA >= 0 ? idxA : 999) - (idxB >= 0 ? idxB : 999);
+    });
+    return list;
+}
+
+function syncRgbGainVisibility(table) {
+    const tbl = table || (panelControlsEl ? panelControlsEl.querySelector('table') : null);
+    if (!tbl) return;
+
+    // Detect which monitors currently have User / Custom color preset active
+    const userModeMonitors = new Set();
+    const selects = tbl.querySelectorAll('select[data-ctrl="colorPreset"]');
+    selects.forEach(sel => {
+        const mid = sel.getAttribute('data-mid');
+        if (ColorPresetAdapter.isUserMode(sel.value)) {
+            userModeMonitors.add(mid);
+        }
+    });
+
+    const anyUserMode = userModeMonitors.size > 0;
+
+    // Smoothly toggle table row visibility without DOM destruction
+    const gainRows = tbl.querySelectorAll('tr[data-requires-user-mode="true"]');
+    gainRows.forEach(row => {
+        row.style.display = anyUserMode ? '' : 'none';
+    });
+
+    // Toggle per-monitor cell content: editable input when in user mode, N/A indicator when not
+    const gainCells = tbl.querySelectorAll('td[data-ctrl="gainR"], td[data-ctrl="gainG"], td[data-ctrl="gainB"]');
+    gainCells.forEach(cell => {
+        const mid = cell.getAttribute('data-mid');
+        const isUser = userModeMonitors.has(mid);
+        const inputWrap = cell.querySelector('.gain-input-wrap');
+        const naWrap = cell.querySelector('.gain-na-wrap');
+        if (inputWrap) inputWrap.style.display = isUser ? 'block' : 'none';
+        if (naWrap) naWrap.style.display = isUser ? 'none' : 'block';
+        if (isUser) {
+            cell.classList.remove('panel-cell-na');
+            cell.classList.add('panel-cell-numeric');
+        } else {
+            cell.classList.remove('panel-cell-numeric');
+            cell.classList.add('panel-cell-na');
+        }
+    });
 }
 
 function renderPanelControls(monitors) {
@@ -398,39 +587,52 @@ function renderPanelControls(monitors) {
 
     latestMonitors = sortedMonitors;
 
-    const signature = sortedMonitors.map(m => `${m.id}:${isUserColorPreset(m.colorPreset)}:${getActiveFeaturesForMonitor(m).length}`).join(',');
+    // Topology signature is purely based on monitor IDs (stable across preset changes)
+    const topologySignature = sortedMonitors.map(m => m.id).join(',');
     const existingTable = panelControlsEl.querySelector('table');
 
-    if (existingTable && currentPanelMonitorSignature === signature) {
-        const now = Date.now();
+    // Fine-grained in-place update if table is already mounted for this topology
+    if (existingTable && currentPanelTopologySignature === topologySignature) {
         for (const m of sortedMonitors) {
-            const feats = getActiveFeaturesForMonitor(m);
-            for (const f of feats) {
-                const el = panelControlsEl.querySelector(`[data-mid="${m.id}"][data-ctrl="${f.key}"]`);
+            const rawFeats = getFeaturesForMonitor(m);
+            for (const f of rawFeats) {
+                const el = existingTable.querySelector(`[data-mid="${m.id}"][data-ctrl="${f.key}"]`);
                 if (!el) continue;
-                const lastInteraction = Number(el.dataset.lastInteraction || 0);
-                if (document.activeElement === el || (now - lastInteraction < 2000)) continue;
-                let val = m[f.key];
-                if (f.key === 'colorPreset' && val === 12) val = 11;
-                if (f.type === 'volume' && val === -1) continue;
+
+                // Reconcile incoming hardware telemetry via anti-rubber-banding lease manager
+                let incomingRaw = m[f.key];
+                if (f.key === 'colorPreset') incomingRaw = ColorPresetAdapter.normalize(incomingRaw);
+                if (f.type === 'volume' && incomingRaw === -1) continue;
+
+                const { shouldUpdateUI, value } = leaseManager.reconcileIncoming(m.id, f.key, incomingRaw);
+                if (!shouldUpdateUI) continue;
+
+                // Never overwrite an input element that the user is actively typing into
+                if (document.activeElement === el) continue;
+
                 if (el.tagName === 'INPUT') {
-                    if (el.value !== String(val)) el.value = val;
+                    const strVal = String(value);
+                    if (el.value !== strVal) el.value = strVal;
                 } else if (el.tagName === 'SELECT') {
-                    if (Number(el.value) !== Number(val)) el.value = val;
+                    const numVal = Number(value);
+                    if (Number(el.value) !== numVal) {
+                        el.value = numVal;
+                        if (f.key === 'colorPreset') {
+                            syncRgbGainVisibility(existingTable);
+                        }
+                    }
                 }
             }
         }
         return;
     }
 
-    currentPanelMonitorSignature = signature;
+    // Full table creation (only runs once per hardware topology change)
+    currentPanelTopologySignature = topologySignature;
 
     const numMonitors = sortedMonitors.length;
     const monitorWidth = Math.floor(750 / numMonitors);
-
-    // Compute active features list per monitor
-    const monitorFeatureLists = sortedMonitors.map(m => getActiveFeaturesForMonitor(m));
-    const maxRows = Math.max(...monitorFeatureLists.map(list => list.length), 0);
+    const unifiedFeatureKeys = getUnifiedFeatureList(sortedMonitors);
 
     let html = `
         <table style="table-layout: fixed; width: 750px; margin: 6px auto 0 auto; border-collapse: collapse; font-size: 13px; line-height: 1.6; color: #ccc; text-align: left; font-variant-numeric: tabular-nums; white-space: nowrap;">
@@ -445,27 +647,48 @@ function renderPanelControls(monitors) {
             <tbody>
     `;
 
-    for (let r = 0; r < maxRows; r++) {
-        html += `<tr>`;
+    for (const featKey of unifiedFeatureKeys) {
+        // Determine if any monitor profile requires user mode for this feature
+        const isUserModeRequired = featKey === 'gainR' || featKey === 'gainG' || featKey === 'gainB';
+        const trAttr = isUserModeRequired ? 'data-requires-user-mode="true"' : '';
+
+        html += `<tr ${trAttr}>`;
         for (let mIdx = 0; mIdx < numMonitors; mIdx++) {
             const m = sortedMonitors[mIdx];
-            const feats = monitorFeatureLists[mIdx];
-            const f = feats[r];
+            const rawFeats = getFeaturesForMonitor(m);
+            const f = rawFeats.find(item => item.key === featKey);
             const borderStyle = mIdx > 0 ? 'border-left: 1px solid rgba(255, 255, 255, 0.12);' : '';
 
             if (!f) {
-                // If a monitor does not have a feature at this row index, leave it empty
-                html += `<td class="panel-cell panel-cell-empty" style="padding: 3px 14px; ${borderStyle}">&nbsp;</td>`;
+                // Monitor does not support this feature row -> graceful empty placeholder
+                html += `
+                    <td class="panel-cell panel-cell-empty" data-mid="${m.id}" data-ctrl="${featKey}" style="padding: 3px 14px; ${borderStyle}">
+                        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                            <span style="color: #444; overflow: hidden; text-overflow: ellipsis; padding-right: 8px;">--</span>
+                            <span style="color: #444; font-size: 12px;">--</span>
+                        </div>
+                    </td>
+                `;
                 continue;
             }
 
             let val = m[f.key];
-            if (f.key === 'colorPreset' && val === 12) val = 11;
+            if (f.key === 'colorPreset') val = ColorPresetAdapter.normalize(val);
 
             let controlContent = '';
             let cellClass = 'panel-cell';
 
-            if (f.type === 'volume' && (val === -1 || val === undefined)) {
+            if (f.key === 'gainR' || f.key === 'gainG' || f.key === 'gainB') {
+                cellClass += ' panel-cell-numeric';
+                controlContent = `
+                    <div class="gain-input-wrap">
+                        <input type="text" class="panel-input" data-mid="${m.id}" data-ctrl="${f.key}" data-min="${f.min}" data-max="${f.max}" value="${val ?? 50}">
+                    </div>
+                    <div class="gain-na-wrap" style="display: none;">
+                        <span style="color: #666; font-size: 12px; margin-left: 4px;">N/A</span>
+                    </div>
+                `;
+            } else if (f.type === 'volume' && (val === -1 || val === undefined)) {
                 cellClass += ' panel-cell-na';
                 controlContent = `<span style="color: #666; font-size: 12px; margin-left: 4px;">N/A</span>`;
             } else if (f.type === 'select') {
@@ -494,14 +717,17 @@ function renderPanelControls(monitors) {
     html += `</tbody></table>`;
     panelControlsEl.innerHTML = html;
 
-    attachPanelControlListeners();
+    const newTable = panelControlsEl.querySelector('table');
+    syncRgbGainVisibility(newTable);
+    attachPanelControlListeners(newTable);
 }
 
-function attachPanelControlListeners() {
-    if (!panelControlsEl) return;
+function attachPanelControlListeners(table) {
+    const root = table || panelControlsEl;
+    if (!root) return;
 
     // 1. Numeric Cells: Full-cell hover range & wheel interaction
-    const numericInputs = panelControlsEl.querySelectorAll('.panel-input');
+    const numericInputs = root.querySelectorAll('.panel-input');
     numericInputs.forEach(input => {
         const cell = input.closest('.panel-cell');
         if (!cell) return;
@@ -510,37 +736,28 @@ function attachPanelControlListeners() {
         const ctrl = input.getAttribute('data-ctrl');
         const minVal = Number(input.getAttribute('data-min') !== null ? input.getAttribute('data-min') : 0);
         const maxVal = Number(input.getAttribute('data-max') !== null ? input.getAttribute('data-max') : 100);
+        const cellKey = `${mid}_${ctrl}`;
 
-        const commitValue = (val) => {
-            const clamped = Math.max(minVal, Math.min(maxVal, Math.round(val)));
-            input.value = clamped;
-            input.dataset.lastInteraction = Date.now();
-
-            const timerKey = `${mid}_${ctrl}`;
-            clearTimeout(panelDebounceTimers[timerKey]);
-            panelDebounceTimers[timerKey] = setTimeout(() => {
-                dispatchPanelControl(mid, ctrl, clamped);
-            }, 75);
-        };
-
-        // Resilient full-cell wheel scroll listener
+        // Resilient full-cell wheel scroll listener with physics accumulator
         cell.addEventListener('wheel', (e) => {
             if (cell.classList.contains('panel-cell-na') || cell.classList.contains('panel-cell-empty')) return;
             e.preventDefault();
-            if (e.deltaY === 0) return;
-            const defaultStep = ctrl === 'brightness' ? 2 : 1;
-            const step = e.shiftKey ? (ctrl === 'brightness' ? 10 : 5) : defaultStep;
-            const current = Math.max(minVal, Math.min(maxVal, parseInt(input.value, 10) || 0));
-            const direction = e.deltaY < 0 ? 1 : -1;
 
-            if ((direction > 0 && current >= maxVal) || (direction < 0 && current <= minVal)) {
-                input.value = direction > 0 ? maxVal : minVal;
-                input.dataset.lastInteraction = Date.now();
+            const steps = processWheelDelta(cellKey, e);
+            if (steps === 0) return;
+
+            const defaultStep = ctrl === 'brightness' ? 2 : 1;
+            const multiplier = e.shiftKey ? (ctrl === 'brightness' ? 10 : 5) : defaultStep;
+            const current = Math.max(minVal, Math.min(maxVal, parseInt(input.value, 10) || 0));
+
+            if ((steps > 0 && current >= maxVal) || (steps < 0 && current <= minVal)) {
+                input.value = steps > 0 ? maxVal : minVal;
                 return;
             }
 
-            const next = Math.max(minVal, Math.min(maxVal, current + (direction * step)));
-            commitValue(next);
+            const next = Math.max(minVal, Math.min(maxVal, current + (steps * multiplier)));
+            input.value = next;
+            scheduleDispatch(mid, ctrl, next, 75);
         }, { passive: false });
 
         // Clicking anywhere in the cell focuses the input
@@ -562,83 +779,76 @@ function attachPanelControlListeners() {
 
                 if ((direction > 0 && current >= maxVal) || (direction < 0 && current <= minVal)) {
                     input.value = direction > 0 ? maxVal : minVal;
-                    input.dataset.lastInteraction = Date.now();
                     return;
                 }
 
                 const next = Math.max(minVal, Math.min(maxVal, current + (direction * step)));
-                commitValue(next);
+                input.value = next;
+                scheduleDispatch(mid, ctrl, next, 75);
             } else if (e.key === 'Enter') {
                 input.blur();
             }
         });
 
-        input.addEventListener('focus', () => {
-            input.dataset.lastInteraction = Date.now();
-        });
-
         input.addEventListener('input', () => {
-            input.dataset.lastInteraction = Date.now();
             const num = parseInt(input.value.replace(/[^0-9]/g, ''), 10);
             if (!isNaN(num)) {
-                commitValue(num);
+                const clamped = Math.max(minVal, Math.min(maxVal, num));
+                scheduleDispatch(mid, ctrl, clamped, 120);
             }
         });
 
         input.addEventListener('blur', () => {
-            input.dataset.lastInteraction = Date.now();
             let num = parseInt(input.value.replace(/[^0-9]/g, ''), 10);
             if (isNaN(num)) num = minVal;
             const clamped = Math.max(minVal, Math.min(maxVal, num));
             input.value = clamped;
-            dispatchPanelControl(mid, ctrl, clamped);
+            flushPendingDispatch(mid, ctrl, clamped);
         });
     });
 
     // 2. Select Cells: Full-cell hover range & wheel interaction
-    const selectElements = panelControlsEl.querySelectorAll('.panel-select');
+    const selectElements = root.querySelectorAll('.panel-select');
     selectElements.forEach(select => {
         const cell = select.closest('.panel-cell');
         if (!cell) return;
 
         const mid = select.getAttribute('data-mid');
         const ctrl = select.getAttribute('data-ctrl');
+        const cellKey = `${mid}_${ctrl}`;
 
-        // Full-cell wheel scroll listener to cycle options
+        // Full-cell wheel scroll listener to cycle options with physics accumulator
         cell.addEventListener('wheel', (e) => {
             if (cell.classList.contains('panel-cell-empty')) return;
             e.preventDefault();
-            if (e.deltaY === 0 || select.options.length <= 1) return;
-            const direction = e.deltaY < 0 ? -1 : 1;
+            if (select.options.length <= 1) return;
+
+            const steps = processWheelDelta(cellKey, e);
+            if (steps === 0) return;
+
+            // In wheel scrolling, steps > 0 means wheeling up (previous option), steps < 0 means wheeling down (next option)
+            const direction = -steps;
             const nextIdx = Math.max(0, Math.min(select.options.length - 1, select.selectedIndex + direction));
             if (nextIdx !== select.selectedIndex) {
                 select.selectedIndex = nextIdx;
-                select.dataset.lastInteraction = Date.now();
                 const numVal = Number(select.value);
-                dispatchPanelControl(mid, ctrl, numVal);
+
+                // Instantly update dependent RGB gain rows if color preset changed
                 if (ctrl === 'colorPreset') {
-                    const targetMon = latestMonitors.find(item => item.id === mid);
-                    if (targetMon) {
-                        targetMon.colorPreset = numVal;
-                    }
-                    currentPanelMonitorSignature = null;
-                    renderPanelControls(latestMonitors);
+                    syncRgbGainVisibility(root);
                 }
+
+                // Debounce rapid wheel flicks on select elements to prevent I2C bus flooding
+                scheduleDispatch(mid, ctrl, numVal, 150);
             }
         }, { passive: false });
 
         select.addEventListener('change', (e) => {
-            select.dataset.lastInteraction = Date.now();
             const val = Number(e.target.value);
-            dispatchPanelControl(mid, ctrl, val);
             if (ctrl === 'colorPreset') {
-                const targetMon = latestMonitors.find(item => item.id === mid);
-                if (targetMon) {
-                    targetMon.colorPreset = val;
-                }
-                currentPanelMonitorSignature = null;
-                renderPanelControls(latestMonitors);
+                syncRgbGainVisibility(root);
             }
+            flushPendingDispatch(mid, ctrl, val);
         });
     });
 }
