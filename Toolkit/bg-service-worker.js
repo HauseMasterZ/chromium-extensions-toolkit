@@ -1247,15 +1247,9 @@ function rehydrateDarkScripts() {
 let nativeTelemetryPort = null;
 const telemetryClients = new Set();
 let lastTelemetryData = null;
-let hostShutdownTimeout = null;
 
 chrome.runtime.onConnect.addListener((clientPort) => {
   if (clientPort.name !== 'telemetry') return;
-
-  if (hostShutdownTimeout) {
-    clearTimeout(hostShutdownTimeout);
-    hostShutdownTimeout = null;
-  }
 
   telemetryClients.add(clientPort);
 
@@ -1286,14 +1280,8 @@ chrome.runtime.onConnect.addListener((clientPort) => {
 
   clientPort.onDisconnect.addListener(() => {
     telemetryClients.delete(clientPort);
-    // 25-second keepalive grace window: prevents cold-start restarts when closing/reopening tabs
     if (telemetryClients.size === 0) {
-      if (hostShutdownTimeout) clearTimeout(hostShutdownTimeout);
-      hostShutdownTimeout = setTimeout(() => {
-        if (telemetryClients.size === 0) {
-          stopNativeTelemetry();
-        }
-      }, 25000);
+      stopNativeTelemetry();
     }
   });
 });
@@ -1337,10 +1325,6 @@ function startNativeTelemetry() {
 }
 
 function stopNativeTelemetry() {
-  if (hostShutdownTimeout) {
-    clearTimeout(hostShutdownTimeout);
-    hostShutdownTimeout = null;
-  }
   if (nativeTelemetryPort) {
     try {
       nativeTelemetryPort.disconnect();

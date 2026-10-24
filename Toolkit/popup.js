@@ -5,9 +5,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const btnEditShortcuts = document.getElementById('btnEditShortcuts');
     const inputSeekSeconds = document.getElementById('inputSeekSeconds');
     const toggleCustomSeek = document.getElementById('toggleCustomSeek');
-    const rowDefaultZoom = document.getElementById('rowDefaultZoom');
-    const inputDefaultZoom = document.getElementById('inputDefaultZoom');
     const toggleDefaultZoom = document.getElementById('toggleDefaultZoom');
+    const displaysContainer = document.getElementById('displaysContainer');
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const isInjectable = tab?.url && !/^(chrome|edge|devtools|about):|chrome\.google\.com\/webstore/.test(tab.url);
@@ -47,7 +46,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         } catch {}
     } else {
-        darkModeToggle.closest('.toggle-row').classList.add('disabled');
+        darkModeToggle.closest('.toggle-row')?.classList.add('disabled');
     }
 
     darkModeToggle.addEventListener('change', () => {
@@ -98,29 +97,90 @@ document.addEventListener('DOMContentLoaded', async () => {
         inputSeekSeconds.addEventListener('click', (e) => e.stopPropagation());
     }
 
-    // Default Zoom: % Controller (Ephemeral internal display auto-zoom)
-    const updateZoomInputState = () => {
-        if (toggleDefaultZoom && inputDefaultZoom) {
-            inputDefaultZoom.disabled = !toggleDefaultZoom.checked;
-            const box = inputDefaultZoom.closest('.seek-input-box');
-            if (box) box.style.opacity = toggleDefaultZoom.checked ? '1' : '0.4';
+    // Resolution-Agnostic Multi-Monitor Auto-Detection & Zoom UI
+    const renderDisplays = (displays, displaysZoomConfig, isEnabled) => {
+        if (!displaysContainer) return;
+        if (!Array.isArray(displays) || displays.length === 0) {
+            displaysContainer.innerHTML = '<div style="font-size: 11.5px; color: var(--text-secondary);">No displays detected</div>';
+            return;
         }
+
+        displaysContainer.innerHTML = '';
+        const sortedDisplays = [...displays].sort((a, b) => {
+            if (a.isPrimary && !b.isPrimary) return -1;
+            if (!a.isPrimary && b.isPrimary) return 1;
+            return (a.bounds?.left || 0) - (b.bounds?.left || 0);
+        });
+
+        sortedDisplays.forEach((d, idx) => {
+            const row = document.createElement('div');
+            row.className = 'display-row';
+
+            const displayName = `#${idx + 1}`;
+            const hoverTitle = d.name || (d.isInternal ? 'Internal Display' : `Display ${idx + 1}`);
+            const resolution = `${d.bounds.width}\u00D7${d.bounds.height}`;
+            const isInternal = Boolean(d.isInternal);
+            const isPrimary = Boolean(d.isPrimary);
+
+            let zoomVal = 100;
+            if (displaysZoomConfig && displaysZoomConfig[d.id] !== undefined) {
+                zoomVal = Number(displaysZoomConfig[d.id]) || 100;
+            } else if (isInternal) {
+                zoomVal = 120;
+            }
+
+            const badgesHtml = `
+                <span class="display-badge">${resolution}</span>
+                ${isInternal ? '<span class="display-badge internal">Internal</span>' : ''}
+                ${isPrimary ? '<span class="display-badge primary">Primary</span>' : ''}
+            `;
+
+            row.innerHTML = `
+                <div class="display-info">
+                    <div class="display-name" title="${hoverTitle}">${displayName}</div>
+                    <div class="display-badges">${badgesHtml}</div>
+                </div>
+                <div class="seek-input-box" title="Zoom percentage">
+                    <input type="number" class="display-zoom-input" data-id="${d.id}" min="100" max="200" step="5" value="${zoomVal}" ${isEnabled ? '' : 'disabled'}>
+                    <span class="seek-unit">%</span>
+                </div>
+            `;
+
+            const input = row.querySelector('.display-zoom-input');
+            input.addEventListener('click', (e) => e.stopPropagation());
+            input.addEventListener('change', (e) => {
+                const val = Math.max(100, Math.min(200, parseInt(e.target.value, 10) || 100));
+                e.target.value = val;
+                chrome.storage.local.get({ displaysZoomConfig: {} }, (res) => {
+                    const cfg = res.displaysZoomConfig || {};
+                    cfg[d.id] = val;
+                    chrome.storage.local.set({ displaysZoomConfig: cfg });
+                });
+            });
+
+            displaysContainer.appendChild(row);
+        });
+
+        displaysContainer.style.opacity = isEnabled ? '1' : '0.4';
     };
 
-    if (rowDefaultZoom && toggleDefaultZoom && inputDefaultZoom) {
-        rowDefaultZoom.addEventListener('click', (e) => {
-            if (e.target.closest('.seek-input-box') || e.target.closest('.switch')) return;
-            toggleDefaultZoom.checked = !toggleDefaultZoom.checked;
-            toggleDefaultZoom.dispatchEvent(new Event('change'));
-        });
+    const loadDisplaysUi = async (isEnabled) => {
+        try {
+            const { cachedDisplays = [], displaysZoomConfig = {} } = await chrome.storage.local.get(['cachedDisplays', 'displaysZoomConfig']);
+            let displays = cachedDisplays;
+            try {
+                const liveDisplays = await chrome.system.display.getInfo();
+                if (Array.isArray(liveDisplays) && liveDisplays.length > 0) {
+                    displays = liveDisplays;
+                    chrome.storage.local.set({ cachedDisplays: liveDisplays });
+                }
+            } catch {}
 
-        inputDefaultZoom.addEventListener('click', (e) => e.stopPropagation());
-        inputDefaultZoom.addEventListener('change', () => {
-            const val = Math.max(100, Math.min(200, parseInt(inputDefaultZoom.value, 10) || 120));
-            inputDefaultZoom.value = val;
-            chrome.storage.local.set({ defaultZoomLevel: val });
-        });
-    }
+            renderDisplays(displays, displaysZoomConfig, isEnabled);
+        } catch (e) {
+            console.error('Failed to load displays:', e);
+        }
+    };
 
     // Context-Aware UI: Grey out irrelevant toggles
     const url = tab?.url || '';
@@ -141,8 +201,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         toggleYtMusic: 'featureYtMusic',
         toggleNewTabPage: 'featureNewTabPage',
         toggleWhatsapp: 'featureWhatsapp',
-        togglePasteGo: 'featurePasteGo',
-        toggleDefaultZoom: 'featureDefaultZoom'
+        togglePasteGo: 'featurePasteGo'
     };
 
     const scriptActionMap = {
@@ -158,14 +217,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         featureNewTabPage: true,
         featureWhatsapp: true,
         featurePasteGo: true,
-        featureDefaultZoom: true,
-        defaultZoomLevel: 120
+        featureDefaultZoom: true
     };
 
     chrome.storage.local.get(defaultSettings, (res) => {
-        if (inputDefaultZoom) {
-            inputDefaultZoom.value = res.defaultZoomLevel || 120;
-        }
         for (const [id, key] of Object.entries(toggles)) {
             const el = document.getElementById(id);
             if (!el) continue;
@@ -173,15 +228,27 @@ document.addEventListener('DOMContentLoaded', async () => {
             el.addEventListener('change', (e) => {
                 const enabled = e.target.checked;
                 chrome.storage.local.set({ [key]: enabled });
-                if (id === 'toggleDefaultZoom') {
-                    updateZoomInputState();
-                }
                 if (scriptActionMap[key]) {
                     chrome.runtime.sendMessage({ action: scriptActionMap[key], enabled });
                 }
             });
         }
-        updateZoomInputState();
+
+        if (toggleDefaultZoom) {
+            const isZoomEnabled = Boolean(res.featureDefaultZoom);
+            toggleDefaultZoom.checked = isZoomEnabled;
+            loadDisplaysUi(isZoomEnabled);
+
+            toggleDefaultZoom.addEventListener('change', (e) => {
+                const enabled = e.target.checked;
+                chrome.storage.local.set({ featureDefaultZoom: enabled });
+                if (displaysContainer) {
+                    displaysContainer.style.opacity = enabled ? '1' : '0.4';
+                    const inputs = displaysContainer.querySelectorAll('.display-zoom-input');
+                    inputs.forEach(inp => inp.disabled = !enabled);
+                }
+            });
+        }
     });
 
     btnEditShortcuts?.addEventListener('click', () => {
