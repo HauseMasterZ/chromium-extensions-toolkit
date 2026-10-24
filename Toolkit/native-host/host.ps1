@@ -229,15 +229,54 @@ public class MonitorController {
         public int blueLight;
     }
 
+    public class BoundPhysicalMonitor {
+        public string id;
+        public IntPtr hPhys;
+        public uint count;
+        public PHYSICAL_MONITOR[] monitors;
+        public string gdiDevice;
+        public string pnpId;
+        public string name;
+        public bool isAcer;
+        public bool isSoftwareBrightnessActive;
+    }
+
     public static volatile bool IsRunning = true;
     public static volatile bool HasProbed = false;
     public static List<DisplayDeviceItem> CurrentMonitors = new List<DisplayDeviceItem>();
+    public static List<BoundPhysicalMonitor> BoundMonitors = new List<BoundPhysicalMonitor>();
+    public static Dictionary<string, string> SavedFriendlyNames = new Dictionary<string, string>();
     public static object SyncLock = new object();
 
+    public static void ReleaseBoundMonitors() {
+        lock (SyncLock) {
+            foreach (var b in BoundMonitors) {
+                try {
+                    if (b.monitors != null && b.count > 0) {
+                        DestroyPhysicalMonitors(b.count, b.monitors);
+                    }
+                } catch {}
+            }
+            BoundMonitors.Clear();
+        }
+    }
+
+    public static void ReProbePhysicalMonitors() {
+        try {
+            ProbeAllMonitors(SavedFriendlyNames);
+        } catch {}
+    }
+
     public static void ProbeAllMonitors(Dictionary<string, string> friendlyNames) {
+        if (friendlyNames != null) {
+            SavedFriendlyNames = friendlyNames;
+        }
         var list = new List<DisplayDeviceItem>();
+        var boundList = new List<BoundPhysicalMonitor>();
         int ddcIndex = 0;
         try {
+            ReleaseBoundMonitors();
+
             EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (hMonitor, hdc, lprc, data) => {
                 uint count = 0;
                 if (GetNumberOfPhysicalMonitorsFromHMONITOR(hMonitor, out count) && count > 0) {
@@ -245,8 +284,18 @@ public class MonitorController {
                     if (GetPhysicalMonitorsFromHMONITOR(hMonitor, count, physicalMonitors)) {
                         for (int i = 0; i < count; i++) {
                             IntPtr hPhys = physicalMonitors[i].hPhysicalMonitor;
-                            uint bMin, bCur, bMax;
-                            if (GetMonitorBrightness(hPhys, out bMin, out bCur, out bMax)) {
+                            uint bMin = 0, bCur = 50, bMax = 100;
+                            bool hasBrightness = GetMonitorBrightness(hPhys, out bMin, out bCur, out bMax);
+                            if (!hasBrightness) {
+                                uint pvct, vCur, vMax;
+                                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x10, out pvct, out vCur, out vMax)) {
+                                    bCur = vCur;
+                                    bMax = vMax > 0 ? vMax : 100;
+                                    hasBrightness = true;
+                                }
+                            }
+
+                            if (hasBrightness) {
                                 var item = new DisplayDeviceItem();
                                 item.id = "mon_" + ddcIndex;
                                 item.brightness = (int)bCur;
@@ -305,10 +354,26 @@ public class MonitorController {
                                 }
 
                                 list.Add(item);
+
+                                var bound = new BoundPhysicalMonitor();
+                                bound.id = item.id;
+                                bound.hPhys = hPhys;
+                                bound.count = count;
+                                bound.monitors = physicalMonitors;
+                                bound.gdiDevice = item.gdiDevice;
+                                bound.pnpId = item.pnpId;
+                                bound.name = item.name;
+                                bound.isAcer = isAcer;
+                                bound.isSoftwareBrightnessActive = false;
+                                boundList.Add(bound);
+
                                 ddcIndex++;
+                            } else {
+                                try {
+                                    DestroyPhysicalMonitors(count, physicalMonitors);
+                                } catch {}
                             }
                         }
-                        DestroyPhysicalMonitors(count, physicalMonitors);
                     }
                 }
                 return true;
@@ -316,197 +381,365 @@ public class MonitorController {
 
             lock (SyncLock) {
                 CurrentMonitors = list;
+                BoundMonitors = boundList;
                 HasProbed = true;
             }
         } catch {}
     }
 
-    public static bool ApplyControl(string monitorId, string control, int val) {
-        bool updated = false;
-        try {
-            int targetIndex = -1;
-            DisplayDeviceItem targetMon = null;
-            lock (SyncLock) {
-                for (int i = 0; i < CurrentMonitors.Count; i++) {
-                    if (CurrentMonitors[i].id == monitorId) {
-                        targetIndex = i;
-                        targetMon = CurrentMonitors[i];
-                        break;
+    public static BoundPhysicalMonitor FindBoundMonitor(string monitorId, string pnpId = null, string gdiDevice = null, bool? isAcer = null) {
+        lock (SyncLock) {
+            if (!string.IsNullOrEmpty(monitorId)) {
+                for (int i = 0; i < BoundMonitors.Count; i++) {
+                    if (BoundMonitors[i].id == monitorId) return BoundMonitors[i];
+                }
+            }
+            string targetPnp = !string.IsNullOrEmpty(pnpId) ? pnpId : monitorId;
+            if (!string.IsNullOrEmpty(targetPnp)) {
+                for (int i = 0; i < BoundMonitors.Count; i++) {
+                    if (!string.IsNullOrEmpty(BoundMonitors[i].pnpId) && BoundMonitors[i].pnpId.Equals(targetPnp, StringComparison.OrdinalIgnoreCase)) {
+                        return BoundMonitors[i];
                     }
                 }
             }
-            if (targetIndex < 0 || targetMon == null) return false;
+            string targetGdi = !string.IsNullOrEmpty(gdiDevice) ? gdiDevice : monitorId;
+            if (!string.IsNullOrEmpty(targetGdi)) {
+                for (int i = 0; i < BoundMonitors.Count; i++) {
+                    if (!string.IsNullOrEmpty(BoundMonitors[i].gdiDevice) && BoundMonitors[i].gdiDevice.Equals(targetGdi, StringComparison.OrdinalIgnoreCase)) {
+                        return BoundMonitors[i];
+                    }
+                }
+            }
+            if (!string.IsNullOrEmpty(monitorId)) {
+                bool wantAcer = monitorId.IndexOf("acer", StringComparison.OrdinalIgnoreCase) >= 0 || monitorId.IndexOf("acr", StringComparison.OrdinalIgnoreCase) >= 0;
+                bool wantLenovo = monitorId.IndexOf("lenovo", StringComparison.OrdinalIgnoreCase) >= 0 || monitorId.IndexOf("len", StringComparison.OrdinalIgnoreCase) >= 0;
+                for (int i = 0; i < BoundMonitors.Count; i++) {
+                    if (wantAcer && BoundMonitors[i].isAcer) return BoundMonitors[i];
+                    if (wantLenovo && !BoundMonitors[i].isAcer) return BoundMonitors[i];
+                }
+            }
+            if (isAcer.HasValue) {
+                for (int i = 0; i < BoundMonitors.Count; i++) {
+                    if (BoundMonitors[i].isAcer == isAcer.Value) return BoundMonitors[i];
+                }
+            }
+            if (BoundMonitors.Count > 0) return BoundMonitors[0];
+            return null;
+        }
+    }
 
-            bool isAcer = (!string.IsNullOrEmpty(targetMon.pnpId) && targetMon.pnpId.StartsWith("ACR", StringComparison.OrdinalIgnoreCase)) ||
-                          (!string.IsNullOrEmpty(targetMon.name) && targetMon.name.IndexOf("Acer", StringComparison.OrdinalIgnoreCase) >= 0);
+    public static bool ResetSoftwareGamma(string gdiDevice) {
+        if (string.IsNullOrEmpty(gdiDevice)) return false;
+        try {
+            IntPtr hdc = CreateDC(null, gdiDevice, null, IntPtr.Zero);
+            if (hdc == IntPtr.Zero) return false;
+            ushort[] ramp = new ushort[3 * 256];
+            for (int i = 0; i < 256; i++) {
+                ushort val = (ushort)(i * 256);
+                ramp[i] = val;
+                ramp[i + 256] = val;
+                ramp[i + 512] = val;
+            }
+            bool res = SetDeviceGammaRamp(hdc, ramp);
+            DeleteDC(hdc);
+            return res;
+        } catch {
+            return false;
+        }
+    }
 
-            int currentDdcIdx = 0;
-            EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (hMonitor, hdc, lprc, data) => {
-                uint count = 0;
-                if (GetNumberOfPhysicalMonitorsFromHMONITOR(hMonitor, out count) && count > 0) {
-                    var physicalMonitors = new PHYSICAL_MONITOR[count];
-                    if (GetPhysicalMonitorsFromHMONITOR(hMonitor, count, physicalMonitors)) {
-                        for (int i = 0; i < count; i++) {
-                            IntPtr hPhys = physicalMonitors[i].hPhysicalMonitor;
-                            uint bMin, bCur, bMax;
-                            if (GetMonitorBrightness(hPhys, out bMin, out bCur, out bMax)) {
-                                if (currentDdcIdx == targetIndex) {
-                                    int clamped0to100 = Math.Max(0, Math.Min(100, val));
-                                    switch (control.ToLowerInvariant()) {
-                                        case "brightness":
-                                            bool hwOk = SetMonitorBrightness(hPhys, (uint)clamped0to100) || SetVCPFeature(hPhys, 0x10, (uint)clamped0to100);
-                                            uint checkMin, checkCur, checkMax;
-                                            bool readBackOk = GetMonitorBrightness(hPhys, out checkMin, out checkCur, out checkMax);
-                                            if (!readBackOk || checkCur != (uint)clamped0to100) {
-                                                // Hardware backlight is locked by monitor firmware (e.g. DCR enabled in OSD)
-                                                // Fallback to seamless GDI gamma LUT dimming
-                                                ApplySoftwareBrightness(targetMon.gdiDevice, clamped0to100);
-                                            } else {
-                                                // Hardware backlight succeeded directly, keep gamma ramp clean and linear at 100%
-                                                ApplySoftwareBrightness(targetMon.gdiDevice, 100);
-                                            }
-                                            lock (SyncLock) { CurrentMonitors[targetIndex].brightness = clamped0to100; }
-                                            updated = true;
-                                            break;
-                                        case "contrast":
-                                            if (SetMonitorContrast(hPhys, (uint)clamped0to100) || SetVCPFeature(hPhys, 0x12, (uint)clamped0to100)) {
-                                                lock (SyncLock) { CurrentMonitors[targetIndex].contrast = clamped0to100; }
-                                                updated = true;
-                                            }
-                                            break;
-                                        case "gain_r":
-                                        case "gainr":
-                                            if (SetMonitorRedGreenOrBlueGain(hPhys, 0, (uint)clamped0to100)) {
-                                                lock (SyncLock) { CurrentMonitors[targetIndex].gainR = clamped0to100; }
-                                                updated = true;
-                                            }
-                                            break;
-                                        case "gain_g":
-                                        case "gaing":
-                                            if (SetMonitorRedGreenOrBlueGain(hPhys, 1, (uint)clamped0to100)) {
-                                                lock (SyncLock) { CurrentMonitors[targetIndex].gainG = clamped0to100; }
-                                                updated = true;
-                                            }
-                                            break;
-                                        case "gain_b":
-                                        case "gainb":
-                                            if (SetMonitorRedGreenOrBlueGain(hPhys, 2, (uint)clamped0to100)) {
-                                                lock (SyncLock) { CurrentMonitors[targetIndex].gainB = clamped0to100; }
-                                                updated = true;
-                                            }
-                                            break;
-                                        case "volume":
-                                            if (SetVCPFeature(hPhys, 0x62, (uint)clamped0to100)) {
-                                                lock (SyncLock) { CurrentMonitors[targetIndex].volume = clamped0to100; }
-                                                updated = true;
-                                            }
-                                            break;
-                                        case "input":
-                                        case "inputsource":
-                                            if (SetVCPFeature(hPhys, 0x60, (uint)val)) {
-                                                lock (SyncLock) { CurrentMonitors[targetIndex].inputSource = val; }
-                                                updated = true;
-                                            }
-                                            break;
-                                        case "preset":
-                                        case "colorpreset":
-                                            if (SetVCPFeature(hPhys, 0x14, (uint)val)) {
-                                                lock (SyncLock) { CurrentMonitors[targetIndex].colorPreset = val; }
-                                                updated = true;
-                                            }
-                                            break;
-                                        case "power":
-                                        case "powermode":
-                                            if (SetVCPFeature(hPhys, 0xD6, (uint)val)) {
-                                                lock (SyncLock) { CurrentMonitors[targetIndex].powerMode = val; }
-                                                updated = true;
-                                            }
-                                            break;
-                                        case "gamma":
-                                            if (SetVCPFeature(hPhys, 0x72, (uint)val)) {
-                                                lock (SyncLock) { CurrentMonitors[targetIndex].gamma = val; }
-                                                updated = true;
-                                            }
-                                            break;
-                                        case "blackboost":
-                                        case "blacklevel":
-                                            if (SetVCPFeature(hPhys, 0x6C, (uint)clamped0to100)) {
-                                                lock (SyncLock) {
-                                                    CurrentMonitors[targetIndex].blackBoost = clamped0to100;
-                                                    CurrentMonitors[targetIndex].blackLevel = clamped0to100;
-                                                }
-                                                updated = true;
-                                            }
-                                            break;
-                                        case "darkboost":
-                                            if (SetVCPFeature(hPhys, 0xF6, (uint)val)) {
-                                                lock (SyncLock) { CurrentMonitors[targetIndex].darkBoost = val; }
-                                                updated = true;
-                                            }
-                                            break;
-                                        case "overdrive":
-                                            byte odCode = isAcer ? (byte)0xE8 : (byte)0xE0;
-                                            if (SetVCPFeature(hPhys, odCode, (uint)val)) {
-                                                lock (SyncLock) { CurrentMonitors[targetIndex].overdrive = val; }
-                                                updated = true;
-                                            }
-                                            break;
-                                        case "strobing":
-                                        case "vrb":
-                                            byte stCode = isAcer ? (byte)0xE5 : (byte)0xEF;
-                                            if (SetVCPFeature(hPhys, stCode, (uint)val)) {
-                                                lock (SyncLock) {
-                                                    CurrentMonitors[targetIndex].strobing = val;
-                                                    CurrentMonitors[targetIndex].mprt = val;
-                                                }
-                                                updated = true;
-                                            }
-                                            break;
-                                        case "mprt":
-                                            byte mprtCode = isAcer ? (byte)0xE5 : (byte)0xEF;
-                                            if (SetVCPFeature(hPhys, mprtCode, (uint)val)) {
-                                                lock (SyncLock) {
-                                                    CurrentMonitors[targetIndex].mprt = val;
-                                                    CurrentMonitors[targetIndex].strobing = val;
-                                                }
-                                                updated = true;
-                                            }
-                                            break;
-                                        case "freesync":
-                                            byte fsCode = isAcer ? (byte)0xE0 : (byte)0xEA;
-                                            if (SetVCPFeature(hPhys, fsCode, (uint)val)) {
-                                                lock (SyncLock) { CurrentMonitors[targetIndex].freeSync = val; }
-                                                updated = true;
-                                            }
-                                            break;
-                                        case "supersharpness":
-                                            uint ssVal = (val > 0) ? 3u : 0u;
-                                            if (SetVCPFeature(hPhys, 0xE4, ssVal)) {
-                                                lock (SyncLock) { CurrentMonitors[targetIndex].superSharpness = (val > 0 ? 1 : 0); }
-                                                updated = true;
-                                            }
-                                            break;
-                                        case "bluelight":
-                                            uint blVal = (val == 0) ? 0u : (uint)val;
-                                            if (SetVCPFeature(hPhys, 0xE7, blVal)) {
-                                                lock (SyncLock) { CurrentMonitors[targetIndex].blueLight = val; }
-                                                updated = true;
-                                            }
-                                            break;
-                                    }
-                                    DestroyPhysicalMonitors(count, physicalMonitors);
-                                    return false;
-                                }
-                                currentDdcIdx++;
-                            }
-                        }
-                        DestroyPhysicalMonitors(count, physicalMonitors);
+    private static bool WriteVcpWithRetry(ref BoundPhysicalMonitor target, byte vcpCode, uint val) {
+        if (target == null) return false;
+        bool ok = SetVCPFeature(target.hPhys, vcpCode, val);
+        if (!ok) {
+            ReProbePhysicalMonitors();
+            target = FindBoundMonitor(target.id, target.pnpId, target.gdiDevice, target.isAcer);
+            if (target != null) {
+                ok = SetVCPFeature(target.hPhys, vcpCode, val);
+            }
+        }
+        return ok;
+    }
+
+    public static bool ApplyControl(string monitorId, string control, int val) {
+        BoundPhysicalMonitor target = FindBoundMonitor(monitorId);
+        if (target == null) {
+            ReProbePhysicalMonitors();
+            target = FindBoundMonitor(monitorId);
+        }
+        if (target == null) return false;
+
+        IntPtr hPhys = target.hPhys;
+        bool isAcer = target.isAcer;
+        string targetId = target.id;
+        string gdiDevice = target.gdiDevice;
+        int clamped0to100 = Math.Max(0, Math.Min(100, val));
+        bool ok = false;
+
+        switch (control.ToLowerInvariant()) {
+            case "brightness":
+                ok = SetMonitorBrightness(hPhys, (uint)clamped0to100) || SetVCPFeature(hPhys, 0x10, (uint)clamped0to100);
+                if (!ok) {
+                    ReProbePhysicalMonitors();
+                    target = FindBoundMonitor(targetId, target.pnpId, gdiDevice, isAcer);
+                    if (target != null) {
+                        hPhys = target.hPhys;
+                        targetId = target.id;
+                        gdiDevice = target.gdiDevice;
+                        ok = SetMonitorBrightness(hPhys, (uint)clamped0to100) || SetVCPFeature(hPhys, 0x10, (uint)clamped0to100);
+                    }
+                }
+                if (ok) {
+                    if (target != null && target.isSoftwareBrightnessActive) {
+                        ResetSoftwareGamma(gdiDevice);
+                        target.isSoftwareBrightnessActive = false;
+                    }
+                } else if (!string.IsNullOrEmpty(gdiDevice)) {
+                    ApplySoftwareBrightness(gdiDevice, clamped0to100);
+                    if (target != null) target.isSoftwareBrightnessActive = true;
+                }
+                lock (SyncLock) {
+                    for (int i = 0; i < CurrentMonitors.Count; i++) {
+                        if (CurrentMonitors[i].id == targetId) { CurrentMonitors[i].brightness = clamped0to100; break; }
                     }
                 }
                 return true;
-            }, IntPtr.Zero);
-        } catch {}
-        return updated;
+
+            case "contrast":
+                ok = SetMonitorContrast(hPhys, (uint)clamped0to100) || SetVCPFeature(hPhys, 0x12, (uint)clamped0to100);
+                if (!ok) {
+                    ReProbePhysicalMonitors();
+                    target = FindBoundMonitor(targetId, target.pnpId, gdiDevice, isAcer);
+                    if (target != null) {
+                        hPhys = target.hPhys;
+                        targetId = target.id;
+                        ok = SetMonitorContrast(hPhys, (uint)clamped0to100) || SetVCPFeature(hPhys, 0x12, (uint)clamped0to100);
+                    }
+                }
+                if (ok) {
+                    lock (SyncLock) {
+                        for (int i = 0; i < CurrentMonitors.Count; i++) {
+                            if (CurrentMonitors[i].id == targetId) { CurrentMonitors[i].contrast = clamped0to100; break; }
+                        }
+                    }
+                }
+                return ok;
+
+            case "gain_r":
+            case "gainr":
+                ok = SetMonitorRedGreenOrBlueGain(hPhys, 0, (uint)clamped0to100);
+                if (!ok) {
+                    ReProbePhysicalMonitors();
+                    target = FindBoundMonitor(targetId, target.pnpId, gdiDevice, isAcer);
+                    if (target != null) {
+                        hPhys = target.hPhys;
+                        targetId = target.id;
+                        ok = SetMonitorRedGreenOrBlueGain(hPhys, 0, (uint)clamped0to100);
+                    }
+                }
+                if (ok) {
+                    lock (SyncLock) {
+                        for (int i = 0; i < CurrentMonitors.Count; i++) {
+                            if (CurrentMonitors[i].id == targetId) { CurrentMonitors[i].gainR = clamped0to100; break; }
+                        }
+                    }
+                }
+                return ok;
+
+            case "gain_g":
+            case "gaing":
+                ok = SetMonitorRedGreenOrBlueGain(hPhys, 1, (uint)clamped0to100);
+                if (!ok) {
+                    ReProbePhysicalMonitors();
+                    target = FindBoundMonitor(targetId, target.pnpId, gdiDevice, isAcer);
+                    if (target != null) {
+                        hPhys = target.hPhys;
+                        targetId = target.id;
+                        ok = SetMonitorRedGreenOrBlueGain(hPhys, 1, (uint)clamped0to100);
+                    }
+                }
+                if (ok) {
+                    lock (SyncLock) {
+                        for (int i = 0; i < CurrentMonitors.Count; i++) {
+                            if (CurrentMonitors[i].id == targetId) { CurrentMonitors[i].gainG = clamped0to100; break; }
+                        }
+                    }
+                }
+                return ok;
+
+            case "gain_b":
+            case "gainb":
+                ok = SetMonitorRedGreenOrBlueGain(hPhys, 2, (uint)clamped0to100);
+                if (!ok) {
+                    ReProbePhysicalMonitors();
+                    target = FindBoundMonitor(targetId, target.pnpId, gdiDevice, isAcer);
+                    if (target != null) {
+                        hPhys = target.hPhys;
+                        targetId = target.id;
+                        ok = SetMonitorRedGreenOrBlueGain(hPhys, 2, (uint)clamped0to100);
+                    }
+                }
+                if (ok) {
+                    lock (SyncLock) {
+                        for (int i = 0; i < CurrentMonitors.Count; i++) {
+                            if (CurrentMonitors[i].id == targetId) { CurrentMonitors[i].gainB = clamped0to100; break; }
+                        }
+                    }
+                }
+                return ok;
+
+            case "volume":
+                ok = WriteVcpWithRetry(ref target, 0x62, (uint)clamped0to100);
+                if (ok && target != null) {
+                    lock (SyncLock) {
+                        for (int i = 0; i < CurrentMonitors.Count; i++) {
+                            if (CurrentMonitors[i].id == target.id) { CurrentMonitors[i].volume = clamped0to100; break; }
+                        }
+                    }
+                }
+                return ok;
+
+            case "input":
+            case "inputsource":
+                ok = WriteVcpWithRetry(ref target, 0x60, (uint)val);
+                if (ok && target != null) {
+                    lock (SyncLock) {
+                        for (int i = 0; i < CurrentMonitors.Count; i++) {
+                            if (CurrentMonitors[i].id == target.id) { CurrentMonitors[i].inputSource = val; break; }
+                        }
+                    }
+                }
+                return ok;
+
+            case "preset":
+            case "colorpreset":
+                ok = WriteVcpWithRetry(ref target, 0x14, (uint)val);
+                if (ok && target != null) {
+                    lock (SyncLock) {
+                        for (int i = 0; i < CurrentMonitors.Count; i++) {
+                            if (CurrentMonitors[i].id == target.id) { CurrentMonitors[i].colorPreset = val; break; }
+                        }
+                    }
+                }
+                return ok;
+
+            case "power":
+            case "powermode":
+                ok = WriteVcpWithRetry(ref target, 0xD6, (uint)val);
+                if (ok && target != null) {
+                    lock (SyncLock) {
+                        for (int i = 0; i < CurrentMonitors.Count; i++) {
+                            if (CurrentMonitors[i].id == target.id) { CurrentMonitors[i].powerMode = val; break; }
+                        }
+                    }
+                }
+                return ok;
+
+            case "gamma":
+                ok = WriteVcpWithRetry(ref target, 0x72, (uint)val);
+                if (ok && target != null) {
+                    lock (SyncLock) {
+                        for (int i = 0; i < CurrentMonitors.Count; i++) {
+                            if (CurrentMonitors[i].id == target.id) { CurrentMonitors[i].gamma = val; break; }
+                        }
+                    }
+                }
+                return ok;
+
+            case "blackboost":
+            case "blacklevel":
+                ok = WriteVcpWithRetry(ref target, 0x6C, (uint)clamped0to100);
+                if (ok && target != null) {
+                    lock (SyncLock) {
+                        for (int i = 0; i < CurrentMonitors.Count; i++) {
+                            if (CurrentMonitors[i].id == target.id) {
+                                CurrentMonitors[i].blackBoost = clamped0to100;
+                                CurrentMonitors[i].blackLevel = clamped0to100;
+                                break;
+                            }
+                        }
+                    }
+                }
+                return ok;
+
+            case "darkboost":
+                ok = WriteVcpWithRetry(ref target, 0xF6, (uint)val);
+                if (ok && target != null) {
+                    lock (SyncLock) {
+                        for (int i = 0; i < CurrentMonitors.Count; i++) {
+                            if (CurrentMonitors[i].id == target.id) { CurrentMonitors[i].darkBoost = val; break; }
+                        }
+                    }
+                }
+                return ok;
+
+            case "overdrive":
+                byte odCode = isAcer ? (byte)0xE8 : (byte)0xE0;
+                ok = WriteVcpWithRetry(ref target, odCode, (uint)val);
+                if (ok && target != null) {
+                    lock (SyncLock) {
+                        for (int i = 0; i < CurrentMonitors.Count; i++) {
+                            if (CurrentMonitors[i].id == target.id) { CurrentMonitors[i].overdrive = val; break; }
+                        }
+                    }
+                }
+                return ok;
+
+            case "strobing":
+            case "vrb":
+            case "mprt":
+                byte stCode = isAcer ? (byte)0xE5 : (byte)0xEF;
+                ok = WriteVcpWithRetry(ref target, stCode, (uint)val);
+                if (ok && target != null) {
+                    lock (SyncLock) {
+                        for (int i = 0; i < CurrentMonitors.Count; i++) {
+                            if (CurrentMonitors[i].id == target.id) {
+                                CurrentMonitors[i].strobing = val;
+                                CurrentMonitors[i].mprt = val;
+                                break;
+                            }
+                        }
+                    }
+                }
+                return ok;
+
+            case "freesync":
+                byte fsCode = isAcer ? (byte)0xE0 : (byte)0xEA;
+                ok = WriteVcpWithRetry(ref target, fsCode, (uint)val);
+                if (ok && target != null) {
+                    lock (SyncLock) {
+                        for (int i = 0; i < CurrentMonitors.Count; i++) {
+                            if (CurrentMonitors[i].id == target.id) { CurrentMonitors[i].freeSync = val; break; }
+                        }
+                    }
+                }
+                return ok;
+
+            case "supersharpness":
+                uint ssVal = (val > 0) ? 3u : 0u;
+                ok = WriteVcpWithRetry(ref target, 0xE4, ssVal);
+                if (ok && target != null) {
+                    lock (SyncLock) {
+                        for (int i = 0; i < CurrentMonitors.Count; i++) {
+                            if (CurrentMonitors[i].id == target.id) { CurrentMonitors[i].superSharpness = (val > 0 ? 1 : 0); break; }
+                        }
+                    }
+                }
+                return ok;
+
+            case "bluelight":
+                uint blVal = (val == 0) ? 0u : (uint)val;
+                ok = WriteVcpWithRetry(ref target, 0xE7, blVal);
+                if (ok && target != null) {
+                    lock (SyncLock) {
+                        for (int i = 0; i < CurrentMonitors.Count; i++) {
+                            if (CurrentMonitors[i].id == target.id) { CurrentMonitors[i].blueLight = val; break; }
+                        }
+                    }
+                }
+                return ok;
+        }
+        return false;
     }
 
     public static void StartWorker(Dictionary<string, string> friendlyNames) {
@@ -549,8 +782,10 @@ public class MonitorController {
                             ApplyControl(monId, control, val);
                         }
                     } else if (json.Contains("\"set_brightness\"")) {
+                        string monId = ExtractJsonString(json, "monitorId");
+                        if (string.IsNullOrEmpty(monId)) monId = "mon_0";
                         int val = ExtractJsonInt(json, "value", 50);
-                        ApplyControl("mon_0", "brightness", val);
+                        ApplyControl(monId, "brightness", val);
                     }
                 }
             } catch {}
