@@ -56,47 +56,67 @@ function persistUnshortenCache() {
 }
 
 // Load ClearURLs rules with 3-tier fallback
+let clearUrlsInitPromise = null;
 async function initClearUrlsRules() {
-  try {
-    const { cachedClearUrlsRules } = await chrome.storage.local.get('cachedClearUrlsRules');
-    if (cachedClearUrlsRules?.providers) {
-      clearUrlsData = cachedClearUrlsRules;
-      return;
-    }
-  } catch {}
+  if (clearUrlsInitPromise) return clearUrlsInitPromise;
+  clearUrlsInitPromise = (async () => {
+    try {
+      const { cachedClearUrlsRules } = await chrome.storage.local.get('cachedClearUrlsRules');
+      if (cachedClearUrlsRules?.providers) {
+        if (!clearUrlsData || !clearUrlsData.providers) {
+          clearUrlsData = cachedClearUrlsRules;
+        }
+        return;
+      }
+    } catch {}
 
-  try {
-    const res = await fetch(chrome.runtime.getURL('clearurls-rules.json'));
-    clearUrlsData = await res.json();
-  } catch (e) {
-    console.error('Failed to load bundled clearurls rules:', e);
-  }
+    try {
+      const res = await fetch(chrome.runtime.getURL('clearurls-rules.json'));
+      const bundled = await res.json();
+      if (!clearUrlsData || !clearUrlsData.providers) {
+        clearUrlsData = bundled;
+      }
+    } catch (e) {
+      console.error('Failed to load bundled clearurls rules:', e);
+    }
+  })();
+  return clearUrlsInitPromise;
 }
 
 // Load Shortener Domains with 3-tier fallback
+let shortenersInitPromise = null;
 async function initShortenersList() {
-  try {
-    const { cachedShortenersList } = await chrome.storage.local.get('cachedShortenersList');
-    if (Array.isArray(cachedShortenersList) && cachedShortenersList.length > 0) {
-      shortenersSet = new Set(cachedShortenersList);
-      return;
-    }
-  } catch {}
+  if (shortenersInitPromise) return shortenersInitPromise;
+  shortenersInitPromise = (async () => {
+    try {
+      const { cachedShortenersList } = await chrome.storage.local.get('cachedShortenersList');
+      if (Array.isArray(cachedShortenersList) && cachedShortenersList.length > 0) {
+        if (!shortenersSet || shortenersSet.size === 0) {
+          shortenersSet = new Set(cachedShortenersList);
+        }
+        return;
+      }
+    } catch {}
 
-  try {
-    const res = await fetch(chrome.runtime.getURL('shorteners-rules.json'));
-    const list = await res.json();
-    if (Array.isArray(list)) {
-      shortenersSet = new Set(list);
-      await chrome.storage.local.set({ cachedShortenersList: list });
+    try {
+      const res = await fetch(chrome.runtime.getURL('shorteners-rules.json'));
+      const list = await res.json();
+      if (Array.isArray(list)) {
+        if (!shortenersSet || shortenersSet.size === 0) {
+          shortenersSet = new Set(list);
+        }
+        await chrome.storage.local.set({ cachedShortenersList: list });
+      }
+    } catch (e) {
+      console.error('Failed to load bundled shorteners list:', e);
     }
-  } catch (e) {
-    console.error('Failed to load bundled shorteners list:', e);
-  }
+  })();
+  return shortenersInitPromise;
 }
 
 // Fetch live rules from GitHub
 async function syncRemoteClearUrlsRules(force = false) {
+  await initClearUrlsRules();
   if (!force) {
     try {
       const { lastRulesSyncTime } = await chrome.storage.local.get('lastRulesSyncTime');
@@ -120,6 +140,7 @@ async function syncRemoteClearUrlsRules(force = false) {
 
 // Fetch live shorteners & clickthroughs (Repo Mirror 40k+ Dataset -> HaGeZi/AdGuard Upstream Fallback)
 async function syncRemoteShortenersList(force = false) {
+  await initShortenersList();
   if (!force) {
     try {
       const { lastShortenersSyncTime } = await chrome.storage.local.get('lastShortenersSyncTime');
@@ -282,10 +303,14 @@ async function syncWeather(force = false) {
   return weatherSyncPromise;
 }
 
-initClearUrlsRules();
-initShortenersList();
-syncRemoteClearUrlsRules(false);
-syncRemoteShortenersList(false);
+(async () => {
+  await initClearUrlsRules();
+  await syncRemoteClearUrlsRules(false);
+})();
+(async () => {
+  await initShortenersList();
+  await syncRemoteShortenersList(false);
+})();
 ensureUnshortenCacheInitialized();
 syncWeather(false);
 
@@ -326,11 +351,15 @@ function openTarget(targetUrl, isExtensionPage, tabId) {
 let offscreenCreationPromise = null;
 let offscreenCloseTimer = null;
 
-async function ensureOffscreenDocument() {
+function refreshOffscreenIdleTimer() {
   if (offscreenCloseTimer) clearTimeout(offscreenCloseTimer);
   offscreenCloseTimer = setTimeout(() => {
     closeOffscreenDocument();
   }, 60000);
+}
+
+async function ensureOffscreenDocument() {
+  refreshOffscreenIdleTimer();
 
   if (chrome.offscreen?.hasDocument && await chrome.offscreen.hasDocument()) {
     return;
@@ -1264,6 +1293,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             imageId: msg.imageId,
             dataUrl: dataUrl
           }, (ocrRes) => {
+            refreshOffscreenIdleTimer();
             if (chrome.runtime.lastError) {
               sendResponse({ success: false, imageId: msg.imageId, error: chrome.runtime.lastError.message });
             } else {
@@ -1271,6 +1301,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             }
           });
         } catch (err) {
+          refreshOffscreenIdleTimer();
           sendResponse({ success: false, imageId: msg.imageId, error: err?.message || String(err) });
         }
       })();
@@ -1746,6 +1777,9 @@ function startNativeTelemetry() {
         } catch (e) {
           telemetryClients.delete(client);
         }
+      }
+      if (telemetryClients.size === 0) {
+        scheduleHostTeardown();
       }
     });
 

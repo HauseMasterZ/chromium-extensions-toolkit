@@ -5,6 +5,20 @@
     console.log("[WA Virtual Cam] Stable Build Active: 30 FPS Text Priority.");
     window.__wa_virtual_cam_refs = [];
 
+    const trackCleanupMap = new WeakMap();
+    if (!MediaStreamTrack.prototype.__waOriginalStop) {
+        const originalTrackStop = MediaStreamTrack.prototype.stop;
+        MediaStreamTrack.prototype.__waOriginalStop = originalTrackStop;
+        MediaStreamTrack.prototype.stop = function() {
+            const cleanupFn = trackCleanupMap.get(this);
+            if (typeof cleanupFn === 'function') {
+                trackCleanupMap.delete(this);
+                try { cleanupFn(); } catch (e) {}
+            }
+            return originalTrackStop.apply(this, arguments);
+        };
+    }
+
     // ==========================================
     // 1. HARDWARE CHECK BYPASS
     // ==========================================
@@ -47,12 +61,14 @@
             if (audioTrack) tracks.push(audioTrack);
             
             window.__wa_virtual_cam_refs.push(canvas, fakeStream);
-            videoTrack.onended = () => {
+            const cleanupFake = () => {
                 const idx = window.__wa_virtual_cam_refs.indexOf(canvas);
                 if (idx !== -1) window.__wa_virtual_cam_refs.splice(idx, 1);
                 const idx2 = window.__wa_virtual_cam_refs.indexOf(fakeStream);
                 if (idx2 !== -1) window.__wa_virtual_cam_refs.splice(idx2, 1);
             };
+            videoTrack.onended = cleanupFake;
+            trackCleanupMap.set(videoTrack, cleanupFake);
             return new MediaStream(tracks);
         }
         return originalGetUserMedia(constraints);
@@ -125,18 +141,34 @@
         correctedVideoTrack.getSettings = () => originalSettings;
         Object.defineProperty(correctedVideoTrack, 'label', { get: () => realVideoTrack.label });
 
+        const returnTracks = [correctedVideoTrack];
+        const audioTracks = realStream.getAudioTracks();
+        if (audioTracks.length > 0) {
+            returnTracks.push(audioTracks[0]);
+        }
+
         const cleanup = () => {
             if (!active) return;
             active = false;
             try { realVideoTrack.stop(); } catch {}
             try { correctedVideoTrack.stop(); } catch {}
+            for (let i = 0; i < audioTracks.length; i++) {
+                try { audioTracks[i].stop(); } catch {}
+            }
+            try { video.pause(); } catch {}
             video.srcObject = null;
             window.__wa_virtual_cam_refs = window.__wa_virtual_cam_refs.filter(r => r !== video && r !== canvas);
         };
 
         correctedVideoTrack.onended = cleanup;
         realVideoTrack.onended = cleanup;
+        trackCleanupMap.set(correctedVideoTrack, cleanup);
+        trackCleanupMap.set(realVideoTrack, cleanup);
+        for (let i = 0; i < audioTracks.length; i++) {
+            audioTracks[i].onended = cleanup;
+            trackCleanupMap.set(audioTracks[i], cleanup);
+        }
 
-        return new MediaStream([correctedVideoTrack]);
+        return new MediaStream(returnTracks);
     };
 })();

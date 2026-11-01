@@ -5,17 +5,6 @@
   let currentVolume = 1.0;
   let isObserving = false;
 
-  function applyVolumeTo(element) {
-    if (element.nodeName === 'AUDIO' || element.nodeName === 'VIDEO') {
-      element.volume = currentVolume;
-    }
-    if (element.querySelectorAll) {
-      const media = element.querySelectorAll('audio, video');
-      for (let i = 0; i < media.length; i++) {
-        media[i].volume = currentVolume;
-      }
-    }
-  }
 
   function applyVolumeAll() {
     const media = document.querySelectorAll('audio, video');
@@ -24,16 +13,31 @@
     }
   }
 
+  let mutationDebounceTimer = null;
+
   const observer = new MutationObserver((mutations) => {
     if (currentVolume === 1.0) return;
+    let needsSubtreeScan = false;
     for (let i = 0; i < mutations.length; i++) {
       const added = mutations[i].addedNodes;
       for (let j = 0; j < added.length; j++) {
         const node = added[j];
         if (node.nodeType === 1) {
-          applyVolumeTo(node);
+          if (node.nodeName === 'AUDIO' || node.nodeName === 'VIDEO') {
+            node.volume = currentVolume;
+          } else if (!needsSubtreeScan && (node.firstElementChild || node.childNodes.length > 0)) {
+            needsSubtreeScan = true;
+          }
         }
       }
+    }
+    if (needsSubtreeScan && !mutationDebounceTimer) {
+      mutationDebounceTimer = setTimeout(() => {
+        mutationDebounceTimer = null;
+        if (currentVolume !== 1.0) {
+          applyVolumeAll();
+        }
+      }, 50);
     }
   });
 
@@ -45,6 +49,10 @@
         isObserving = true;
       }
     } else if (currentVolume === 1.0 && isObserving) {
+      if (mutationDebounceTimer) {
+        clearTimeout(mutationDebounceTimer);
+        mutationDebounceTimer = null;
+      }
       observer.disconnect();
       isObserving = false;
     }

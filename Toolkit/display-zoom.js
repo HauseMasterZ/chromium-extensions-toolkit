@@ -23,12 +23,43 @@
   const pendingPurgedTabs = new Set();
   const pendingPurgedWindows = new Set();
 
+  const programmaticZoomActive = new Set();
+  const programmaticZoomUntil = new Map();
+
+  function markProgrammaticZoomStart(tabId) {
+    if (!tabId) return;
+    programmaticZoomActive.add(tabId);
+    programmaticZoomUntil.set(tabId, Date.now() + 500);
+  }
+
+  function markProgrammaticZoomEnd(tabId) {
+    if (!tabId) return;
+    programmaticZoomActive.delete(tabId);
+    const now = Date.now();
+    programmaticZoomUntil.set(tabId, now + 200);
+    if (programmaticZoomUntil.size > 50) {
+      for (const [id, exp] of programmaticZoomUntil) {
+        if (exp <= now) programmaticZoomUntil.delete(id);
+      }
+    }
+  }
+
+  function isProgrammaticZoom(tabId) {
+    if (!tabId) return false;
+    if (programmaticZoomActive.has(tabId)) return true;
+    const until = programmaticZoomUntil.get(tabId);
+    if (until) {
+      if (Date.now() < until) return true;
+      programmaticZoomUntil.delete(tabId);
+    }
+    return false;
+  }
+
   let persistTabZoomPending = false;
   function persistTabUserManualZoom() {
     if (persistTabZoomPending) return;
     persistTabZoomPending = true;
     queueMicrotask(async () => {
-      persistTabZoomPending = false;
       try {
         await ensureInitialized();
         if (chrome.storage?.session) {
@@ -38,7 +69,9 @@
           }
           await chrome.storage.session.set({ zoom_tab_user_manual: obj });
         }
-      } catch {}
+      } catch {} finally {
+        persistTabZoomPending = false;
+      }
     });
   }
 
@@ -47,7 +80,6 @@
     if (persistWindowDisplayPending) return;
     persistWindowDisplayPending = true;
     queueMicrotask(async () => {
-      persistWindowDisplayPending = false;
       try {
         await ensureInitialized();
         if (chrome.storage?.session) {
@@ -57,7 +89,9 @@
           }
           await chrome.storage.session.set({ zoom_window_current_display: obj });
         }
-      } catch {}
+      } catch {} finally {
+        persistWindowDisplayPending = false;
+      }
     });
   }
 
@@ -213,13 +247,15 @@
                 windowCurrentDisplay.set(wId, dispId);
               }
             }
-            pendingPurgedWindows.clear();
           }
 
           persistTabUserManualZoom();
           persistWindowCurrentDisplay();
         }
-      } catch {}
+      } catch {} finally {
+        pendingPurgedTabs.clear();
+        pendingPurgedWindows.clear();
+      }
 
       if (!allDisplays || allDisplays.length === 0) {
         await updateDisplayLayout();
@@ -405,10 +441,13 @@
           if (t.id && !isRestrictedUrl(t.url)) {
             tabUserManualZoom.delete(t.id);
             appliedTabZoomCache.delete(t.id);
+            markProgrammaticZoomStart(t.id);
             try {
               await chrome.tabs.setZoom(t.id, 0);
               await chrome.tabs.setZoomSettings(t.id, { mode: 'automatic', scope: 'per-origin' });
-            } catch {}
+            } catch {} finally {
+              markProgrammaticZoomEnd(t.id);
+            }
           }
         }));
       }));
@@ -423,10 +462,13 @@
       await Promise.all(tabs.map(async (t) => {
         if (t.id && !isRestrictedUrl(t.url)) {
           tabUserManualZoom.delete(t.id);
+          markProgrammaticZoomStart(t.id);
           try {
             await chrome.tabs.setZoom(t.id, 0);
             await chrome.tabs.setZoomSettings(t.id, { mode: 'automatic', scope: 'per-origin' });
-          } catch {}
+          } catch {} finally {
+            markProgrammaticZoomEnd(t.id);
+          }
         }
       }));
       persistTabUserManualZoom();
@@ -524,8 +566,13 @@
         try {
           const currentSettings = await chrome.tabs.getZoomSettings(tabId);
           if (currentSettings.scope === 'per-tab') {
-            await chrome.tabs.setZoom(tabId, 0);
-            await chrome.tabs.setZoomSettings(tabId, { mode: 'automatic', scope: 'per-origin' });
+            markProgrammaticZoomStart(tabId);
+            try {
+              await chrome.tabs.setZoom(tabId, 0);
+              await chrome.tabs.setZoomSettings(tabId, { mode: 'automatic', scope: 'per-origin' });
+            } catch {} finally {
+              markProgrammaticZoomEnd(tabId);
+            }
           }
         } catch {}
       }
@@ -548,11 +595,16 @@
       const shouldApply = options.force || zoomDiff > 0.005 || scopeMismatch;
 
       if (shouldApply) {
-        await chrome.tabs.setZoomSettings(tabId, {
-          mode: 'automatic',
-          scope: 'per-tab'
-        });
-        await chrome.tabs.setZoom(tabId, targetZoom);
+        markProgrammaticZoomStart(tabId);
+        try {
+          await chrome.tabs.setZoomSettings(tabId, {
+            mode: 'automatic',
+            scope: 'per-tab'
+          });
+          await chrome.tabs.setZoom(tabId, targetZoom);
+        } finally {
+          markProgrammaticZoomEnd(tabId);
+        }
       }
       appliedTabZoomCache.set(tabId, targetZoom);
     } catch {}
@@ -681,7 +733,7 @@
   // Window closed: evict from memory
   chrome.windows.onRemoved.addListener((windowId) => {
     windowCurrentDisplay.delete(windowId);
-    pendingPurgedWindows.add(windowId);
+    if (!isInitialized) pendingPurgedWindows.add(windowId);
     persistWindowCurrentDisplay();
     const timer = windowBoundsTimers.get(windowId);
     if (timer) {
@@ -694,7 +746,7 @@
   chrome.tabs.onZoomChange.addListener(async (zoomChangeInfo) => {
     if (!isDefaultZoomEnabled) return;
     const { tabId, newZoomFactor, zoomSettings } = zoomChangeInfo;
-    if (!tabId) return;
+    if (!tabId || isProgrammaticZoom(tabId)) return;
 
     try {
       await ensureInitialized();
@@ -752,7 +804,7 @@
       // Automated reset detection: tab is loading, navigating, or in the background during origin zoom reset
       if (isLoading || isNavigating) {
         tabUserManualZoom.delete(tabId);
-        pendingPurgedTabs.add(tabId);
+        if (!isInitialized) pendingPurgedTabs.add(tabId);
         persistTabUserManualZoom();
         applyDisplayZoom(tabId, tab.windowId, effectiveUrl, { force: true });
         return;
@@ -777,12 +829,15 @@
 
       // Ensure per-tab scope so manual zoom does not leak across tabs of the same origin
       if (zoomSettings.scope !== 'per-tab') {
+        markProgrammaticZoomStart(tabId);
         try {
           await chrome.tabs.setZoomSettings(tabId, {
             mode: 'automatic',
             scope: 'per-tab'
           });
-        } catch {}
+        } catch {} finally {
+          markProgrammaticZoomEnd(tabId);
+        }
       }
     } catch {}
   });
@@ -791,7 +846,7 @@
   chrome.tabs.onCreated.addListener((tab) => {
     if (tab?.id) {
       tabUserManualZoom.delete(tab.id);
-      pendingPurgedTabs.add(tab.id);
+      if (!isInitialized) pendingPurgedTabs.add(tab.id);
       persistTabUserManualZoom();
       appliedTabZoomCache.delete(tab.id);
       if (tab.pendingUrl || tab.url) {
@@ -822,7 +877,7 @@
     if (isNavigationOrReload) {
       // Navigation or reload terminates manual zoom session; configured monitor zoom resumes
       tabUserManualZoom.delete(tabId);
-      pendingPurgedTabs.add(tabId);
+      if (!isInitialized) pendingPurgedTabs.add(tabId);
       persistTabUserManualZoom();
       appliedTabZoomCache.delete(tabId);
       if (isStatusLoading) {
@@ -869,7 +924,9 @@
     appliedTabZoomCache.delete(tabId);
     tabNavigatingUntil.delete(tabId);
     tabUserManualZoom.delete(tabId);
-    pendingPurgedTabs.add(tabId);
+    if (!isInitialized) pendingPurgedTabs.add(tabId);
+    programmaticZoomActive.delete(tabId);
+    programmaticZoomUntil.delete(tabId);
     persistTabUserManualZoom();
     tabLastUrl.delete(tabId);
   });

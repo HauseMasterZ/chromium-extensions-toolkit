@@ -341,6 +341,13 @@
       if (imagesWithText > 0) {
         showOcrToast(`OCR active: ${imagesWithText} image${imagesWithText === 1 ? '' : 's'} selectable (press again to dismiss)`, 3500);
       } else {
+        window.removeEventListener('scroll', scheduleRepositionLayers, { passive: true });
+        window.removeEventListener('resize', scheduleRepositionLayers);
+        if (repositionRaf) {
+          cancelAnimationFrame(repositionRaf);
+          repositionRaf = null;
+        }
+        isOcrActive = false;
         showOcrToast('No readable text found in page images', 2000);
       }
     }

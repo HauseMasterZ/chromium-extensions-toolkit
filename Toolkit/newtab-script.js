@@ -297,6 +297,7 @@ const ColorPresetAdapter = {
 
 let infoState = 1; // 1: Weather (Default), 2: Panel Controls, 3: Empty, 4: Sensors
 let telemetryPort = null;
+let telemetryReconnectTimer = null;
 let currentPanelTopologySignature = null;
 let latestMonitors = [];
 let clientProbeCounter = 0;
@@ -1192,7 +1193,11 @@ function requestEmpiricalMonitorProbe() {
 }
 
 function startTelemetryStream() {
-    if (telemetryPort || document.hidden) return;
+    if (telemetryReconnectTimer) {
+        clearTimeout(telemetryReconnectTimer);
+        telemetryReconnectTimer = null;
+    }
+    if (telemetryPort || document.hidden || (infoState !== 2 && infoState !== 4)) return;
     if (infoState === 4 && hardwareEl) {
         ensureTelemetryTable();
         if (latestTelemetry) {
@@ -1216,8 +1221,9 @@ function startTelemetryStream() {
         telemetryPort.onDisconnect.addListener(() => {
             telemetryPort = null;
             if ((infoState === 2 || infoState === 4) && !document.hidden) {
-                // Auto-reconnect after 1 second if service worker was recycled by Chrome
-                setTimeout(() => {
+                if (telemetryReconnectTimer) clearTimeout(telemetryReconnectTimer);
+                telemetryReconnectTimer = setTimeout(() => {
+                    telemetryReconnectTimer = null;
                     if ((infoState === 2 || infoState === 4) && !document.hidden && !telemetryPort) {
                         startTelemetryStream();
                     }
@@ -1232,6 +1238,10 @@ function startTelemetryStream() {
 }
 
 function stopTelemetryStream() {
+    if (telemetryReconnectTimer) {
+        clearTimeout(telemetryReconnectTimer);
+        telemetryReconnectTimer = null;
+    }
     if (telemetryPort) {
         try {
             telemetryPort.disconnect();
@@ -1316,13 +1326,16 @@ if (logoEl) {
 document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
         stopTelemetryStream();
-    } else if ((infoState === 2 || infoState === 4) && !telemetryPort) {
-        startTelemetryStream();
-    } else if (!document.hidden && infoState === 2) {
-        if (panelControlsEl && panelControlsEl.querySelector('table')) {
-            panelControlsEl.style.opacity = '0.75';
+    } else {
+        updateTime();
+        if ((infoState === 2 || infoState === 4) && !telemetryPort) {
+            startTelemetryStream();
+        } else if (infoState === 2) {
+            if (panelControlsEl && panelControlsEl.querySelector('table')) {
+                panelControlsEl.style.opacity = '0.75';
+            }
+            requestEmpiricalMonitorProbe();
         }
-        requestEmpiricalMonitorProbe();
     }
 });
 

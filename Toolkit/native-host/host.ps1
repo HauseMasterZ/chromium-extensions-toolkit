@@ -398,40 +398,50 @@ public class MonitorController {
         IntPtr hLcd = CreateFile("\\\\.\\LCD", 0x80000000 | 0x40000000, 1 | 2, IntPtr.Zero, 3, 0, IntPtr.Zero);
         if (hLcd == (IntPtr)(-1) || hLcd == IntPtr.Zero) return Marshal.GetLastWin32Error();
 
-        DISPLAY_BRIGHTNESS b = new DISPLAY_BRIGHTNESS();
-        int size = Marshal.SizeOf(b);
-        IntPtr pOut = Marshal.AllocHGlobal(size);
-        uint returned = 0;
-        bool ok = DeviceIoControl(hLcd, 0x00230498, IntPtr.Zero, 0, pOut, (uint)size, out returned, IntPtr.Zero);
-        int err = 0;
-        if (ok) {
-            b = (DISPLAY_BRIGHTNESS)Marshal.PtrToStructure(pOut, typeof(DISPLAY_BRIGHTNESS));
-            cur = b.ucACBrightness;
-        } else {
-            err = Marshal.GetLastWin32Error();
+        try {
+            DISPLAY_BRIGHTNESS b = new DISPLAY_BRIGHTNESS();
+            int size = Marshal.SizeOf(b);
+            IntPtr pOut = Marshal.AllocHGlobal(size);
+            try {
+                uint returned = 0;
+                bool ok = DeviceIoControl(hLcd, 0x00230498, IntPtr.Zero, 0, pOut, (uint)size, out returned, IntPtr.Zero);
+                if (ok) {
+                    b = (DISPLAY_BRIGHTNESS)Marshal.PtrToStructure(pOut, typeof(DISPLAY_BRIGHTNESS));
+                    cur = b.ucACBrightness;
+                    return 0;
+                } else {
+                    return Marshal.GetLastWin32Error();
+                }
+            } finally {
+                Marshal.FreeHGlobal(pOut);
+            }
+        } finally {
+            CloseHandle(hLcd);
         }
-        Marshal.FreeHGlobal(pOut);
-        CloseHandle(hLcd);
-        return ok ? 0 : err;
     }
 
     public static bool SetLcdBrightness(byte val) {
         IntPtr hLcd = CreateFile("\\\\.\\LCD", 0x80000000 | 0x40000000, 1 | 2, IntPtr.Zero, 3, 0, IntPtr.Zero);
         if (hLcd == (IntPtr)(-1) || hLcd == IntPtr.Zero) return false;
 
-        DISPLAY_BRIGHTNESS b = new DISPLAY_BRIGHTNESS();
-        b.ucDisplayPolicy = 3;
-        b.ucACBrightness = val;
-        b.ucDCBrightness = val;
+        try {
+            DISPLAY_BRIGHTNESS b = new DISPLAY_BRIGHTNESS();
+            b.ucDisplayPolicy = 3;
+            b.ucACBrightness = val;
+            b.ucDCBrightness = val;
 
-        int size = Marshal.SizeOf(b);
-        IntPtr pIn = Marshal.AllocHGlobal(size);
-        Marshal.StructureToPtr(b, pIn, false);
-        uint returned = 0;
-        bool ok = DeviceIoControl(hLcd, 0x0023049C, pIn, (uint)size, IntPtr.Zero, 0, out returned, IntPtr.Zero);
-        Marshal.FreeHGlobal(pIn);
-        CloseHandle(hLcd);
-        return ok;
+            int size = Marshal.SizeOf(b);
+            IntPtr pIn = Marshal.AllocHGlobal(size);
+            try {
+                Marshal.StructureToPtr(b, pIn, false);
+                uint returned = 0;
+                return DeviceIoControl(hLcd, 0x0023049C, pIn, (uint)size, IntPtr.Zero, 0, out returned, IntPtr.Zero);
+            } finally {
+                Marshal.FreeHGlobal(pIn);
+            }
+        } finally {
+            CloseHandle(hLcd);
+        }
     }
 
     public static int internalContrast = 50;
@@ -441,10 +451,9 @@ public class MonitorController {
 
     public static bool UpdateInternalGpuRamp(string gdiDevice) {
         if (string.IsNullOrEmpty(gdiDevice)) return false;
+        IntPtr hdc = CreateDC(null, gdiDevice, null, IntPtr.Zero);
+        if (hdc == IntPtr.Zero) return false;
         try {
-            IntPtr hdc = CreateDC(null, gdiDevice, null, IntPtr.Zero);
-            if (hdc == IntPtr.Zero) return false;
-
             double cFactor = Math.Max(0.1, Math.Min(2.0, (internalContrast / 50.0)));
             double rFactor = Math.Max(0.1, Math.Min(1.0, (internalGainR / 50.0)));
             double gFactor = Math.Max(0.1, Math.Min(1.0, (internalGainG / 50.0)));
@@ -459,17 +468,19 @@ public class MonitorController {
                 ramp[i + 256] = (ushort)Math.Max(0.0, Math.Min(65535.0, (clamped * 256.0) * gFactor));
                 ramp[i + 512] = (ushort)Math.Max(0.0, Math.Min(65535.0, (clamped * 256.0) * bFactor));
             }
-            bool res = SetDeviceGammaRamp(hdc, ramp);
+            return SetDeviceGammaRamp(hdc, ramp);
+        } catch {
+            return false;
+        } finally {
             DeleteDC(hdc);
-            return res;
-        } catch { return false; }
+        }
     }
 
     public static bool ApplySoftwareBrightness(string gdiDevice, int brightness0to100) {
         if (string.IsNullOrEmpty(gdiDevice)) return false;
+        IntPtr hdc = CreateDC(null, gdiDevice, null, IntPtr.Zero);
+        if (hdc == IntPtr.Zero) return false;
         try {
-            IntPtr hdc = CreateDC(null, gdiDevice, null, IntPtr.Zero);
-            if (hdc == IntPtr.Zero) return false;
             double factor = Math.Max(0.02, Math.Min(1.0, brightness0to100 / 100.0));
             ushort[] ramp = new ushort[3 * 256];
             for (int i = 0; i < 256; i++) {
@@ -478,19 +489,19 @@ public class MonitorController {
                 ramp[i + 256] = val;
                 ramp[i + 512] = val;
             }
-            bool res = SetDeviceGammaRamp(hdc, ramp);
-            DeleteDC(hdc);
-            return res;
+            return SetDeviceGammaRamp(hdc, ramp);
         } catch {
             return false;
+        } finally {
+            DeleteDC(hdc);
         }
     }
 
     public static bool ResetSoftwareGamma(string gdiDevice) {
         if (string.IsNullOrEmpty(gdiDevice)) return false;
+        IntPtr hdc = CreateDC(null, gdiDevice, null, IntPtr.Zero);
+        if (hdc == IntPtr.Zero) return false;
         try {
-            IntPtr hdc = CreateDC(null, gdiDevice, null, IntPtr.Zero);
-            if (hdc == IntPtr.Zero) return false;
             ushort[] ramp = new ushort[3 * 256];
             for (int i = 0; i < 256; i++) {
                 ushort val = (ushort)(i * 256);
@@ -498,11 +509,11 @@ public class MonitorController {
                 ramp[i + 256] = val;
                 ramp[i + 512] = val;
             }
-            bool res = SetDeviceGammaRamp(hdc, ramp);
-            DeleteDC(hdc);
-            return res;
+            return SetDeviceGammaRamp(hdc, ramp);
         } catch {
             return false;
+        } finally {
+            DeleteDC(hdc);
         }
     }
 
@@ -574,6 +585,7 @@ public class MonitorController {
     public static Dictionary<string, string> SavedFriendlyNames = new Dictionary<string, string>();
     public static string SavedInternalPnpId = null;
     public static object SyncLock = new object();
+    public static readonly object ProbeLock = new object();
 
     public delegate bool WmiSetBrightnessDelegate(byte val);
     public static WmiSetBrightnessDelegate WmiSetBrightnessHandler = null;
@@ -650,6 +662,7 @@ public class MonitorController {
                 if (GetNumberOfPhysicalMonitorsFromHMONITOR(hMonitor, out count) && count > 0) {
                     var physicalMonitors = new PHYSICAL_MONITOR[count];
                     if (GetPhysicalMonitorsFromHMONITOR(hMonitor, count, physicalMonitors)) {
+                        bool anyBound = false;
                         for (int i = 0; i < count; i++) {
                             IntPtr hPhys = physicalMonitors[i].hPhysicalMonitor;
 
@@ -698,6 +711,7 @@ public class MonitorController {
                                 bound.initialBrightness = (int)bCur;
                                 boundList.Add(bound);
                                 ddcIndex++;
+                                anyBound = true;
                             } else {
                                 byte curLcd;
                                 bool isLcdAvailable = (QueryLcdBrightness(out curLcd) == 0);
@@ -729,10 +743,12 @@ public class MonitorController {
                                     bound.initialBrightness = (int)curLcd;
                                     boundList.Add(bound);
                                     ddcIndex++;
-                                } else {
-                                    try { DestroyPhysicalMonitors(count, physicalMonitors); } catch {}
+                                    anyBound = true;
                                 }
                             }
+                        }
+                        if (!anyBound) {
+                            try { DestroyPhysicalMonitors(count, physicalMonitors); } catch {}
                         }
                     }
                 }
@@ -831,13 +847,26 @@ public class MonitorController {
                     HasProbed = true;
                 }
             }
-        } catch {}
+        } catch {
+            var destroyed = new HashSet<PHYSICAL_MONITOR[]>();
+            foreach (var b in boundList) {
+                try {
+                    if (b.monitors != null && b.count > 0 && !destroyed.Contains(b.monitors)) {
+                        destroyed.Add(b.monitors);
+                        DestroyPhysicalMonitors(b.count, b.monitors);
+                    }
+                } catch {}
+                b.monitors = null;
+            }
+        }
     }
 
     public static void ReProbePhysicalMonitors() {
-        try {
-            BindPhysicalMonitors(SavedFriendlyNames);
-        } catch {}
+        lock (ProbeLock) {
+            try {
+                BindPhysicalMonitors(SavedFriendlyNames);
+            } catch {}
+        }
     }
 
     public static BoundPhysicalMonitor FindBoundMonitor(string monitorId, string pnpId = null, string gdiDevice = null, bool? isAcer = null) {
@@ -1448,7 +1477,7 @@ public class MonitorController {
 
         Thread probeThread = new Thread(() => {
             try {
-                while (true) {
+                while (IsRunning) {
                     bool rebindNow = false;
                     int targetProbeId = 0;
                     lock (SyncLock) {
@@ -1458,10 +1487,14 @@ public class MonitorController {
                         targetProbeId = PendingProbeId;
                     }
                     try {
-                        if (rebindNow) {
-                            BindPhysicalMonitors(friendlyNames ?? SavedFriendlyNames);
+                        lock (ProbeLock) {
+                            if (!IsRunning) break;
+                            if (rebindNow) {
+                                BindPhysicalMonitors(friendlyNames ?? SavedFriendlyNames);
+                            }
+                            if (!IsRunning) break;
+                            ReadTelemetryFeatures(friendlyNames ?? SavedFriendlyNames);
                         }
-                        ReadTelemetryFeatures(friendlyNames ?? SavedFriendlyNames);
                     } catch {}
 
                     lock (SyncLock) {
@@ -1469,7 +1502,7 @@ public class MonitorController {
                             CompletedProbeId = targetProbeId;
                         }
                         HasProbed = true;
-                        if (!ProbePending) {
+                        if (!ProbePending || !IsRunning) {
                             IsProbing = false;
                             break;
                         }
@@ -1501,10 +1534,7 @@ public class MonitorController {
                     int read = 0;
                     while (read < 4) {
                         int r = stdin.Read(lenBuf, read, 4 - read);
-                        if (r <= 0) {
-                            Environment.Exit(0);
-                            return;
-                        }
+                        if (r <= 0) return;
                         read += r;
                     }
                     if (isFirstPacket && lenBuf[0] == 0xEF && lenBuf[1] == 0xBB && lenBuf[2] == 0xBF) {
@@ -1512,10 +1542,7 @@ public class MonitorController {
                         read = 1;
                         while (read < 4) {
                             int r = stdin.Read(lenBuf, read, 4 - read);
-                            if (r <= 0) {
-                                Environment.Exit(0);
-                                return;
-                            }
+                            if (r <= 0) return;
                             read += r;
                         }
                     }
@@ -1527,10 +1554,7 @@ public class MonitorController {
                     read = 0;
                     while (read < len) {
                         int r = stdin.Read(jsonBuf, read, len - read);
-                        if (r <= 0) {
-                            Environment.Exit(0);
-                            return;
-                        }
+                        if (r <= 0) return;
                         read += r;
                     }
                     string json = Encoding.UTF8.GetString(jsonBuf);
@@ -1560,6 +1584,10 @@ public class MonitorController {
                     }
                 }
             } catch {}
+            finally {
+                IsRunning = false;
+                WakeSignal.Set();
+            }
         });
         thread.IsBackground = true;
         thread.Name = "MonitorBackgroundWorker";
@@ -1812,10 +1840,11 @@ public class MonitorController {
     $nvmlMem = $null
 
     $warmupTicks = 0
-    while ($true) {
+    while ([MonitorController]::IsRunning) {
         # Instant watchdog check via native kernel handle (locks PID, zero process-table scanning)
         if ($parentObj -and $parentObj.HasExited) {
-            exit 0
+            [MonitorController]::IsRunning = $false
+            break
         }
 
         # 1. Query dGPU, VRAM, GPU Load, and P-State
@@ -1862,7 +1891,7 @@ public class MonitorController {
                 $vramUsedGB   = [math]::Round($nvmlMem.used / 1GB, 1)
                 $vramTotalGB  = [math]::Round($nvmlMem.total / 1GB, 1)
                 $vramPct      = if ($nvmlMem.total -gt 0) { [math]::Round(($nvmlMem.used / $nvmlMem.total) * 100, 0) } else { 0 }
-                $hwThermalStr = if (($throttleMask -band 0x08) -ne 0) { "Active" } else { "Not Active" }
+                $hwThermalStr = if (($throttleMask -band 0x60) -ne 0) { "Active" } else { "Not Active" }
                 $vrmBrakeStr  = if (($throttleMask -band 0x80) -ne 0) { "Active" } else { "Not Active" }
             } catch {}
         } elseif ($warmupTicks -ge 3 -and -not $hasNvmlDll) {
@@ -2050,8 +2079,10 @@ catch {
 }
 finally {
     [MonitorController]::IsRunning = $false
+    try { [MonitorController]::ReleaseBoundMonitors() } catch {}
     if ($perfPs) { try { $perfPs.Dispose() } catch {} }
     if ($perfRs) { try { $perfRs.Close() } catch {} }
+    if ($parentObj) { try { $parentObj.Dispose() } catch {} }
     if ([NvmlHost]::IsReady) {
         try { [NvmlHost]::Shutdown() | Out-Null } catch {}
     }
