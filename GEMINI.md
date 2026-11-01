@@ -54,3 +54,23 @@
 ## 10. Code Style, Scope Isolation & Repository Hygiene
 - Repository Line Ending Preservation: Code files in this repository use LF (`\n`) line endings. Programmatic file edits, generation scripts, and templates must preserve LF (`\n`) formatting to maintain clean, minimal git diffs.
 - Lexical Scope Isolation: In browser extension scripts, enforce strict variable scoping to avoid identifier shadowing or re-declaration collisions (`SyntaxError: Identifier 'x' has already been declared`).
+
+
+## 11. Absolute Workspace Boundary Isolation
+- Under no circumstances read, inspect, query, or execute commands against files or directories outside `C:\Users\HauseMaster\Documents\Code\CToolkit`. Sibling repositories in `Documents\Code\` are strictly off-limits.
+- When an uploaded screenshot or context references an external repository or URL, Antigravity must address only its relationship to the current CToolkit extension (e.g. browser zoom scaling, DOM overrides, or CSP), without inspecting external project codebases.
+- Workspace boundaries are mechanically enforced at the runtime level via `.agents/hooks.json` PreToolUse lifecycle hooks.
+
+## 12. Native Messaging Process & Win32 Handle Invariants
+- Cooperative Teardown Invariant: `System.Environment.Exit` is strictly forbidden in background or worker threads of native messaging hosts. Process exit must always be cooperative via signaling flags (`[MonitorController]::IsRunning = false; [MonitorController]::WakeSignal.Set();`), ensuring the main thread unwinds and executes the PowerShell pipeline's `finally` block to release NVML, runspaces, GDI DCs, and Win32 physical monitor handles.
+- Win32 Physical Monitor Handle Arrays: `DestroyPhysicalMonitors` must never be called on individual array elements inside a monitor enumeration loop. Clean up shared handle arrays as distinct sets to avoid double-free exceptions on multi-monitor configurations sharing an `HMONITOR`.
+- Unmanaged Handle & Memory Cleanup: All unmanaged GDI device contexts (`CreateDC`), kernel device files (`CreateFile`), and unmanaged heap allocations (`Marshal.AllocHGlobal`) must be wrapped in `try ... finally` blocks to ensure `DeleteDC`, `CloseHandle`, and `FreeHGlobal` execute even under driver reset or bus exceptions.
+- NVML Throttle Bitmask Invariant: Bit `0x40` denotes hardware thermal slowdown (`nvmlClocksThrottleReasonHwThermalSlowdown`) and bit `0x20` denotes software thermal slowdown. Never test generic hardware slowdown (`0x08`) for thermal alerts.
+
+## 13. Chrome Extension MV3 Network & IPC Resilience
+- Cross-Origin Page CSP Proxying: Content scripts must never execute direct cross-origin `fetch()` calls from restricted page origins (such as `youtube.com`). External network requests must be proxied through `Toolkit/bg-service-worker.js` with target origins declared under `host_permissions` in `Toolkit/manifest.json`.
+- Unchecked Runtime LastError Prevention: All `chrome.runtime.sendMessage` callbacks must inspect `if (chrome.runtime.lastError) return;` at the leading edge to prevent Chromium from logging `Unchecked runtime.lastError: The message port closed before a response was received`.
+
+## 14. Display Auto-Zoom Concurrency & Reentrancy Guards
+- Programmatic Reentrancy Guard: Programmatic zoom adjustments (`setZoomSettings`, `setZoom`) must set temporary reentrancy lock tokens to prevent `chrome.tabs.onZoomChange` from misidentifying the extension's own per-tab mode switches as manual user zoom overrides.
+- Bounded Memory Lifecycle: Ephemeral tab and window tracking structures (such as `pendingPurgedTabs`) must be cleared following session initialization and strictly guarded against unbounded monotonic memory growth.
