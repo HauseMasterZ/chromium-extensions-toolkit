@@ -1,5 +1,8 @@
 
 (function () {
+  if (window.__waWideStyleInjected) return;
+  window.__waWideStyleInjected = true;
+
   const STYLE_ID = 'wa-wide-layout-v7';
 
   function injectStyles() {
@@ -287,7 +290,21 @@
   function setupResponsiveTracker() {
     const side = document.getElementById('side');
     const target = side?.parentElement;
-    if (!target) return;
+    if (!target) {
+      const sideObserver = new MutationObserver(() => {
+        const s = document.getElementById('side');
+        if (s?.parentElement) {
+          sideObserver.disconnect();
+          setupResponsiveTracker();
+        }
+      });
+      const obsTarget = document.body || document.documentElement;
+      if (obsTarget) {
+        sideObserver.observe(obsTarget, { childList: true, subtree: true });
+        setTimeout(() => { try { sideObserver.disconnect(); } catch {} }, 15000);
+      }
+      return;
+    }
 
     const updateWidth = () => {
       document.documentElement.style.setProperty('--chatlist-width', target.getBoundingClientRect().width + 'px');
@@ -307,47 +324,93 @@
     resizer.id = 'wa-custom-resizer';
     document.body.appendChild(resizer);
 
-    let isDragging = false;
+    let dragRaf = null;
+    let pendingWidth = null;
+
+    const onMouseMove = (e) => {
+      let newWidth = e.clientX;
+      if (newWidth < 250) newWidth = 250;
+      if (newWidth > 1200) newWidth = 1200;
+      pendingWidth = newWidth;
+      if (!dragRaf) {
+        dragRaf = requestAnimationFrame(() => {
+          dragRaf = null;
+          if (pendingWidth !== null) {
+            document.documentElement.style.setProperty('--custom-sidebar-width', pendingWidth + 'px');
+          }
+        });
+      }
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener('mousemove', onMouseMove, true);
+      window.removeEventListener('mouseup', onMouseUp, true);
+      if (dragRaf) {
+        cancelAnimationFrame(dragRaf);
+        dragRaf = null;
+      }
+      resizer.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.body.style.pointerEvents = '';
+      
+      const currentWidth = pendingWidth !== null ? String(pendingWidth) : document.documentElement.style.getPropertyValue('--custom-sidebar-width').replace('px', '').trim();
+      localStorage.setItem('wa-custom-sidebar-width', currentWidth);
+    };
 
     resizer.addEventListener('mousedown', (e) => {
-      isDragging = true;
       resizer.classList.add('dragging');
       document.body.style.cursor = 'ew-resize';
       document.body.style.userSelect = 'none';
       document.body.style.pointerEvents = 'none';
+      window.addEventListener('mousemove', onMouseMove, true);
+      window.addEventListener('mouseup', onMouseUp, true);
       e.stopPropagation();
     });
+  }
 
-    window.addEventListener('mousemove', (e) => {
-      if (!isDragging) return;
-      let newWidth = e.clientX;
-      if (newWidth < 250) newWidth = 250;
-      if (newWidth > 1200) newWidth = 1200;
-      document.documentElement.style.setProperty('--custom-sidebar-width', newWidth + 'px');
-    }, { capture: true });
-
-    window.addEventListener('mouseup', () => {
-      if (isDragging) {
-        isDragging = false;
-        resizer.classList.remove('dragging');
-        document.body.style.cursor = '';
-        document.body.style.userSelect = '';
-        document.body.style.pointerEvents = '';
-        
-        const currentWidth = document.documentElement.style.getPropertyValue('--custom-sidebar-width').replace('px', '');
-        localStorage.setItem('wa-custom-sidebar-width', currentWidth);
-      }
-    }, { capture: true });
+  function initApp() {
+    injectStyles();
+    setupResponsiveTracker();
+    setupResizer();
   }
 
   function waitForApp() {
     if (document.querySelector('[data-testid="navbar-primary-section"]')) {
-      injectStyles();
-      setupResponsiveTracker();
-      setupResizer();
-    } else {
-      setTimeout(waitForApp, 500);
+      initApp();
+      return;
     }
+
+    let checkScheduled = false;
+    const observer = new MutationObserver((mutations) => {
+      if (checkScheduled) return;
+      let hasAdded = false;
+      for (let i = 0; i < mutations.length; i++) {
+        if (mutations[i].addedNodes.length > 0) {
+          hasAdded = true;
+          break;
+        }
+      }
+      if (!hasAdded) return;
+
+      checkScheduled = true;
+      requestAnimationFrame(() => {
+        checkScheduled = false;
+        if (document.querySelector('[data-testid="navbar-primary-section"]')) {
+          observer.disconnect();
+          initApp();
+        }
+      });
+    });
+
+    const targetNode = document.body || document.documentElement;
+    if (targetNode) {
+      observer.observe(targetNode, { childList: true, subtree: true });
+    }
+
+    setTimeout(() => {
+      try { observer.disconnect(); } catch {}
+    }, 45000);
   }
 
   if (document.readyState !== 'loading') {

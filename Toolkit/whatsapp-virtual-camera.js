@@ -1,4 +1,7 @@
 (function() {
+    if (window.__waVirtualCamInjected) return;
+    window.__waVirtualCamInjected = true;
+
     console.log("[WA Virtual Cam] Stable Build Active: 30 FPS Text Priority.");
     window.__wa_virtual_cam_refs = [];
 
@@ -44,6 +47,12 @@
             if (audioTrack) tracks.push(audioTrack);
             
             window.__wa_virtual_cam_refs.push(canvas, fakeStream);
+            videoTrack.onended = () => {
+                const idx = window.__wa_virtual_cam_refs.indexOf(canvas);
+                if (idx !== -1) window.__wa_virtual_cam_refs.splice(idx, 1);
+                const idx2 = window.__wa_virtual_cam_refs.indexOf(fakeStream);
+                if (idx2 !== -1) window.__wa_virtual_cam_refs.splice(idx2, 1);
+            };
             return new MediaStream(tracks);
         }
         return originalGetUserMedia(constraints);
@@ -76,7 +85,7 @@
         video.play().catch(e => console.warn(e));
 
         const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const ctx = canvas.getContext('2d');
         
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
@@ -84,22 +93,22 @@
         window.__wa_virtual_cam_refs.push(video, canvas);
 
         let active = true;
+        const hasRvfc = 'requestVideoFrameCallback' in video;
         const renderFrame = () => {
             if (!active || realVideoTrack.readyState === 'ended') return;
             if (video.videoWidth && video.videoHeight) {
                 if (canvas.width !== video.videoWidth) canvas.width = video.videoWidth;
                 if (canvas.height !== video.videoHeight) canvas.height = video.videoHeight;
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
                 ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
             }
-            if ('requestVideoFrameCallback' in video) {
+            if (hasRvfc) {
                 video.requestVideoFrameCallback(renderFrame);
             } else {
                 setTimeout(renderFrame, 1000 / 30);
             }
         };
 
-        if ('requestVideoFrameCallback' in video) {
+        if (hasRvfc) {
             video.requestVideoFrameCallback(renderFrame);
         } else {
             setTimeout(renderFrame, 1000 / 30);
@@ -117,9 +126,12 @@
         Object.defineProperty(correctedVideoTrack, 'label', { get: () => realVideoTrack.label });
 
         const cleanup = () => {
+            if (!active) return;
             active = false;
-            realVideoTrack.stop();
-            correctedVideoTrack.stop();
+            try { realVideoTrack.stop(); } catch {}
+            try { correctedVideoTrack.stop(); } catch {}
+            video.srcObject = null;
+            window.__wa_virtual_cam_refs = window.__wa_virtual_cam_refs.filter(r => r !== video && r !== canvas);
         };
 
         correctedVideoTrack.onended = cleanup;

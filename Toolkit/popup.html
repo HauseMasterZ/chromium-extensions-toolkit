@@ -255,11 +255,20 @@
             justify-content: space-between;
             align-items: center;
             padding: 4px 0;
+            transition: opacity 0.2s ease;
         }
 
         .display-row:not(:last-child) {
             border-bottom: 1px solid rgba(255, 255, 255, 0.06);
             padding-bottom: 8px;
+        }
+
+        .display-row.is-default {
+            opacity: 0.45;
+        }
+
+        .display-row.is-default:hover {
+            opacity: 0.85;
         }
 
         .display-info {
@@ -276,7 +285,7 @@
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
-            max-width: 160px;
+            max-width: 150px;
         }
 
         .display-badges {
@@ -295,14 +304,37 @@
             letter-spacing: 0.2px;
         }
 
-        .display-badge.internal {
-            background: rgba(10, 132, 255, 0.18);
-            color: #5ac8fa;
+        .display-zoom-select {
+            background: var(--toggle-bg);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 3px 6px;
+            outline: none;
+            cursor: pointer;
+            transition: border-color 0.2s, background-color 0.2s, color 0.2s, opacity 0.2s;
         }
 
-        .display-badge.primary {
-            background: rgba(48, 209, 88, 0.18);
-            color: #30d158;
+        .display-zoom-select:focus {
+            border-color: var(--accent-color);
+            background: #252528;
+        }
+
+        .display-zoom-select.is-default {
+            color: var(--text-secondary);
+            border-color: rgba(255, 255, 255, 0.08);
+        }
+
+        .display-zoom-select option {
+            background-color: var(--surface-color);
+            color: var(--text-main);
+        }
+
+        .display-zoom-select:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
     </style>
 </head>

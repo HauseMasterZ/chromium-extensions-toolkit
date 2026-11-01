@@ -74,9 +74,23 @@
     }, durationMs);
   }
 
+  let repositionRaf = null;
+
+  function scheduleRepositionLayers() {
+    if (!isOcrActive || repositionRaf) return;
+    repositionRaf = requestAnimationFrame(() => {
+      repositionRaf = null;
+      repositionLayers();
+    });
+  }
+
   function dismissOcr() {
     isOcrActive = false;
     clearMultiSelect();
+    if (repositionRaf) {
+      cancelAnimationFrame(repositionRaf);
+      repositionRaf = null;
+    }
     for (const layer of activeLayers) {
       if (layer && layer._targetEl) {
         try {
@@ -90,8 +104,8 @@
       }
     }
     activeLayers = [];
-    window.removeEventListener('scroll', repositionLayers, { passive: true });
-    window.removeEventListener('resize', repositionLayers);
+    window.removeEventListener('scroll', scheduleRepositionLayers, { passive: true });
+    window.removeEventListener('resize', scheduleRepositionLayers);
     showOcrToast('OCR dismissed', 1200);
   }
 
@@ -273,8 +287,8 @@
 
     showOcrToast(`Scanning ${candidates.length} image${candidates.length === 1 ? '' : 's'} for text...`, 3000);
 
-    window.addEventListener('scroll', repositionLayers, { passive: true });
-    window.addEventListener('resize', repositionLayers);
+    window.addEventListener('scroll', scheduleRepositionLayers, { passive: true });
+    window.addEventListener('resize', scheduleRepositionLayers);
 
     let processedCount = 0;
     let imagesWithText = 0;
@@ -507,6 +521,7 @@
   }
 
   window.addEventListener('mouseup', () => {
+    if (!isOcrActive || activeLayers.length === 0) return;
     for (const layer of activeLayers) {
       if (layer) layer.classList.remove('dragging');
     }

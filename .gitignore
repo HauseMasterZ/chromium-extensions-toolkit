@@ -11,3 +11,4 @@ Desktop.ini
 $RECYCLE.BIN/
 *.tmp
 *.log
+Toolkit/native-host/*.dll

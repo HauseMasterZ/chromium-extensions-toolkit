@@ -1,0 +1,17 @@
+{
+  "workspace-boundary-gate": {
+    "enabled": true,
+    "PreToolUse": [
+      {
+        "matcher": "run_command|read_file|write_file|edit_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python scripts/workspace_guard.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

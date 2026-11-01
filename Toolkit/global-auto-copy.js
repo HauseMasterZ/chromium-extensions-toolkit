@@ -1,3 +1,7 @@
+(() => {
+if (window.__toolkitGlobalAutoCopyInjected) return;
+window.__toolkitGlobalAutoCopyInjected = true;
+
 let isEnabled = true;
 try {
     if (chrome.storage?.local) {
@@ -10,6 +14,8 @@ try {
 
 let overlayHost = null;
 let shadowRoot = null;
+let cachedContainer = null;
+let cachedPreview = null;
 let hideTimer = null;
 let currentRawText = '';
 let isEditing = false;
@@ -21,6 +27,26 @@ function getSelectionRect() {
     const rect = range.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) return null;
     return rect;
+}
+
+function resolvePasteUrl(input) {
+    if (!input) return null;
+    const str = input.trim();
+    if (!str) return null;
+
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//i.test(str)) {
+        return str;
+    }
+    if (/^localhost(:\d+)?(\/.*)?$/i.test(str)) {
+        return `http://${str}`;
+    }
+    if (/^(\d{1,3}\.){3}\d{1,3}(:\d+)?(\/.*)?$/.test(str)) {
+        return `http://${str}`;
+    }
+    if (!/\s/.test(str) && /^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(:\d+)?(\/.*)?$/i.test(str)) {
+        return `https://${str}`;
+    }
+    return `https://www.google.com/search?q=${encodeURIComponent(str)}`;
 }
 
 function showAndroidClipboardOverlay(text, mouseX, mouseY) {
@@ -151,7 +177,9 @@ function showAndroidClipboardOverlay(text, mouseX, mouseY) {
         shadowRoot.appendChild(container);
         document.documentElement.appendChild(overlayHost);
 
-        const preview = container.querySelector('.preview-card');
+        cachedContainer = container;
+        cachedPreview = container.querySelector('.preview-card');
+        const preview = cachedPreview;
         const iconBadge = container.querySelector('.icon-badge');
 
         const enterEditMode = () => {
@@ -204,26 +232,6 @@ function showAndroidClipboardOverlay(text, mouseX, mouseY) {
             preview.classList.remove('editing');
             preview.removeAttribute('contenteditable');
             container.classList.remove('visible');
-        };
-
-        const resolvePasteUrl = (input) => {
-            if (!input) return null;
-            const str = input.trim();
-            if (!str) return null;
-
-            if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//i.test(str)) {
-                return str;
-            }
-            if (/^localhost(:\d+)?(\/.*)?$/i.test(str)) {
-                return `http://${str}`;
-            }
-            if (/^(\d{1,3}\.){3}\d{1,3}(:\d+)?(\/.*)?$/.test(str)) {
-                return `http://${str}`;
-            }
-            if (!/\s/.test(str) && /^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(:\d+)?(\/.*)?$/i.test(str)) {
-                return `https://${str}`;
-            }
-            return `https://www.google.com/search?q=${encodeURIComponent(str)}`;
         };
 
         const pasteAndGo = (text) => {
@@ -310,20 +318,16 @@ function showAndroidClipboardOverlay(text, mouseX, mouseY) {
         container.addEventListener('pointerdown', stopMouseEvent);
         container.addEventListener('pointerup', stopMouseEvent);
 
-        preview.addEventListener('keydown', stopKeyEvent, true);
-        preview.addEventListener('keyup', stopKeyEvent, true);
-        preview.addEventListener('keypress', stopKeyEvent, true);
         container.addEventListener('keydown', stopKeyEvent, true);
         container.addEventListener('keyup', stopKeyEvent, true);
-        container.addEventListener('keypress', stopKeyEvent, true);
 
         preview.addEventListener('blur', () => {
             if (isEditing) commitEdit();
         });
     }
 
-    const container = shadowRoot.querySelector('.chip-container');
-    const preview = shadowRoot.querySelector('.preview-card');
+    const container = cachedContainer;
+    const preview = cachedPreview;
     
     container.classList.remove('editing');
     preview.classList.remove('editing');
@@ -416,38 +420,19 @@ function enableSafePaste(e) {
     }, 0);
 }
 
-function enableSafeCopyCut(e) {
-    const target = e.target;
-    if (!target || isRichEditor(target)) return;
-    if (e.defaultPrevented) return;
-}
-
-function enableSafeContextMenu(e) {
-    const target = e.target;
-    if (!target || isRichEditor(target)) return;
-}
-
-function enableSafeSelection(e) {
-    const target = e.target;
-    if (!target || isRichEditor(target)) return;
-}
-
-// Attach strictly on user interaction
+// Attach safe paste dispatch strictly on user interaction
 window.addEventListener('paste', enableSafePaste, true);
-window.addEventListener('copy', enableSafeCopyCut, true);
-window.addEventListener('cut', enableSafeCopyCut, true);
-window.addEventListener('contextmenu', enableSafeContextMenu, true);
-window.addEventListener('selectstart', enableSafeSelection, true);
-window.addEventListener('dragstart', enableSafeSelection, true);
 
 // On-demand attribute sanitization strictly when the user focuses or clicks a form field
+const SANITY_ATTRS = ['onpaste', 'oncopy', 'oncut', 'oncontextmenu', 'onselectstart', 'ondragstart'];
+
 function sanitizeTargetElement(el) {
     if (!el || (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA')) return;
-    const attrs = ['onpaste', 'oncopy', 'oncut', 'oncontextmenu', 'onselectstart', 'ondragstart'];
-    for (const attr of attrs) {
-        if (el.hasAttribute(attr)) el.removeAttribute(attr);
+    for (let i = 0; i < SANITY_ATTRS.length; i++) {
+        if (el.hasAttribute(SANITY_ATTRS[i])) el.removeAttribute(SANITY_ATTRS[i]);
     }
 }
 
 document.addEventListener('focusin', (e) => sanitizeTargetElement(e.target), { passive: true, capture: true });
 document.addEventListener('mousedown', (e) => sanitizeTargetElement(e.target), { passive: true, capture: true });
+})();

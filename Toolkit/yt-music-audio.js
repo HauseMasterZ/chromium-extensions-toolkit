@@ -1,7 +1,13 @@
-localStorage.ytmusic_player_audio_quality = '"HIGH"';
-localStorage.ytmusic_player_ambient_mode = 'false'; 
-localStorage.ytmusic_player_cinematic_lighting = 'false';
-localStorage.ytmusic_cinematic_ui_enabled = 'false';
+(() => {
+if (window.__ytMusicAudioInjected) return;
+window.__ytMusicAudioInjected = true;
+
+try {
+  localStorage.ytmusic_player_audio_quality = '"HIGH"';
+  localStorage.ytmusic_player_ambient_mode = 'false'; 
+  localStorage.ytmusic_player_cinematic_lighting = 'false';
+  localStorage.ytmusic_cinematic_ui_enabled = 'false';
+} catch {}
 
 Object.defineProperty(window, '_lact', {
     get: () => Date.now(),
@@ -12,8 +18,13 @@ Object.defineProperty(window, '_lact', {
 const _fetch = window.fetch;
 
 function processPayload(rawText) {
+    if (!rawText || (!rawText.includes('MUSIC_VIDEO_TYPE_') && !rawText.includes('streamingData'))) return rawText;
     try {
-        const sanitized = rawText.replace(/"MUSIC_VIDEO_TYPE_\w+"/g, '"MUSIC_VIDEO_TYPE_ATV"');
+        const sanitized = rawText.includes('MUSIC_VIDEO_TYPE_')
+            ? rawText.replace(/"MUSIC_VIDEO_TYPE_\w+"/g, '"MUSIC_VIDEO_TYPE_ATV"')
+            : rawText;
+        if (!sanitized.includes('streamingData')) return sanitized;
+
         const data = JSON.parse(sanitized);
         if (data?.streamingData) {
             data.streamingData.formats = [];
@@ -29,7 +40,7 @@ function processPayload(rawText) {
 window.fetch = async (req, opts) => {
     const res = await _fetch(req, opts);
     const url = typeof req === 'string' ? req : req?.url || '';
-    if (url.includes('/youtubei/v1/')) {
+    if (url.includes('/youtubei/v1/player') || url.includes('/youtubei/v1/next')) {
         const text = await res.text();
         return new Response(processPayload(text), { status: res.status, headers: res.headers });
     }
@@ -38,7 +49,7 @@ window.fetch = async (req, opts) => {
 
 const style = document.createElement('style');
 style.textContent = '#song-video, canvas, ytmusic-cinematic-video-renderer {display:none!important} #song-image {display:block!important;opacity:1!important;z-index:99!important}';
-document.documentElement.appendChild(style);
+(document.head || document.documentElement).appendChild(style);
 
 let lastList;
 
@@ -64,3 +75,4 @@ document.addEventListener('loadeddata', () => {
         if (!rep.title.includes('one')) setTimeout(() => rep.click(), 50);
     }
 }, true);
+})();
