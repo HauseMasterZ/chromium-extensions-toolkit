@@ -5,6 +5,55 @@ let clearUrlsData = null;
 let shortenersSet = new Set();
 const cssMemoryCache = new Map();
 const unshortenCache = new Map();
+const reverseUnshortenCache = new Map();
+const ytSuggestControllers = new Map();
+
+let unshortenInitPromise = null;
+let persistUnshortenTimer = null;
+
+function ensureUnshortenCacheInitialized() {
+  if (unshortenInitPromise) return unshortenInitPromise;
+
+  unshortenInitPromise = (async () => {
+    try {
+      if (chrome.storage?.session) {
+        const res = await chrome.storage.session.get(['unshorten_cache', 'reverse_unshorten_cache']);
+        if (Array.isArray(res?.unshorten_cache)) {
+          for (const [k, v] of res.unshorten_cache) {
+            if (typeof k === 'string' && typeof v === 'string' && !unshortenCache.has(k)) {
+              unshortenCache.set(k, v);
+            }
+          }
+        }
+        if (Array.isArray(res?.reverse_unshorten_cache)) {
+          for (const [k, v] of res.reverse_unshorten_cache) {
+            if (typeof k === 'string' && typeof v === 'string' && !reverseUnshortenCache.has(k)) {
+              reverseUnshortenCache.set(k, v);
+            }
+          }
+        }
+      }
+    } catch {}
+  })();
+
+  return unshortenInitPromise;
+}
+
+function persistUnshortenCache() {
+  if (persistUnshortenTimer) clearTimeout(persistUnshortenTimer);
+  persistUnshortenTimer = setTimeout(async () => {
+    persistUnshortenTimer = null;
+    try {
+      await ensureUnshortenCacheInitialized();
+      if (chrome.storage?.session) {
+        await chrome.storage.session.set({
+          unshorten_cache: Array.from(unshortenCache.entries()),
+          reverse_unshorten_cache: Array.from(reverseUnshortenCache.entries())
+        });
+      }
+    } catch {}
+  }, 300);
+}
 
 // Load ClearURLs rules with 3-tier fallback
 async function initClearUrlsRules() {
@@ -47,7 +96,16 @@ async function initShortenersList() {
 }
 
 // Fetch live rules from GitHub
-async function syncRemoteClearUrlsRules() {
+async function syncRemoteClearUrlsRules(force = false) {
+  if (!force) {
+    try {
+      const { lastRulesSyncTime } = await chrome.storage.local.get('lastRulesSyncTime');
+      if (lastRulesSyncTime && (Date.now() - lastRulesSyncTime) < 86400000) {
+        return;
+      }
+    } catch {}
+  }
+
   const REMOTE_URL = 'https://raw.githubusercontent.com/HauseMasterZ/chromium-extensions-toolkit/main/Toolkit/clearurls-rules.json';
   try {
     const res = await fetch(REMOTE_URL, { cache: 'no-cache' });
@@ -61,7 +119,16 @@ async function syncRemoteClearUrlsRules() {
 }
 
 // Fetch live shorteners & clickthroughs (Repo Mirror 40k+ Dataset -> HaGeZi/AdGuard Upstream Fallback)
-async function syncRemoteShortenersList() {
+async function syncRemoteShortenersList(force = false) {
+  if (!force) {
+    try {
+      const { lastShortenersSyncTime } = await chrome.storage.local.get('lastShortenersSyncTime');
+      if (lastShortenersSyncTime && (Date.now() - lastShortenersSyncTime) < 86400000) {
+        return;
+      }
+    } catch {}
+  }
+
   const REPO_URL = 'https://raw.githubusercontent.com/HauseMasterZ/chromium-extensions-toolkit/main/Toolkit/shorteners-rules.json';
   const HAGEZI_URL = 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/urlshortener-onlydomains.txt';
 
@@ -92,16 +159,157 @@ async function syncRemoteShortenersList() {
   } catch {}
 }
 
+// ============================================================================
+// Centralized Weather & Geolocation Sync (30-min weather, strictly 24-hr geo)
+// ============================================================================
+let weatherSyncPromise = null;
+
+async function getOrUpdateCoordinates() {
+  const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+
+  let cachedCoords = null;
+  let cachedTime = 0;
+
+  try {
+    const res = await chrome.storage.local.get(['geoCoordsCache', 'geoCoordsCacheTime']);
+    cachedCoords = res?.geoCoordsCache || null;
+    cachedTime = parseInt(res?.geoCoordsCacheTime, 10) || 0;
+  } catch {}
+
+  // Strictly limit location ping to once per 24 hours per project rules
+  if (cachedCoords && cachedTime && (now - cachedTime) < ONE_DAY_MS) {
+    return cachedCoords;
+  }
+
+  // Mark attempt timestamp immediately to prevent spamming on rapid calls if network fails
+  try {
+    await chrome.storage.local.set({ geoCoordsCacheTime: now.toString() });
+  } catch {}
+
+  try {
+    let lat = null, lon = null;
+    try {
+      const geoRes = await fetch('https://freeipapi.com/api/json', { signal: AbortSignal.timeout(3000) });
+      if (geoRes.ok) {
+        const geoData = await geoRes.json();
+        if (geoData?.latitude && geoData?.longitude) {
+          lat = geoData.latitude;
+          lon = geoData.longitude;
+        }
+      }
+    } catch {}
+
+    if (!lat || !lon) {
+      try {
+        const fallbackRes = await fetch('https://ipapi.co/json/', { signal: AbortSignal.timeout(3000) });
+        if (fallbackRes.ok) {
+          const fallbackData = await fallbackRes.json();
+          if (fallbackData?.latitude && fallbackData?.longitude) {
+            lat = fallbackData.latitude;
+            lon = fallbackData.longitude;
+          }
+        }
+      } catch {}
+    }
+
+    if (lat && lon) {
+      const coords = { lat, lon };
+      await chrome.storage.local.set({
+        geoCoordsCache: coords,
+        geoCoordsCacheTime: now.toString()
+      });
+      return coords;
+    }
+  } catch {}
+
+  // Fall back to previously cached coordinates if daily refresh failed
+  return cachedCoords;
+}
+
+async function syncWeather(force = false) {
+  if (weatherSyncPromise) return weatherSyncPromise;
+
+  weatherSyncPromise = (async () => {
+    const now = Date.now();
+    const THIRTY_MINUTES_MS = 30 * 60 * 1000;
+
+    if (!force) {
+      try {
+        const { weatherCache, weatherCacheTime } = await chrome.storage.local.get(['weatherCache', 'weatherCacheTime']);
+        const cachedTime = parseInt(weatherCacheTime, 10);
+        if (weatherCache && !isNaN(cachedTime) && (now - cachedTime) < THIRTY_MINUTES_MS) {
+          return weatherCache;
+        }
+      } catch {}
+    }
+
+    try {
+      const coords = await getOrUpdateCoordinates();
+      if (!coords?.lat || !coords?.lon) {
+        throw new Error('Unable to resolve IP location');
+      }
+
+      const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${coords.lat}&longitude=${coords.lon}&current=temperature_2m,wind_speed_10m&hourly=precipitation_probability&timezone=auto&forecast_days=1`, {
+        signal: AbortSignal.timeout(5000)
+      });
+      if (!res.ok) throw new Error(`Weather fetch failed: ${res.status}`);
+      const data = await res.json();
+      if (!data?.current || typeof data.current.temperature_2m !== 'number') {
+        throw new Error('Invalid weather payload: missing current temperature');
+      }
+      const temp = data.current.temperature_2m;
+      const wind = typeof data.current.wind_speed_10m === 'number' ? data.current.wind_speed_10m : 0;
+      const hourIndex = Math.min(23, Math.max(0, new Date().getHours()));
+      const hourlyRain = Array.isArray(data.hourly?.precipitation_probability) ? data.hourly.precipitation_probability[hourIndex] : 0;
+      const rain = typeof hourlyRain === 'number' ? hourlyRain : 0;
+
+      const weatherString = `${temp}°C &nbsp;|&nbsp; Rain ${rain}% &nbsp;|&nbsp; Wind ${wind} km/h`;
+
+      await chrome.storage.local.set({
+        weatherCache: weatherString,
+        weatherCacheTime: now.toString()
+      });
+      return weatherString;
+    } catch (e) {
+      console.error('[CToolkit] Weather sync error:', e);
+      return null;
+    } finally {
+      weatherSyncPromise = null;
+    }
+  })();
+
+  return weatherSyncPromise;
+}
+
 initClearUrlsRules();
 initShortenersList();
-syncRemoteClearUrlsRules();
-syncRemoteShortenersList();
+syncRemoteClearUrlsRules(false);
+syncRemoteShortenersList(false);
+ensureUnshortenCacheInitialized();
+syncWeather(false);
 
-chrome.alarms.create('sync_clearurls_alarm', { periodInMinutes: 1440 });
+chrome.alarms.get('sync_clearurls_alarm', (alarm) => {
+  if (!alarm) {
+    chrome.alarms.create('sync_clearurls_alarm', { periodInMinutes: 1440 });
+  }
+});
+chrome.alarms.get('sync_weather_alarm', (alarm) => {
+  if (!alarm) {
+    chrome.alarms.create('sync_weather_alarm', { periodInMinutes: 30 });
+  }
+});
+
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'sync_clearurls_alarm') {
-    syncRemoteClearUrlsRules();
-    syncRemoteShortenersList();
+    syncRemoteClearUrlsRules(true);
+    syncRemoteShortenersList(true);
+  } else if (alarm.name === 'sync_weather_alarm') {
+    syncWeather(true);
+  } else if (alarm.name === 'host_idle_teardown_alarm') {
+    if (telemetryClients.size === 0) {
+      stopNativeTelemetry();
+    }
   }
 });
 
@@ -246,7 +454,6 @@ function setupContextMenu() {
 
 chrome.runtime.onInstalled.addListener(setupContextMenu);
 chrome.runtime.onStartup.addListener(setupContextMenu);
-setupContextMenu();
 
 async function copyTextToTabClipboard(tabId, frameId, text) {
   const func = (t) => {
@@ -313,12 +520,8 @@ async function handleCopyRawLink(info, tab) {
   } catch {}
 
   if (!rawUrl && info.linkUrl) {
-    for (const [raw, clean] of unshortenCache.entries()) {
-      if (clean === info.linkUrl) {
-        rawUrl = raw;
-        break;
-      }
-    }
+    await ensureUnshortenCacheInitialized();
+    rawUrl = reverseUnshortenCache.get(info.linkUrl) || null;
   }
 
   if (!rawUrl) {
@@ -336,6 +539,42 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     handleCopyRawLink(info, tab);
   }
 });
+
+const DEFAULT_PERSISTED_ORIGINS = [
+  'https://web.whatsapp.com',
+  'https://whatsapp.com',
+  'https://www.whatsapp.com',
+  'https://discord.com',
+  'https://ptb.discord.com',
+  'https://canary.discord.com',
+  'https://discordapp.com',
+  'https://status.discord.com',
+  'https://web.telegram.org',
+  'https://k.telegram.org',
+  'https://z.telegram.org',
+  'https://a.telegram.org',
+  'https://telegram.org',
+  'https://open.spotify.com',
+  'https://spotify.com',
+  'https://accounts.spotify.com',
+  'https://api.spotify.com',
+  'https://gae2-spclient.spotify.com',
+  'https://app.notesnook.com',
+  'https://notesnook.com',
+  'https://auth.notesnook.com',
+  'https://api.notesnook.com',
+  'https://app.slack.com',
+  'https://slack.com',
+  'https://www.notion.so',
+  'https://notion.so',
+  'https://vault.bitwarden.com',
+  'https://hausemasterz.github.io'
+];
+const DEFAULT_PERSISTED_SET = new Set(DEFAULT_PERSISTED_ORIGINS);
+
+function isNewTabUrl(url) {
+  return !url || url.includes('newtab-page.html') || url === 'chrome://newtab/' || url === 'helium://newtab/' || url === 'about:blank' || url === 'about:newtab';
+}
 
 chrome.commands.onCommand.addListener(async c => {
   const tab = await getActiveTab();
@@ -442,39 +681,11 @@ chrome.commands.onCommand.addListener(async c => {
       }).catch(() => {});
     }
 
-    const DEFAULT_PERSISTED_ORIGINS = [
-      'https://web.whatsapp.com',
-      'https://whatsapp.com',
-      'https://www.whatsapp.com',
-      'https://discord.com',
-      'https://ptb.discord.com',
-      'https://canary.discord.com',
-      'https://discordapp.com',
-      'https://status.discord.com',
-      'https://web.telegram.org',
-      'https://k.telegram.org',
-      'https://z.telegram.org',
-      'https://a.telegram.org',
-      'https://telegram.org',
-      'https://open.spotify.com',
-      'https://spotify.com',
-      'https://accounts.spotify.com',
-      'https://api.spotify.com',
-      'https://gae2-spclient.spotify.com',
-      'https://app.notesnook.com',
-      'https://notesnook.com',
-      'https://auth.notesnook.com',
-      'https://api.notesnook.com',
-      'https://app.slack.com',
-      'https://slack.com',
-      'https://www.notion.so',
-      'https://notion.so',
-      'https://vault.bitwarden.com',
-      'https://hausemasterz.github.io'
-    ];
-
     const { persisted_origins = [] } = await chrome.storage.local.get('persisted_origins');
-    const dynamicPersistedSet = new Set([...DEFAULT_PERSISTED_ORIGINS, ...persisted_origins]);
+    const dynamicPersistedSet = new Set(DEFAULT_PERSISTED_ORIGINS);
+    for (let i = 0; i < persisted_origins.length; i++) {
+      dynamicPersistedSet.add(persisted_origins[i]);
+    }
 
     const allTabs = await chrome.tabs.query({});
     const probePromises = allTabs.map(async (t) => {
@@ -489,7 +700,7 @@ chrome.commands.onCommand.addListener(async c => {
       // If tab is discarded/sleeping, we cannot run executeScript without triggering an expensive reload.
       // But if its origin matches a known persistent app or is already tracked, ensure it is preserved.
       if (t.discarded) {
-        if (DEFAULT_PERSISTED_ORIGINS.includes(origin) || dynamicPersistedSet.has(origin)) {
+        if (DEFAULT_PERSISTED_SET.has(origin) || dynamicPersistedSet.has(origin)) {
           dynamicPersistedSet.add(origin);
         }
         return;
@@ -568,8 +779,16 @@ chrome.commands.onCommand.addListener(async c => {
           }
         });
 
-        const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 2000));
-        const probeRes = await Promise.race([probeTask, timeoutPromise]);
+        let timerId = null;
+        const timeoutPromise = new Promise(resolve => {
+          timerId = setTimeout(() => resolve(null), 2000);
+        });
+        let probeRes = null;
+        try {
+          probeRes = await Promise.race([probeTask, timeoutPromise]);
+        } finally {
+          if (timerId) clearTimeout(timerId);
+        }
         const res = probeRes?.[0]?.result;
 
         if (res?.isCritical) {
@@ -630,26 +849,27 @@ chrome.commands.onCommand.addListener(async c => {
   }
 
   if (c === 'discard_background_tabs') {
-    const isNewTab = (url) => !url || url.includes('newtab-page.html') || url === 'chrome://newtab/' || url === 'helium://newtab/' || url === 'about:blank' || url === 'about:newtab';
-
     const allTabs = await chrome.tabs.query({});
     
-    // Group tabs by windowId
+    // Group tabs by windowId in single pass
     const windowsMap = new Map();
-    for (const t of allTabs) {
-      if (!windowsMap.has(t.windowId)) {
-        windowsMap.set(t.windowId, []);
+    for (let i = 0; i < allTabs.length; i++) {
+      const t = allTabs[i];
+      let list = windowsMap.get(t.windowId);
+      if (!list) {
+        list = [];
+        windowsMap.set(t.windowId, list);
       }
-      windowsMap.get(t.windowId).push(t);
+      list.push(t);
     }
 
     // For every window whose active view is NOT an empty new tab and NOT playing media:
     // If an existing new tab is already open in that window, focus it; otherwise create one.
     for (const [winId, wTabs] of windowsMap) {
       const activeTab = wTabs.find(t => t.active);
-      if (!activeTab || isNewTab(activeTab.url) || activeTab.audible) continue;
+      if (!activeTab || isNewTabUrl(activeTab.url) || activeTab.audible) continue;
 
-      const existingNewTab = wTabs.find(t => isNewTab(t.url));
+      const existingNewTab = wTabs.find(t => isNewTabUrl(t.url));
       if (existingNewTab?.id) {
         try {
           await chrome.tabs.update(existingNewTab.id, { active: true });
@@ -663,10 +883,16 @@ chrome.commands.onCommand.addListener(async c => {
 
     // Full sweep discard across all windows and monitors, skipping active, sleeping, new tab, and media/audible tabs
     const refreshedTabs = await chrome.tabs.query({});
-    const tabsToDiscard = refreshedTabs.filter(t => t.id && !t.active && !t.discarded && !isNewTab(t.url) && !t.audible);
+    const tabsToDiscard = [];
+    for (let i = 0; i < refreshedTabs.length; i++) {
+      const t = refreshedTabs[i];
+      if (t.id && !t.active && !t.discarded && !isNewTabUrl(t.url) && !t.audible) {
+        tabsToDiscard.push(t.id);
+      }
+    }
 
     const discardResults = await Promise.allSettled(
-      tabsToDiscard.map(t => chrome.tabs.discard(t.id))
+      tabsToDiscard.map(id => chrome.tabs.discard(id))
     );
 
     const discardedCount = discardResults.filter(r => r.status === 'fulfilled' && r.value && r.value.discarded).length;
@@ -736,7 +962,26 @@ chrome.commands.onCommand.addListener(async c => {
       } catch {}
     } else {
       try {
-        const res = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => navigator.clipboard?.readText ? navigator.clipboard.readText() : null });
+        const res = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: async () => {
+            try {
+              if (navigator.clipboard?.readText) {
+                return await navigator.clipboard.readText();
+              }
+            } catch {}
+            try {
+              const ta = document.createElement('textarea');
+              document.body.appendChild(ta);
+              ta.focus();
+              document.execCommand('paste');
+              const text = ta.value;
+              ta.remove();
+              return text;
+            } catch {}
+            return null;
+          }
+        });
         result = res?.[0]?.result ?? null;
       } catch {
         try {
@@ -827,12 +1072,19 @@ const updateWhatsappScript = (enabled) => syncContentScripts(['whatsapp-virtual-
 ]);
 
 function rehydrateFeatureScripts() {
-  chrome.storage.local.get({ featureYtMusic: true, featureYtFloatSearch: true, featureWhatsapp: true }, (res) => {
+  chrome.storage.local.get({
+    featureYtMusic: true,
+    featureYtFloatSearch: true,
+    featureWhatsapp: true,
+    darkmode_domains: []
+  }, (res) => {
     updateYtMusicScript(res.featureYtMusic);
     updateYtFloatSearchScript(res.featureYtFloatSearch);
     updateWhatsappScript(res.featureWhatsapp);
+    if (res?.darkmode_domains) {
+      updateRegisteredDarkModeScript(res.darkmode_domains);
+    }
   });
-  rehydrateDarkScripts();
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -850,6 +1102,23 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 
+function dispatchNativeHostMessage(payload) {
+  cancelHostTeardown();
+  if (!nativeTelemetryPort) {
+    startNativeTelemetry();
+  }
+  if (nativeTelemetryPort) {
+    try {
+      nativeTelemetryPort.postMessage(payload);
+    } catch (e) {
+      console.error('Failed to post message to native host:', e);
+    }
+  }
+  if (telemetryClients.size === 0) {
+    scheduleHostTeardown();
+  }
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   switch (msg.action) {
     case 'updateYtMusicScript':
@@ -858,6 +1127,57 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'updateYtFloatSearchScript':
       updateYtFloatSearchScript(msg.enabled);
       break;
+    case 'fetchYtSuggestions': {
+      const query = (typeof msg.query === 'string') ? msg.query.trim().slice(0, 200) : '';
+      const token = msg.token;
+      if (!query) {
+        try {
+          sendResponse({ success: true, suggestions: [], query: '', token });
+        } catch {}
+        return false;
+      }
+
+      const tabKey = sender?.tab?.id ?? 'global';
+      const prevController = ytSuggestControllers.get(tabKey);
+      if (prevController) {
+        try { prevController.abort(); } catch {}
+      }
+
+      const controller = new AbortController();
+      ytSuggestControllers.set(tabKey, controller);
+
+      const timeoutId = setTimeout(() => {
+        try { controller.abort(); } catch {}
+      }, 5000);
+
+      const suggestUrl = `https://suggestqueries.google.com/complete/search?client=firefox&ds=yt&q=${encodeURIComponent(query)}`;
+      fetch(suggestUrl, { signal: controller.signal })
+        .then(res => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then(data => {
+          const suggestions = (Array.isArray(data) && Array.isArray(data[1]))
+            ? data[1].filter(s => typeof s === 'string').slice(0, 8)
+            : [];
+          try {
+            sendResponse({ success: true, suggestions, query, token });
+          } catch {}
+        })
+        .catch(err => {
+          const isAbort = err?.name === 'AbortError' || controller.signal.aborted;
+          try {
+            sendResponse({ success: false, aborted: isAbort, suggestions: [], query, token });
+          } catch {}
+        })
+        .finally(() => {
+          clearTimeout(timeoutId);
+          if (ytSuggestControllers.get(tabKey) === controller) {
+            ytSuggestControllers.delete(tabKey);
+          }
+        });
+      return true;
+    }
     case 'updateWhatsappScript':
       updateWhatsappScript(msg.enabled);
       break;
@@ -865,34 +1185,32 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (msg.tabId) toggleDarkMode(msg.tabId);
       break;
     case 'set_monitor_brightness':
-      if (!nativeTelemetryPort) {
-        startNativeTelemetry();
-      }
-      if (nativeTelemetryPort) {
-        try {
-          nativeTelemetryPort.postMessage({ action: 'set_brightness', value: Number(msg.value) });
-        } catch (e) {
-          console.error('Failed to post message to native host:', e);
-        }
-      }
+      dispatchNativeHostMessage({
+        action: 'set_brightness',
+        monitorId: msg.monitorId,
+        pnpId: msg.pnpId,
+        gdiDevice: msg.gdiDevice,
+        value: Number(msg.value)
+      });
       sendResponse({ success: true });
       return false;
     case 'set_panel_control':
-      if (!nativeTelemetryPort) {
-        startNativeTelemetry();
-      }
-      if (nativeTelemetryPort) {
-        try {
-          nativeTelemetryPort.postMessage({
-            action: 'set_panel_control',
-            monitorId: msg.monitorId,
-            control: msg.control,
-            value: Number(msg.value)
-          });
-        } catch (e) {
-          console.error('Failed to post panel control message to native host:', e);
-        }
-      }
+      dispatchNativeHostMessage({
+        action: 'set_panel_control',
+        monitorId: msg.monitorId,
+        pnpId: msg.pnpId,
+        gdiDevice: msg.gdiDevice,
+        control: msg.control,
+        value: Number(msg.value)
+      });
+      sendResponse({ success: true });
+      return false;
+    case 'probe_monitors':
+    case 'refresh_monitors':
+      dispatchNativeHostMessage({
+        action: msg.action === 'refresh_monitors' ? 'refresh_monitors' : 'probe_monitors',
+        probeId: msg.probeId || 0
+      });
       sendResponse({ success: true });
       return false;
     case 'pasteAndGo':
@@ -920,13 +1238,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
               if (res.ok) {
                 const arrayBuffer = await res.arrayBuffer();
                 const bytes = new Uint8Array(arrayBuffer);
-                let binary = '';
                 const len = bytes.byteLength;
-                const chunkSize = 8192;
+                const chunkSize = 16384;
+                const chunks = [];
                 for (let i = 0; i < len; i += chunkSize) {
-                  binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunkSize, len)));
+                  chunks.push(String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunkSize, len))));
                 }
-                const base64 = btoa(binary);
+                const base64 = btoa(chunks.join(''));
                 const contentType = res.headers.get('content-type') || 'image/png';
                 dataUrl = `data:${contentType};base64,${base64}`;
               }
@@ -1005,16 +1323,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ success: false });
       });
       return true;
+    case 'refresh_weather':
+      syncWeather(false).then(weather => {
+        try {
+          sendResponse({ success: Boolean(weather), weather });
+        } catch {}
+      }).catch(() => {
+        try {
+          sendResponse({ success: false });
+        } catch {}
+      });
+      return true;
   }
 });
 
+const GATEWAY_PARAM_NAMES = ['q', 'url', 'dest', 'destination', 'target', 'u', 'redirect_uri', 'r', 'z', 'link'];
+
 function unwrapGatewayUrl(rawUrl) {
-  if (!rawUrl) return null;
+  if (!rawUrl || typeof rawUrl !== 'string') return null;
+  if (!rawUrl.includes('?') && !rawUrl.includes('&')) return null;
+  if (!rawUrl.includes('http')) return null;
   try {
     const parsed = new URL(rawUrl);
-    const paramNames = ['q', 'url', 'dest', 'destination', 'target', 'u', 'redirect_uri', 'r', 'z', 'link'];
-    for (const p of paramNames) {
-      const val = parsed.searchParams.get(p);
+    for (let i = 0; i < GATEWAY_PARAM_NAMES.length; i++) {
+      const val = parsed.searchParams.get(GATEWAY_PARAM_NAMES[i]);
       if (val && /^https?:\/\//i.test(val)) {
         return val;
       }
@@ -1037,6 +1369,17 @@ const forbiddenFetchHosts = new Set([
   'appleid.apple.com'
 ]);
 
+const KNOWN_SHORTENERS = new Set([
+  'bit.ly', 't.co', 'tinyurl.com', 'is.gd', 'v.gd', 'amzn.to', 'buff.ly', 'ow.ly',
+  'goo.gl', 'qr.ae', 'cutt.ly', 'rb.gy', 'shorturl.at', 'ift.tt', 'trib.al',
+  'rebrand.ly', 'lnkd.in', 'linktr.ee', 'rotf.lol', 'tiny.cc', 'lmg.gg', 'redd.it',
+  'spoti.fi', 'apple.co', 'w.wiki', 'wapo.st', 'nyti.ms', 'bit.do', 'shorte.st',
+  'geni.us', 'a.co', 'snip.ly', 'snip.li', 't.ly', 'dub.sh', 'snip.to', 's.id'
+]);
+
+const SHORT_TLDS_REGEX = /\.(gg|ly|to|co|is|gd|cc|link|me|click|fi|ms|it|st|app|bio|us|sh|io|so|at|am|ws|nu|ee|ai|xyz|site)$/i;
+const SHORT_SLUG_REGEX = /^\/[a-zA-Z0-9_\-\.]{1,25}\/?$/;
+
 function isShortenerUrl(urlStr) {
   try {
     const url = new URL(urlStr);
@@ -1050,18 +1393,9 @@ function isShortenerUrl(urlStr) {
     if (host.endsWith('.apple.com') && host !== 'apple.co') return false;
 
     if (shortenersSet.has(host)) return true;
+    if (KNOWN_SHORTENERS.has(host)) return true;
 
-    const knownShorteners = new Set([
-      'bit.ly', 't.co', 'tinyurl.com', 'is.gd', 'v.gd', 'amzn.to', 'buff.ly', 'ow.ly',
-      'goo.gl', 'qr.ae', 'cutt.ly', 'rb.gy', 'shorturl.at', 'ift.tt', 'trib.al',
-      'rebrand.ly', 'lnkd.in', 'linktr.ee', 'rotf.lol', 'tiny.cc', 'lmg.gg', 'redd.it',
-      'spoti.fi', 'apple.co', 'w.wiki', 'wapo.st', 'nyti.ms', 'bit.do', 'shorte.st',
-      'geni.us', 'a.co', 'snip.ly', 'snip.li', 't.ly', 'dub.sh', 'snip.to', 's.id'
-    ]);
-    if (knownShorteners.has(host)) return true;
-
-    const shortTlds = /\.(gg|ly|to|co|is|gd|cc|link|me|click|fi|ms|it|st|app|bio|us|sh|io|so|at|am|ws|nu|ee|ai|xyz|site)$/i;
-    if (host.length <= 14 && shortTlds.test(host) && /^\/[a-zA-Z0-9_\-\.]{1,25}\/?$/.test(pathname)) {
+    if (host.length <= 14 && SHORT_TLDS_REGEX.test(host) && SHORT_SLUG_REGEX.test(pathname)) {
       return true;
     }
   } catch {}
@@ -1070,7 +1404,17 @@ function isShortenerUrl(urlStr) {
 
 async function resolveAndCleanShortUrl(rawUrl) {
   if (!rawUrl || !/^https?:\/\//i.test(rawUrl)) return null;
-  if (unshortenCache.has(rawUrl)) return unshortenCache.get(rawUrl);
+  await ensureUnshortenCacheInitialized();
+  if (unshortenCache.has(rawUrl)) {
+    const cachedClean = unshortenCache.get(rawUrl);
+    unshortenCache.delete(rawUrl);
+    unshortenCache.set(rawUrl, cachedClean);
+    if (reverseUnshortenCache.has(cachedClean)) {
+      reverseUnshortenCache.delete(cachedClean);
+      reverseUnshortenCache.set(cachedClean, rawUrl);
+    }
+    return cachedClean;
+  }
 
   try {
     let currentUrl = rawUrl;
@@ -1133,8 +1477,18 @@ async function resolveAndCleanShortUrl(rawUrl) {
     // Step 3: Sanitize through ClearURLs engine
     const cleanUrl = typeof cleanUrlWithClearUrls === 'function' ? cleanUrlWithClearUrls(finalUrl, clearUrlsData) : finalUrl;
 
-    if (unshortenCache.size > 1000) unshortenCache.delete(unshortenCache.keys().next().value);
+    if (unshortenCache.size > 1000) {
+      const oldestKey = unshortenCache.keys().next().value;
+      const oldestVal = unshortenCache.get(oldestKey);
+      unshortenCache.delete(oldestKey);
+      if (oldestVal) reverseUnshortenCache.delete(oldestVal);
+    }
+    if (reverseUnshortenCache.size > 1000) {
+      reverseUnshortenCache.delete(reverseUnshortenCache.keys().next().value);
+    }
     unshortenCache.set(rawUrl, cleanUrl);
+    reverseUnshortenCache.set(cleanUrl, rawUrl);
+    persistUnshortenCache();
 
     return cleanUrl;
   } catch (e) {
@@ -1235,26 +1589,84 @@ function updateRegisteredDarkModeScript(domains) {
   return darkScriptLock;
 }
 
-function rehydrateDarkScripts() {
-  chrome.storage.local.get('darkmode_domains', (res) => {
-    if (res?.darkmode_domains) updateRegisteredDarkModeScript(res.darkmode_domains);
-  });
-}
-
 // ============================================================================
 // Hardware Telemetry Native Host Multiplexer (Singleton)
 // ============================================================================
 let nativeTelemetryPort = null;
 const telemetryClients = new Set();
 let lastTelemetryData = null;
+let hostTeardownTimer = null;
+
+// Telemetry session storage throttling state (3 to 5s window with immediate config dispatch)
+let lastTelemetrySessionWriteTime = 0;
+let telemetrySessionTimer = null;
+let lastMonitorConfigSig = null;
+const TELEMETRY_STORAGE_THROTTLE_MS = 4000;
+
+function getMonitorConfigSignature(monitors) {
+  if (!Array.isArray(monitors)) return '';
+  return monitors.filter(Boolean).map(m => {
+    return [
+      m.id || '',
+      m.name || '',
+      m.pnpId || '',
+      m.gdiDevice || '',
+      m.windowsDisplayNumber || '',
+      m.isInternal ? 1 : 0,
+      m.brightness,
+      m.contrast,
+      m.blackBoost,
+      m.colorPreset,
+      m.gainR,
+      m.gainG,
+      m.gainB,
+      m.overdrive,
+      m.strobing,
+      m.features ? JSON.stringify(m.features) : '',
+      m.capabilities ? JSON.stringify(m.capabilities) : ''
+    ].join('|');
+  }).join('||');
+}
+
+function cancelHostTeardown() {
+  if (hostTeardownTimer) {
+    clearTimeout(hostTeardownTimer);
+    hostTeardownTimer = null;
+  }
+  try {
+    chrome.alarms.clear('host_idle_teardown_alarm');
+  } catch {}
+}
+
+function scheduleHostTeardown() {
+  cancelHostTeardown();
+  hostTeardownTimer = setTimeout(() => {
+    if (telemetryClients.size === 0) {
+      stopNativeTelemetry();
+    }
+    hostTeardownTimer = null;
+  }, 20000);
+
+  try {
+    chrome.alarms.create('host_idle_teardown_alarm', {
+      when: Date.now() + 20000
+    });
+  } catch {}
+}
+
+// Clean up any legacy persistent monitor cache entries to ensure strictly empirical telemetry
+try {
+  chrome.storage.local.remove(['cached_monitors']);
+} catch (e) {}
 
 chrome.runtime.onConnect.addListener((clientPort) => {
   if (clientPort.name !== 'telemetry') return;
 
+  cancelHostTeardown();
   telemetryClients.add(clientPort);
 
-  // Instantly send cached telemetry so new tabs render without delay
-  if (lastTelemetryData) {
+  // Send latest live empirical telemetry frame if native host is active
+  if (nativeTelemetryPort && lastTelemetryData) {
     try {
       clientPort.postMessage(lastTelemetryData);
     } catch (e) {}
@@ -1266,6 +1678,7 @@ chrome.runtime.onConnect.addListener((clientPort) => {
   }
 
   clientPort.onMessage.addListener((msg) => {
+    cancelHostTeardown();
     if (!nativeTelemetryPort) {
       startNativeTelemetry();
     }
@@ -1281,7 +1694,7 @@ chrome.runtime.onConnect.addListener((clientPort) => {
   clientPort.onDisconnect.addListener(() => {
     telemetryClients.delete(clientPort);
     if (telemetryClients.size === 0) {
-      stopNativeTelemetry();
+      scheduleHostTeardown();
     }
   });
 });
@@ -1293,8 +1706,41 @@ function startNativeTelemetry() {
     nativeTelemetryPort = chrome.runtime.connectNative('com.gpu.telemetry');
 
     nativeTelemetryPort.onMessage.addListener((data) => {
-      lastTelemetryData = data;
-      for (const client of Array.from(telemetryClients)) {
+      if (data && !data.error) {
+        lastTelemetryData = data;
+        const currentSig = getMonitorConfigSignature(data.monitors);
+        const sigChanged = (lastMonitorConfigSig === null || currentSig !== lastMonitorConfigSig);
+        const now = Date.now();
+        const elapsed = now - lastTelemetrySessionWriteTime;
+
+        if (sigChanged || elapsed >= TELEMETRY_STORAGE_THROTTLE_MS) {
+          if (telemetrySessionTimer) {
+            clearTimeout(telemetrySessionTimer);
+            telemetrySessionTimer = null;
+          }
+          lastTelemetrySessionWriteTime = now;
+          lastMonitorConfigSig = currentSig;
+          try {
+            if (chrome.storage && chrome.storage.session) {
+              chrome.storage.session.set({ latest_telemetry: data });
+            }
+          } catch (e) {}
+        } else if (!telemetrySessionTimer) {
+          telemetrySessionTimer = setTimeout(() => {
+            telemetrySessionTimer = null;
+            if (lastTelemetryData && chrome.storage?.session) {
+              try {
+                chrome.storage.session.set({ latest_telemetry: lastTelemetryData });
+                lastTelemetrySessionWriteTime = Date.now();
+                lastMonitorConfigSig = getMonitorConfigSignature(lastTelemetryData.monitors);
+              } catch (e) {}
+            }
+          }, TELEMETRY_STORAGE_THROTTLE_MS - elapsed);
+        }
+      }
+
+      // Live dispatches remain immediate at 0ms latency
+      for (const client of telemetryClients) {
         try {
           client.postMessage(data);
         } catch (e) {
@@ -1306,7 +1752,13 @@ function startNativeTelemetry() {
     nativeTelemetryPort.onDisconnect.addListener(() => {
       const err = chrome.runtime.lastError ? chrome.runtime.lastError.message : 'Host Disconnected';
       nativeTelemetryPort = null;
-      for (const client of Array.from(telemetryClients)) {
+      lastTelemetryData = null;
+      if (telemetrySessionTimer) {
+        clearTimeout(telemetrySessionTimer);
+        telemetrySessionTimer = null;
+      }
+      lastMonitorConfigSig = null;
+      for (const client of telemetryClients) {
         try {
           client.postMessage({ error: true, message: err });
         } catch (e) {
@@ -1314,9 +1766,19 @@ function startNativeTelemetry() {
         }
       }
     });
+
+    if (telemetryClients.size === 0) {
+      scheduleHostTeardown();
+    }
   } catch (e) {
     nativeTelemetryPort = null;
-    for (const client of Array.from(telemetryClients)) {
+    lastTelemetryData = null;
+    if (telemetrySessionTimer) {
+      clearTimeout(telemetrySessionTimer);
+      telemetrySessionTimer = null;
+    }
+    lastMonitorConfigSig = null;
+    for (const client of telemetryClients) {
       try {
         client.postMessage({ error: true, message: e.message || 'Host Launch Failed' });
       } catch (err) {}
@@ -1325,10 +1787,17 @@ function startNativeTelemetry() {
 }
 
 function stopNativeTelemetry() {
+  cancelHostTeardown();
+  if (telemetrySessionTimer) {
+    clearTimeout(telemetrySessionTimer);
+    telemetrySessionTimer = null;
+  }
   if (nativeTelemetryPort) {
     try {
       nativeTelemetryPort.disconnect();
     } catch (e) {}
     nativeTelemetryPort = null;
   }
+  lastTelemetryData = null;
+  lastMonitorConfigSig = null;
 }

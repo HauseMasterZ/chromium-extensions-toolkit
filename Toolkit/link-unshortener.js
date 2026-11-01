@@ -2,6 +2,10 @@
 // UNIVERSAL LINK UNSHORTENER & GATEWAY UNWRAPPER
 // ==========================================
 
+(() => {
+if (window.__toolkitLinkUnshortenerInjected) return;
+window.__toolkitLinkUnshortenerInjected = true;
+
 let dynamicShorteners = new Set();
 
 try {
@@ -17,13 +21,14 @@ try {
     });
 } catch {}
 
+const GATEWAY_PARAMS = ['q', 'url', 'dest', 'destination', 'target', 'u', 'redirect_uri', 'r', 'z', 'link'];
+
 function unwrapGatewayUrl(rawUrl) {
-    if (!rawUrl) return null;
+    if (!rawUrl || (!rawUrl.includes('?') && !rawUrl.includes('&')) || !rawUrl.includes('http')) return null;
     try {
         const url = new URL(rawUrl);
-        const paramNames = ['q', 'url', 'dest', 'destination', 'target', 'u', 'redirect_uri', 'r', 'z', 'link'];
-        for (const p of paramNames) {
-            const val = url.searchParams.get(p);
+        for (let i = 0; i < GATEWAY_PARAMS.length; i++) {
+            const val = url.searchParams.get(GATEWAY_PARAMS[i]);
             if (val && /^https?:\/\//i.test(val)) {
                 return val;
             }
@@ -54,6 +59,10 @@ function getBaseDomain(h) {
     return parts.length >= 2 ? parts.slice(-2).join('.') : h;
 }
 
+const CURRENT_HOST = window.location.hostname.toLowerCase().replace(/^www\./, '');
+const CURRENT_BASE_DOMAIN = getBaseDomain(CURRENT_HOST);
+const IS_SEARCH_ENGINE = CURRENT_HOST.includes('google.') || CURRENT_HOST.includes('bing.') || CURRENT_HOST.includes('duckduckgo.');
+
 function isShortOrGatewayLink(rawUrl) {
     if (!rawUrl || !/^https?:\/\//i.test(rawUrl)) return false;
     if (unwrapGatewayUrl(rawUrl)) return true;
@@ -69,14 +78,12 @@ function isShortOrGatewayLink(rawUrl) {
         if (host.endsWith('.microsoft.com') && host !== 'msft.it') return false;
         if (host.endsWith('.apple.com') && host !== 'apple.co') return false;
 
-        // Never treat same-domain or same base-domain internal links as shorteners (e.g. mail.google.com -> accounts.google.com)
-        const currentHost = window.location.hostname.toLowerCase().replace(/^www\./, '');
-        if (host === currentHost || host.endsWith('.' + currentHost) || currentHost.endsWith('.' + host)) {
+        // Never treat same-domain or same base-domain internal links as shorteners
+        if (host === CURRENT_HOST || host.endsWith('.' + CURRENT_HOST) || CURRENT_HOST.endsWith('.' + host)) {
             return false;
         }
-        const currentBase = getBaseDomain(currentHost);
         const linkBase = getBaseDomain(host);
-        if (currentBase && linkBase && currentBase === linkBase) {
+        if (CURRENT_BASE_DOMAIN && linkBase && CURRENT_BASE_DOMAIN === linkBase) {
             return false;
         }
 
@@ -97,16 +104,21 @@ function isShortOrGatewayLink(rawUrl) {
         }
 
         // Search engine result redirection queries (e.g. google.com/url?q=..., bing.com redirection)
-        if ((currentHost.includes('google.') || currentHost.includes('bing.') || currentHost.includes('duckduckgo.')) &&
-            (url.search && (url.searchParams.has('url') || url.searchParams.has('q') || url.searchParams.has('rwt')))) {
+        if (IS_SEARCH_ENGINE && (url.search && (url.searchParams.has('url') || url.searchParams.has('q') || url.searchParams.has('rwt')))) {
             return true;
         }
     } catch {}
     return false;
 }
 
+let stylesInjected = false;
+
 function injectUnshortenStyles() {
-    if (document.getElementById('toolkit-unshorten-styles')) return;
+    if (stylesInjected) return;
+    if (document.getElementById('toolkit-unshorten-styles')) {
+        stylesInjected = true;
+        return;
+    }
     const style = document.createElement('style');
     style.id = 'toolkit-unshorten-styles';
     style.textContent = `
@@ -128,12 +140,25 @@ function injectUnshortenStyles() {
         }
     `;
     (document.head || document.documentElement).appendChild(style);
+    stylesInjected = true;
 }
 
 try { injectUnshortenStyles(); } catch {}
 
 const resolvingElements = new WeakSet();
 const tabUnshortenCache = new Map();
+const tabReverseUnshortenCache = new Map();
+
+function cacheTabUnshorten(raw, clean) {
+    if (tabUnshortenCache.size > 500) {
+        const oldestKey = tabUnshortenCache.keys().next().value;
+        const oldestVal = tabUnshortenCache.get(oldestKey);
+        tabUnshortenCache.delete(oldestKey);
+        if (oldestVal) tabReverseUnshortenCache.delete(oldestVal);
+    }
+    tabUnshortenCache.set(raw, clean);
+    tabReverseUnshortenCache.set(clean, raw);
+}
 
 function isHighConfidenceShortener(rawUrl) {
     if (!rawUrl) return false;
@@ -237,7 +262,7 @@ function handleLinkUnshorten(a) {
                 return;
             }
 
-            tabUnshortenCache.set(targetHref, res.cleanUrl);
+            cacheTabUnshorten(targetHref, res.cleanUrl);
             a.dataset.unshortenState = 'resolved';
             a.dataset.unshortened = 'true';
             a.dataset.originalShortUrl = targetHref;
@@ -259,15 +284,13 @@ function isExternalSearchOrGatewayLink(a) {
         const host = url.hostname.toLowerCase().replace(/^www\./, '');
         if (excludedAuthHosts.has(host)) return false;
 
-        const currentHost = window.location.hostname.toLowerCase().replace(/^www\./, '');
-        const currentBase = getBaseDomain(currentHost);
         const linkBase = getBaseDomain(host);
 
-        // Same base domain internal links (e.g. google.com -> accounts.google.com, pagination, tabs) are never external search targets
-        if (currentBase && linkBase && currentBase === linkBase) return false;
+        // Same base domain internal links are never external search targets
+        if (CURRENT_BASE_DOMAIN && linkBase && CURRENT_BASE_DOMAIN === linkBase) return false;
 
         // On search engine domains, any external cross-origin link is a search result
-        if (currentHost.includes('google.') || currentHost.includes('bing.') || currentHost.includes('duckduckgo.')) {
+        if (IS_SEARCH_ENGINE) {
             return true;
         }
     } catch {}
@@ -311,11 +334,6 @@ document.addEventListener('mouseover', (e) => {
     } else {
         hoverUnshortenTimer = setTimeout(() => handleLinkUnshorten(a), 15);
     }
-}, { passive: true });
-
-document.addEventListener('mousemove', (e) => {
-    lastMouseX = e.clientX;
-    lastMouseY = e.clientY;
 }, { passive: true });
 
 document.addEventListener('focusin', (e) => {
@@ -454,10 +472,7 @@ document.addEventListener('auxclick', (e) => {
 
 function findRawUrlInCache(cleanUrl) {
     if (!cleanUrl) return null;
-    for (const [raw, clean] of tabUnshortenCache.entries()) {
-        if (clean === cleanUrl) return raw;
-    }
-    return null;
+    return tabReverseUnshortenCache.get(cleanUrl) || null;
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -465,14 +480,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         let rawUrl = lastRightClickedLink?.rawUrl;
 
         if (!rawUrl && msg.linkUrl) {
-            for (const a of document.querySelectorAll('a[href]')) {
-                if (a.href === msg.linkUrl) {
-                    rawUrl = a.dataset.rawHref || a.dataset.originalShortUrl;
-                    if (rawUrl) break;
-                }
+            rawUrl = findRawUrlInCache(msg.linkUrl);
+            if (!rawUrl && lastHoveredAnchor?.href === msg.linkUrl) {
+                rawUrl = lastHoveredAnchor.dataset.rawHref || lastHoveredAnchor.dataset.originalShortUrl;
             }
             if (!rawUrl) {
-                rawUrl = findRawUrlInCache(msg.linkUrl);
+                for (const a of document.querySelectorAll('a[href]')) {
+                    if (a.href === msg.linkUrl) {
+                        rawUrl = a.dataset.rawHref || a.dataset.originalShortUrl;
+                        if (rawUrl) break;
+                    }
+                }
             }
         }
 
@@ -480,3 +498,4 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return false;
     }
 });
+})();

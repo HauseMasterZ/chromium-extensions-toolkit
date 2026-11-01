@@ -1,3 +1,7 @@
+(() => {
+if (window.__ytFloatSearchInjected) return;
+window.__ytFloatSearchInjected = true;
+
 const inject = () => {
   const bar = document.createElement('div');
   bar.id = 'yt-float-bar';
@@ -17,7 +21,7 @@ const inject = () => {
   if (initialImg?.src && initialImg.src !== location.href) {
     profileBtn.innerHTML = `<img src="${initialImg.src}" width="26" height="26" style="border-radius:50%;object-fit:cover">`;
   } else {
-    const avatarRoot = document.querySelector('ytd-app, ytm-app') || document.body;
+    const avatarRoot = document.querySelector('ytd-masthead, ytd-app, ytm-app') || document.body;
     const avatarObs = new MutationObserver(() => {
       const img = getAvatarImg();
       if (img?.src && img.src !== location.href) {
@@ -26,12 +30,15 @@ const inject = () => {
       }
     });
     avatarObs.observe(avatarRoot, { childList: true, subtree: true });
+    setTimeout(() => {
+      try { avatarObs.disconnect(); } catch {}
+    }, 12000);
   }
 
   const input = document.getElementById('yt-float-input');
   const searchBtn = document.getElementById('yt-float-btn');
   const profileMenu = document.getElementById('yt-profile-menu');
-  let selIdx = -1, debounceTimer, menuOpen = false, lastQuery = '', hideTimeout, controller = null, suggItems = [];
+  let selIdx = -1, debounceTimer, menuOpen = false, lastQuery = '', typedQuery = '', hideTimeout, suggItems = [], querySeq = 0;
 
   profileBtn.addEventListener('click', e => {
     e.stopPropagation();
@@ -51,61 +58,149 @@ const inject = () => {
   };
 
   const hideSugg = () => {
-    if (!suggItems.length) return;
+    querySeq++;
     sugg.classList.remove('visible');
     selIdx = -1;
     suggItems = [];
+    sugg.replaceChildren();
   };
 
   sugg.addEventListener('mousedown', e => {
     const item = e.target.closest('.yt-suggest-item');
-    if (item) { e.preventDefault(); doSearch(item.dataset.v, e); }
+    if (item) {
+      e.preventDefault();
+      const val = item.dataset.v || '';
+      input.value = val;
+      typedQuery = val;
+      hideSugg();
+      doSearch(val, e);
+    }
   });
 
-  const fetchSugg = async q => {
-    if (!q.trim()) { hideSugg(); return; }
-    if (q === lastQuery) return;
-    lastQuery = q;
-    if (controller) controller.abort();
-    controller = new AbortController();
+  const fetchSugg = q => {
+    const trimmed = (q || '').trim();
+    if (!trimmed) {
+      lastQuery = '';
+      hideSugg();
+      return;
+    }
+    if (trimmed === lastQuery && sugg.classList.contains('visible')) return;
+    lastQuery = trimmed;
+    const currentSeq = ++querySeq;
+
+    if (!chrome.runtime?.id) {
+      hideSugg();
+      return;
+    }
+
     try {
-      const data = await (await fetch(
-        `https://suggestqueries.google.com/complete/search?client=firefox&ds=yt&q=${encodeURIComponent(q)}`,
-        { signal: controller.signal }
-      )).json();
-      const items = data[1].slice(0, 8);
-      if (!items.length) { hideSugg(); return; }
-      sugg.innerHTML = items.map(s =>
-        `<div class="yt-suggest-item" data-v="${s.replace(/"/g, '&quot;')}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <span style="max-width: ${(input.offsetWidth * 1.2)}px">
-            ${s}
-          </span>
-        </div>`
-      ).join('');
-      sugg.classList.add('visible');
-      selIdx = -1;
-      suggItems = sugg.querySelectorAll('.yt-suggest-item');
-    } catch (e) { if (e.name !== 'AbortError') hideSugg(); }
+      chrome.runtime.sendMessage(
+        { action: 'fetchYtSuggestions', query: trimmed, token: currentSeq },
+        response => {
+          if (chrome.runtime.lastError) return;
+          if (currentSeq !== querySeq) return;
+          if (response?.token !== undefined && response.token !== currentSeq) return;
+          if (input.value.trim() !== trimmed && selIdx === -1) return;
+          if (response?.aborted) return;
+          if (document.activeElement !== input || !bar.classList.contains('visible')) {
+            hideSugg();
+            return;
+          }
+
+          const items = (response?.success && Array.isArray(response?.suggestions))
+            ? response.suggestions.slice(0, 8)
+            : [];
+
+          if (!items.length) {
+            hideSugg();
+            return;
+          }
+
+          const maxW = (input.offsetWidth * 1.2) || 280;
+          const frag = document.createDocumentFragment();
+          for (const s of items) {
+            const item = document.createElement('div');
+            item.className = 'yt-suggest-item';
+            item.dataset.v = s;
+
+            const iconSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            iconSvg.setAttribute('width', '12');
+            iconSvg.setAttribute('height', '12');
+            iconSvg.setAttribute('viewBox', '0 0 24 24');
+            iconSvg.setAttribute('fill', 'none');
+            iconSvg.setAttribute('stroke', '#999');
+            iconSvg.setAttribute('stroke-width', '2');
+            iconSvg.setAttribute('stroke-linecap', 'round');
+            iconSvg.setAttribute('stroke-linejoin', 'round');
+            iconSvg.style.flexShrink = '0';
+            iconSvg.innerHTML = '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>';
+
+            const span = document.createElement('span');
+            span.style.maxWidth = `${maxW}px`;
+            span.textContent = s;
+
+            item.appendChild(iconSvg);
+            item.appendChild(span);
+            frag.appendChild(item);
+          }
+
+          sugg.replaceChildren(frag);
+          sugg.classList.add('visible');
+          selIdx = -1;
+          suggItems = sugg.querySelectorAll('.yt-suggest-item');
+        }
+      );
+    } catch {
+      hideSugg();
+    }
   };
 
   const updateSel = () => {
     suggItems.forEach((el, i) => {
       el.classList.toggle('selected', i === selIdx);
-      if (i === selIdx) input.value = el.dataset.v;
     });
+    if (selIdx >= 0 && selIdx < suggItems.length) {
+      input.value = suggItems[selIdx].dataset.v || '';
+    } else if (selIdx === -1) {
+      input.value = typedQuery;
+    }
   };
 
   input.addEventListener('input', () => {
-    lastQuery = '';
     clearTimeout(debounceTimer);
+    const rawVal = input.value;
+    typedQuery = rawVal;
+    const val = rawVal.trim();
+    if (!val) {
+      lastQuery = '';
+      hideSugg();
+      return;
+    }
+    if (val === lastQuery && sugg.classList.contains('visible')) return;
     debounceTimer = setTimeout(() => fetchSugg(input.value), 200);
   });
 
   input.addEventListener('keydown', e => {
-    if (e.key === 'ArrowDown') { e.preventDefault(); selIdx = Math.min(selIdx + 1, suggItems.length - 1); updateSel(); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); selIdx = Math.max(selIdx - 1, -1); updateSel(); }
-    else if (e.key === 'Enter') { hideSugg(); doSearch(); }
-    else if (e.key === 'Escape') { hideSugg(); bar.classList.remove('visible'); input.blur(); }
+    if (e.key === 'ArrowDown') {
+      if (suggItems.length > 0) {
+        e.preventDefault();
+        selIdx = Math.min(selIdx + 1, suggItems.length - 1);
+        updateSel();
+      }
+    } else if (e.key === 'ArrowUp') {
+      if (suggItems.length > 0) {
+        e.preventDefault();
+        selIdx = Math.max(selIdx - 1, -1);
+        updateSel();
+      }
+    } else if (e.key === 'Enter') {
+      hideSugg();
+      doSearch();
+    } else if (e.key === 'Escape') {
+      hideSugg();
+      bar.classList.remove('visible');
+      input.blur();
+    }
   });
 
   searchBtn.addEventListener('mousedown', e => {
@@ -116,7 +211,10 @@ const inject = () => {
   });
 
   const p = new URLSearchParams(location.search).get('search_query');
-  if (p) input.value = p;
+  if (p) {
+    input.value = p;
+    typedQuery = p;
+  }
   const showBar = () => { clearTimeout(hideTimeout); bar.classList.add('visible'); wrapper.classList.add('bar-visible'); };
   const schedHide = () => {
     hideTimeout = setTimeout(() => {
@@ -130,7 +228,14 @@ const inject = () => {
     wrapper.addEventListener('mouseenter', showBar, { passive: true });
     wrapper.addEventListener('mouseleave', schedHide, { passive: true });
   }
-  input.addEventListener('focus', () => { showBar(); if (input.value.trim()) { lastQuery = ''; fetchSugg(input.value); } });
+  input.addEventListener('focus', () => {
+    showBar();
+    typedQuery = input.value;
+    if (input.value.trim()) {
+      lastQuery = '';
+      fetchSugg(input.value);
+    }
+  });
   input.addEventListener('blur', schedHide);
 
   document.addEventListener('visibilitychange', () => {
@@ -138,7 +243,7 @@ const inject = () => {
       clearTimeout(hideTimeout);
       bar.classList.remove('visible');
       profileMenu.classList.remove('visible');
-      sugg.classList.remove('visible');
+      hideSugg();
       menuOpen = false;
       input.blur();
     }
@@ -409,6 +514,7 @@ window.addEventListener('keydown', onUserToggle, { capture: true, passive: true 
 window.addEventListener('click', onUserToggle, { capture: true, passive: true });
 
 // Lifecycle and navigation event listeners
+let lastKnownHref = location.href;
 document.addEventListener('yt-navigate-finish', () => {
   lastKnownHref = location.href;
   syncTheaterMode(true);
@@ -423,9 +529,22 @@ window.addEventListener('popstate', () => {
   syncTheaterMode(true);
 }, { passive: true });
 
-// Continuous lightweight URL watcher for background auto-advance transitions & SPA navigation
-let lastKnownHref = location.href;
+// Immediate sync when tab transitions from background to foreground
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && location.href !== lastKnownHref) {
+    lastKnownHref = location.href;
+    if (isWatchPage()) {
+      syncTheaterMode();
+    } else {
+      cancelTheaterSync();
+      activeSessionKey = '';
+    }
+  }
+}, { passive: true });
+
+// Fallback background URL watcher for unattended auto-advances
 setInterval(() => {
+  if (document.hidden) return;
   if (location.href !== lastKnownHref) {
     lastKnownHref = location.href;
     if (isWatchPage()) {
@@ -435,7 +554,7 @@ setInterval(() => {
       activeSessionKey = '';
     }
   }
-}, 200);
+}, 800);
 
 const init = () => {
   syncTheaterMode(true);
@@ -449,6 +568,7 @@ if (document.readyState === 'loading') {
 } else {
   init();
 }
+})();
 
 
 
