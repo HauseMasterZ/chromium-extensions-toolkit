@@ -1224,13 +1224,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ success: true });
       return false;
     case 'set_panel_control':
+      recordInternalDisplaySetting(msg);
       dispatchNativeHostMessage({
         action: 'set_panel_control',
         monitorId: msg.monitorId,
         pnpId: msg.pnpId,
         gdiDevice: msg.gdiDevice,
         control: msg.control,
-        value: Number(msg.value)
+        value: Number(msg.value),
+        isInternal: Boolean(msg.isInternal)
       });
       sendResponse({ success: true });
       return false;
@@ -1238,7 +1240,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'refresh_monitors':
       dispatchNativeHostMessage({
         action: msg.action === 'refresh_monitors' ? 'refresh_monitors' : 'probe_monitors',
-        probeId: msg.probeId || 0
+        probeId: msg.probeId || 0,
+        contrast: internalDisplaySettings.contrast,
+        gainR: internalDisplaySettings.gainR,
+        gainG: internalDisplaySettings.gainG,
+        gainB: internalDisplaySettings.gainB
       });
       sendResponse({ success: true });
       return false;
@@ -1690,6 +1696,72 @@ try {
   chrome.storage.local.remove(['cached_monitors']);
 } catch (e) {}
 
+const internalDisplaySettings = {
+  contrast: 50,
+  gainR: 50,
+  gainG: 50,
+  gainB: 50
+};
+let isInternalStorageHydrated = false;
+
+try {
+  chrome.storage.local.get({
+    internalContrast: 50,
+    internalGainR: 50,
+    internalGainG: 50,
+    internalGainB: 50
+  }, (res) => {
+    if (chrome.runtime.lastError) return;
+    if (typeof res?.internalContrast === 'number') internalDisplaySettings.contrast = res.internalContrast;
+    if (typeof res?.internalGainR === 'number') internalDisplaySettings.gainR = res.internalGainR;
+    if (typeof res?.internalGainG === 'number') internalDisplaySettings.gainG = res.internalGainG;
+    if (typeof res?.internalGainB === 'number') internalDisplaySettings.gainB = res.internalGainB;
+    isInternalStorageHydrated = true;
+    if (nativeTelemetryPort) {
+      try {
+        nativeTelemetryPort.postMessage({
+          action: 'init_internal_display',
+          contrast: internalDisplaySettings.contrast,
+          gainR: internalDisplaySettings.gainR,
+          gainG: internalDisplaySettings.gainG,
+          gainB: internalDisplaySettings.gainB
+        });
+      } catch (e) {}
+    }
+  });
+} catch (e) {}
+
+function recordInternalDisplaySetting(msg) {
+  if (!msg || msg.action !== 'set_panel_control') return;
+  const isInternal = Boolean(
+    msg.isInternal ||
+    (lastTelemetryData?.monitors?.find(m => m.id === msg.monitorId || m.pnpId === msg.monitorId || (msg.pnpId && m.pnpId === msg.pnpId))?.isInternal) ||
+    (typeof msg.monitorId === 'string' && msg.monitorId.toLowerCase().includes('internal')) ||
+    (typeof msg.gdiDevice === 'string' && msg.gdiDevice.includes('DISPLAY1'))
+  );
+
+  if (!isInternal) return;
+
+  const ctrl = String(msg.control || '').toLowerCase().replace(/_/g, '');
+  const val = Number(msg.value);
+  if (isNaN(val)) return;
+
+  const clamped = Math.max(0, Math.min(100, val));
+  if (ctrl === 'contrast') {
+    internalDisplaySettings.contrast = clamped;
+    chrome.storage.local.set({ internalContrast: clamped });
+  } else if (ctrl === 'gainr') {
+    internalDisplaySettings.gainR = clamped;
+    chrome.storage.local.set({ internalGainR: clamped });
+  } else if (ctrl === 'gaing') {
+    internalDisplaySettings.gainG = clamped;
+    chrome.storage.local.set({ internalGainG: clamped });
+  } else if (ctrl === 'gainb') {
+    internalDisplaySettings.gainB = clamped;
+    chrome.storage.local.set({ internalGainB: clamped });
+  }
+}
+
 chrome.runtime.onConnect.addListener((clientPort) => {
   if (clientPort.name !== 'telemetry') return;
 
@@ -1710,6 +1782,15 @@ chrome.runtime.onConnect.addListener((clientPort) => {
 
   clientPort.onMessage.addListener((msg) => {
     cancelHostTeardown();
+    if (msg) {
+      recordInternalDisplaySetting(msg);
+      if (msg.action === 'probe_monitors' || msg.action === 'refresh_monitors') {
+        if (typeof msg.contrast !== 'number') msg.contrast = internalDisplaySettings.contrast;
+        if (typeof msg.gainR !== 'number') msg.gainR = internalDisplaySettings.gainR;
+        if (typeof msg.gainG !== 'number') msg.gainG = internalDisplaySettings.gainG;
+        if (typeof msg.gainB !== 'number') msg.gainB = internalDisplaySettings.gainB;
+      }
+    }
     if (!nativeTelemetryPort) {
       startNativeTelemetry();
     }
@@ -1735,6 +1816,18 @@ function startNativeTelemetry() {
 
   try {
     nativeTelemetryPort = chrome.runtime.connectNative('com.gpu.telemetry');
+
+    if (isInternalStorageHydrated) {
+      try {
+        nativeTelemetryPort.postMessage({
+          action: 'init_internal_display',
+          contrast: internalDisplaySettings.contrast,
+          gainR: internalDisplaySettings.gainR,
+          gainG: internalDisplaySettings.gainG,
+          gainB: internalDisplaySettings.gainB
+        });
+      } catch (e) {}
+    }
 
     nativeTelemetryPort.onMessage.addListener((data) => {
       if (data && !data.error) {

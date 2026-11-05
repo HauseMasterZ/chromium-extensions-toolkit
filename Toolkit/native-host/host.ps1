@@ -371,13 +371,17 @@ public class MonitorController {
         return null;
     }
 
-    public static string GetMonitorPnpId(IntPtr hMonitor, out string gdiDevice) {
+    public static string GetMonitorPnpId(IntPtr hMonitor, out string gdiDevice, out int width, out int height) {
         gdiDevice = null;
+        width = 0;
+        height = 0;
         try {
             MONITORINFOEX mi = new MONITORINFOEX();
             mi.cbSize = Marshal.SizeOf(typeof(MONITORINFOEX));
             if (GetMonitorInfo(hMonitor, ref mi)) {
                 gdiDevice = mi.szDevice;
+                width = mi.rcMonitor.right - mi.rcMonitor.left;
+                height = mi.rcMonitor.bottom - mi.rcMonitor.top;
                 DISPLAY_DEVICE dd = new DISPLAY_DEVICE();
                 dd.cb = Marshal.SizeOf(typeof(DISPLAY_DEVICE));
                 if (EnumDisplayDevices(mi.szDevice, 0, ref dd, 0) && !string.IsNullOrEmpty(dd.DeviceID)) {
@@ -449,25 +453,111 @@ public class MonitorController {
     public static int internalGainG = 50;
     public static int internalGainB = 50;
 
+    public static void SetInternalDisplayCalibration(int contrast, int gainR, int gainG, int gainB) {
+        if (contrast >= 0) internalContrast = Math.Max(0, Math.Min(100, contrast));
+        if (gainR >= 0) internalGainR = Math.Max(0, Math.Min(100, gainR));
+        if (gainG >= 0) internalGainG = Math.Max(0, Math.Min(100, gainG));
+        if (gainB >= 0) internalGainB = Math.Max(0, Math.Min(100, gainB));
+
+        string intGdi = null;
+        lock (SyncLock) {
+            for (int i = 0; i < CurrentMonitors.Count; i++) {
+                if (CurrentMonitors[i].isInternal ||
+                    (!string.IsNullOrEmpty(SavedInternalPnpId) && string.Equals(CurrentMonitors[i].id, SavedInternalPnpId, StringComparison.OrdinalIgnoreCase)) ||
+                    (!string.IsNullOrEmpty(CurrentMonitors[i].gdiDevice) && CurrentMonitors[i].gdiDevice.IndexOf("DISPLAY1", StringComparison.OrdinalIgnoreCase) >= 0)) {
+                    if (contrast >= 0) CurrentMonitors[i].contrast = internalContrast;
+                    if (gainR >= 0) CurrentMonitors[i].gainR = internalGainR;
+                    if (gainG >= 0) CurrentMonitors[i].gainG = internalGainG;
+                    if (gainB >= 0) CurrentMonitors[i].gainB = internalGainB;
+                }
+            }
+            for (int i = 0; i < BoundMonitors.Count; i++) {
+                if (BoundMonitors[i].isInternal && !string.IsNullOrEmpty(BoundMonitors[i].gdiDevice)) {
+                    intGdi = BoundMonitors[i].gdiDevice;
+                    break;
+                }
+            }
+        }
+
+        UpdateInternalGpuRamp(intGdi);
+    }
+
     public static bool UpdateInternalGpuRamp(string gdiDevice) {
-        if (string.IsNullOrEmpty(gdiDevice)) return false;
+        if (string.IsNullOrEmpty(gdiDevice)) {
+            lock (SyncLock) {
+                for (int i = 0; i < BoundMonitors.Count; i++) {
+                    if (BoundMonitors[i].isInternal && !string.IsNullOrEmpty(BoundMonitors[i].gdiDevice)) {
+                        gdiDevice = BoundMonitors[i].gdiDevice;
+                        break;
+                    }
+                }
+            }
+            if (string.IsNullOrEmpty(gdiDevice)) gdiDevice = "\\\\.\\DISPLAY1";
+        }
+
         IntPtr hdc = CreateDC(null, gdiDevice, null, IntPtr.Zero);
         if (hdc == IntPtr.Zero) return false;
         try {
-            double cFactor = Math.Max(0.1, Math.Min(2.0, (internalContrast / 50.0)));
-            double rFactor = Math.Max(0.1, Math.Min(1.0, (internalGainR / 50.0)));
-            double gFactor = Math.Max(0.1, Math.Min(1.0, (internalGainG / 50.0)));
-            double bFactor = Math.Max(0.1, Math.Min(1.0, (internalGainB / 50.0)));
+            double bValSoft = 100.0;
+            bool isSoftActive = false;
+            lock (SyncLock) {
+                for (int i = 0; i < BoundMonitors.Count; i++) {
+                    if (BoundMonitors[i].isInternal) {
+                        if (BoundMonitors[i].isSoftwareBrightnessActive) {
+                            isSoftActive = true;
+                            bValSoft = BoundMonitors[i].softwareBrightnessVal;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            int clampedContrast = Math.Max(0, Math.Min(100, internalContrast));
+            double k = 1.5 * (clampedContrast - 50.0) / 50.0;
+
+            double attenBright = isSoftActive ? (0.52 + 0.48 * (bValSoft / 100.0)) : 1.0;
+            double gammaBright = isSoftActive ? (1.0 + 0.4 * (100.0 - bValSoft) / 100.0) : 1.0;
 
             ushort[] ramp = new ushort[3 * 256];
-            for (int i = 0; i < 256; i++) {
-                double centered = (i - 128.0) * cFactor + 128.0;
-                double clamped = Math.Max(0.0, Math.Min(255.0, centered));
+            int[] gains = new int[] { internalGainR, internalGainG, internalGainB };
 
-                ramp[i]       = (ushort)Math.Max(0.0, Math.Min(65535.0, (clamped * 256.0) * rFactor));
-                ramp[i + 256] = (ushort)Math.Max(0.0, Math.Min(65535.0, (clamped * 256.0) * gFactor));
-                ramp[i + 512] = (ushort)Math.Max(0.0, Math.Min(65535.0, (clamped * 256.0) * bFactor));
+            for (int ch = 0; ch < 3; ch++) {
+                int gVal = Math.Max(0, Math.Min(100, gains[ch]));
+                double attenGain = (gVal <= 50) ? (0.65 + 0.35 * (gVal / 50.0)) : 1.0;
+                double boostGain = (gVal > 50) ? (0.5 * (gVal - 50.0) / 50.0) : 0.0;
+                double totalScale = Math.Max(0.505, attenGain * attenBright);
+                int offset = ch * 256;
+
+                for (int i = 0; i < 256; i++) {
+                    double u = i / 255.0;
+                    double g = u - 0.5;
+                    double curveVal = 0.5 + g + k * g * (0.25 - g * g);
+                    curveVal = Math.Max(0.0, Math.Min(1.0, curveVal));
+
+                    if (boostGain > 0.0) {
+                        curveVal = Math.Max(0.0, Math.Min(1.0, curveVal + boostGain * curveVal * (1.0 - curveVal)));
+                    }
+                    if (gammaBright != 1.0) {
+                        curveVal = Math.Pow(curveVal, gammaBright);
+                    }
+                    curveVal *= totalScale;
+
+                    ramp[offset + i] = (ushort)Math.Round(Math.Max(0.0, Math.Min(65535.0, curveVal * 65535.0)));
+                }
+
+                // Dual-pass strict monotonicity guard
+                for (int i = 1; i < 256; i++) {
+                    if (ramp[offset + i] <= ramp[offset + i - 1]) {
+                        ramp[offset + i] = (ushort)Math.Min(65535, ramp[offset + i - 1] + 1);
+                    }
+                }
+                for (int i = 254; i >= 0; i--) {
+                    if (ramp[offset + i] >= ramp[offset + i + 1]) {
+                        ramp[offset + i] = (ushort)Math.Max(0, ramp[offset + i + 1] - 1);
+                    }
+                }
             }
+
             return SetDeviceGammaRamp(hdc, ramp);
         } catch {
             return false;
@@ -478,16 +568,49 @@ public class MonitorController {
 
     public static bool ApplySoftwareBrightness(string gdiDevice, int brightness0to100) {
         if (string.IsNullOrEmpty(gdiDevice)) return false;
+        bool isInternal = false;
+        lock (SyncLock) {
+            for (int i = 0; i < BoundMonitors.Count; i++) {
+                if (string.Equals(BoundMonitors[i].gdiDevice, gdiDevice, StringComparison.OrdinalIgnoreCase)) {
+                    if (BoundMonitors[i].isInternal) {
+                        isInternal = true;
+                        BoundMonitors[i].isSoftwareBrightnessActive = true;
+                        BoundMonitors[i].softwareBrightnessVal = Math.Max(0, Math.Min(100, brightness0to100));
+                    }
+                    break;
+                }
+            }
+        }
+        if (isInternal) {
+            return UpdateInternalGpuRamp(gdiDevice);
+        }
+
         IntPtr hdc = CreateDC(null, gdiDevice, null, IntPtr.Zero);
         if (hdc == IntPtr.Zero) return false;
         try {
-            double factor = Math.Max(0.02, Math.Min(1.0, brightness0to100 / 100.0));
+            double factor = Math.Max(0.505, 0.52 + 0.48 * (brightness0to100 / 100.0));
+            double gamma = (brightness0to100 < 50) ? (1.0 + 0.4 * (50.0 - brightness0to100) / 50.0) : 1.0;
             ushort[] ramp = new ushort[3 * 256];
             for (int i = 0; i < 256; i++) {
-                ushort val = (ushort)Math.Round(Math.Min(65535.0, (i * 256.0) * factor));
-                ramp[i] = val;
-                ramp[i + 256] = val;
-                ramp[i + 512] = val;
+                double u = i / 255.0;
+                double val = Math.Pow(u, gamma) * factor;
+                ushort s = (ushort)Math.Round(Math.Max(0.0, Math.Min(65535.0, val * 65535.0)));
+                ramp[i] = s;
+                ramp[i + 256] = s;
+                ramp[i + 512] = s;
+            }
+            for (int ch = 0; ch < 3; ch++) {
+                int offset = ch * 256;
+                for (int i = 1; i < 256; i++) {
+                    if (ramp[offset + i] <= ramp[offset + i - 1]) {
+                        ramp[offset + i] = (ushort)Math.Min(65535, ramp[offset + i - 1] + 1);
+                    }
+                }
+                for (int i = 254; i >= 0; i--) {
+                    if (ramp[offset + i] >= ramp[offset + i + 1]) {
+                        ramp[offset + i] = (ushort)Math.Max(0, ramp[offset + i + 1] - 1);
+                    }
+                }
             }
             return SetDeviceGammaRamp(hdc, ramp);
         } catch {
@@ -499,12 +622,29 @@ public class MonitorController {
 
     public static bool ResetSoftwareGamma(string gdiDevice) {
         if (string.IsNullOrEmpty(gdiDevice)) return false;
+        bool isInternal = false;
+        lock (SyncLock) {
+            for (int i = 0; i < BoundMonitors.Count; i++) {
+                if (string.Equals(BoundMonitors[i].gdiDevice, gdiDevice, StringComparison.OrdinalIgnoreCase)) {
+                    if (BoundMonitors[i].isInternal) {
+                        isInternal = true;
+                        BoundMonitors[i].isSoftwareBrightnessActive = false;
+                        BoundMonitors[i].softwareBrightnessVal = 100;
+                    }
+                    break;
+                }
+            }
+        }
+        if (isInternal) {
+            return UpdateInternalGpuRamp(gdiDevice);
+        }
+
         IntPtr hdc = CreateDC(null, gdiDevice, null, IntPtr.Zero);
         if (hdc == IntPtr.Zero) return false;
         try {
             ushort[] ramp = new ushort[3 * 256];
             for (int i = 0; i < 256; i++) {
-                ushort val = (ushort)(i * 256);
+                ushort val = (ushort)Math.Round(i * 257.0);
                 ramp[i] = val;
                 ramp[i + 256] = val;
                 ramp[i + 512] = val;
@@ -523,6 +663,8 @@ public class MonitorController {
         public string gdiDevice;
         public string name;
         public int windowsDisplayNumber;
+        public int width;
+        public int height;
         public bool isInternal;
         public int brightness;
         public int contrast;
@@ -554,9 +696,12 @@ public class MonitorController {
         public string pnpId;
         public string name;
         public int windowsDisplayNumber;
+        public int width;
+        public int height;
         public bool isAcer;
         public bool isInternal;
         public bool isSoftwareBrightnessActive;
+        public int softwareBrightnessVal = 100;
         public int initialBrightness;
     }
 
@@ -625,13 +770,18 @@ public class MonitorController {
         var monitorHandles = new List<IntPtr>();
         var monitorGdiDevs = new List<string>();
         var monitorPnpIds = new List<string>();
+        var monitorWidths = new List<int>();
+        var monitorHeights = new List<int>();
 
         EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (hMonitor, hdc, lprc, data) => {
             string gdiDev = null;
-            string pnpId = GetMonitorPnpId(hMonitor, out gdiDev);
+            int mWidth = 0, mHeight = 0;
+            string pnpId = GetMonitorPnpId(hMonitor, out gdiDev, out mWidth, out mHeight);
             monitorHandles.Add(hMonitor);
             monitorGdiDevs.Add(gdiDev);
             monitorPnpIds.Add(pnpId);
+            monitorWidths.Add(mWidth);
+            monitorHeights.Add(mHeight);
             if (!string.IsNullOrEmpty(gdiDev) && !activeGdiDevices.Contains(gdiDev)) {
                 activeGdiDevices.Add(gdiDev);
             }
@@ -653,6 +803,8 @@ public class MonitorController {
                 IntPtr hMonitor = monitorHandles[mIdx];
                 string gdiDev = monitorGdiDevs[mIdx];
                 string pnpId = monitorPnpIds[mIdx];
+                int mWidth = monitorWidths[mIdx];
+                int mHeight = monitorHeights[mIdx];
 
                 int winNum = (!string.IsNullOrEmpty(gdiDev) && activeGdiDevices.Contains(gdiDev))
                     ? (activeGdiDevices.IndexOf(gdiDev) + 1)
@@ -705,6 +857,8 @@ public class MonitorController {
                                 bound.pnpId = pnpId ?? "";
                                 bound.name = modelName;
                                 bound.windowsDisplayNumber = winNum;
+                                bound.width = mWidth;
+                                bound.height = mHeight;
                                 bound.isAcer = isAcer;
                                 bound.isInternal = false;
                                 bound.isSoftwareBrightnessActive = false;
@@ -737,6 +891,8 @@ public class MonitorController {
                                     bound.pnpId = pnpId ?? "";
                                     bound.name = modelName;
                                     bound.windowsDisplayNumber = winNum;
+                                    bound.width = mWidth;
+                                    bound.height = mHeight;
                                     bound.isAcer = false;
                                     bound.isInternal = true;
                                     bound.isSoftwareBrightnessActive = false;
@@ -767,6 +923,10 @@ public class MonitorController {
                     string intGdi = (activeGdiDevices.Count > 0 && activeGdiDevices[0].IndexOf("DISPLAY1", StringComparison.OrdinalIgnoreCase) >= 0)
                         ? activeGdiDevices[0] : "\\\\.\\DISPLAY1";
                     int winNum = activeGdiDevices.Contains(intGdi) ? (activeGdiDevices.IndexOf(intGdi) + 1) : 1;
+                    int intWidth = (activeGdiDevices.Count > 0 && monitorGdiDevs.Contains(intGdi))
+                        ? monitorWidths[monitorGdiDevs.IndexOf(intGdi)] : 2560;
+                    int intHeight = (activeGdiDevices.Count > 0 && monitorGdiDevs.Contains(intGdi))
+                        ? monitorHeights[monitorGdiDevs.IndexOf(intGdi)] : 1600;
 
                     var bound = new BoundPhysicalMonitor();
                     bound.id = intPnp;
@@ -777,6 +937,8 @@ public class MonitorController {
                     bound.pnpId = intPnp;
                     bound.name = intModel;
                     bound.windowsDisplayNumber = winNum;
+                    bound.width = intWidth;
+                    bound.height = intHeight;
                     bound.isAcer = false;
                     bound.isInternal = true;
                     bound.isSoftwareBrightnessActive = false;
@@ -796,6 +958,8 @@ public class MonitorController {
                 item.gdiDevice = b.gdiDevice;
                 item.name = b.name;
                 item.windowsDisplayNumber = b.windowsDisplayNumber;
+                item.width = b.width;
+                item.height = b.height;
                 item.isInternal = b.isInternal;
                 item.brightness = b.initialBrightness;
                 item.contrast = b.isInternal ? internalContrast : 50;
@@ -833,16 +997,34 @@ public class MonitorController {
                     }
                     if (existing != null) {
                         existing.windowsDisplayNumber = initItem.windowsDisplayNumber;
+                        existing.width = initItem.width;
+                        existing.height = initItem.height;
                         existing.gdiDevice = initItem.gdiDevice;
                         existing.name = initItem.name;
                         existing.isInternal = initItem.isInternal;
                         existing.brightness = initItem.brightness;
+                        if (initItem.isInternal) {
+                            existing.contrast = internalContrast;
+                            existing.gainR = internalGainR;
+                            existing.gainG = internalGainG;
+                            existing.gainB = internalGainB;
+                        }
                         mergedList.Add(existing);
                     } else {
                         mergedList.Add(initItem);
                     }
                 }
                 CurrentMonitors = mergedList;
+                string intGdi = null;
+                for (int i = 0; i < boundList.Count; i++) {
+                    if (boundList[i].isInternal && !string.IsNullOrEmpty(boundList[i].gdiDevice)) {
+                        intGdi = boundList[i].gdiDevice;
+                        break;
+                    }
+                }
+                if (!string.IsNullOrEmpty(intGdi)) {
+                    UpdateInternalGpuRamp(intGdi);
+                }
                 if (boundList.Count == 0) {
                     HasProbed = true;
                 }
@@ -869,8 +1051,14 @@ public class MonitorController {
         }
     }
 
-    public static BoundPhysicalMonitor FindBoundMonitor(string monitorId, string pnpId = null, string gdiDevice = null, bool? isAcer = null) {
+    public static BoundPhysicalMonitor FindBoundMonitor(string monitorId, string pnpId = null, string gdiDevice = null, bool? isAcer = null, bool? isInternal = null) {
         lock (SyncLock) {
+            if (isInternal.HasValue && isInternal.Value) {
+                for (int i = 0; i < BoundMonitors.Count; i++) {
+                    if (BoundMonitors[i].isInternal) return BoundMonitors[i];
+                }
+            }
+
             string targetPnp = !string.IsNullOrEmpty(pnpId) ? pnpId : monitorId;
             if (!string.IsNullOrEmpty(targetPnp)) {
                 for (int i = 0; i < BoundMonitors.Count; i++) {
@@ -936,7 +1124,7 @@ public class MonitorController {
         bool ok = SetVCPFeature(target.hPhys, vcpCode, val);
         if (!ok) {
             ReProbePhysicalMonitors();
-            target = FindBoundMonitor(target.id, target.pnpId, target.gdiDevice, target.isAcer);
+            target = FindBoundMonitor(target.id, target.pnpId, target.gdiDevice, target.isAcer, target.isInternal);
             if (target != null) {
                 ok = SetVCPFeature(target.hPhys, vcpCode, val);
             }
@@ -944,11 +1132,21 @@ public class MonitorController {
         return ok;
     }
 
-    public static bool ApplyControl(string monitorId, string control, int val, string pnpId = null, string gdiDevice = null) {
-        BoundPhysicalMonitor target = FindBoundMonitor(monitorId, pnpId, gdiDevice);
+    public static bool ApplyControl(string monitorId, string control, int val, string pnpId = null, string gdiDevice = null, bool? isInternal = null) {
+        BoundPhysicalMonitor target = FindBoundMonitor(monitorId, pnpId, gdiDevice, null, isInternal);
         if (target == null) {
             ReProbePhysicalMonitors();
-            target = FindBoundMonitor(monitorId, pnpId, gdiDevice);
+            target = FindBoundMonitor(monitorId, pnpId, gdiDevice, null, isInternal);
+        }
+        if (target == null && isInternal.HasValue && isInternal.Value) {
+            lock (SyncLock) {
+                for (int i = 0; i < BoundMonitors.Count; i++) {
+                    if (BoundMonitors[i].isInternal) {
+                        target = BoundMonitors[i];
+                        break;
+                    }
+                }
+            }
         }
         if (target == null) return false;
 
@@ -965,14 +1163,20 @@ public class MonitorController {
                         try { ok = WmiSetBrightnessHandler((byte)clamped0to100); } catch {}
                     }
                     if (!ok && !string.IsNullOrEmpty(gdi)) {
-                        ApplySoftwareBrightness(gdi, clamped0to100);
                         target.isSoftwareBrightnessActive = true;
-                        ok = true;
+                        target.softwareBrightnessVal = clamped0to100;
+                        ok = UpdateInternalGpuRamp(gdi);
+                    } else if (ok) {
+                        target.isSoftwareBrightnessActive = false;
+                        UpdateInternalGpuRamp(gdi);
                     }
                     if (ok) {
                         lock (SyncLock) {
                             for (int i = 0; i < CurrentMonitors.Count; i++) {
-                                if (CurrentMonitors[i].id == targetId) { CurrentMonitors[i].brightness = clamped0to100; break; }
+                                if (CurrentMonitors[i].id == targetId || CurrentMonitors[i].isInternal) {
+                                    CurrentMonitors[i].brightness = clamped0to100;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -981,10 +1185,11 @@ public class MonitorController {
                 case "contrast":
                     internalContrast = clamped0to100;
                     ok = UpdateInternalGpuRamp(gdi);
-                    if (ok) {
-                        lock (SyncLock) {
-                            for (int i = 0; i < CurrentMonitors.Count; i++) {
-                                if (CurrentMonitors[i].id == targetId) { CurrentMonitors[i].contrast = clamped0to100; break; }
+                    lock (SyncLock) {
+                        for (int i = 0; i < CurrentMonitors.Count; i++) {
+                            if (CurrentMonitors[i].id == targetId || CurrentMonitors[i].isInternal) {
+                                CurrentMonitors[i].contrast = clamped0to100;
+                                break;
                             }
                         }
                     }
@@ -994,10 +1199,11 @@ public class MonitorController {
                 case "gainr":
                     internalGainR = clamped0to100;
                     ok = UpdateInternalGpuRamp(gdi);
-                    if (ok) {
-                        lock (SyncLock) {
-                            for (int i = 0; i < CurrentMonitors.Count; i++) {
-                                if (CurrentMonitors[i].id == targetId) { CurrentMonitors[i].gainR = clamped0to100; break; }
+                    lock (SyncLock) {
+                        for (int i = 0; i < CurrentMonitors.Count; i++) {
+                            if (CurrentMonitors[i].id == targetId || CurrentMonitors[i].isInternal) {
+                                CurrentMonitors[i].gainR = clamped0to100;
+                                break;
                             }
                         }
                     }
@@ -1007,10 +1213,11 @@ public class MonitorController {
                 case "gaing":
                     internalGainG = clamped0to100;
                     ok = UpdateInternalGpuRamp(gdi);
-                    if (ok) {
-                        lock (SyncLock) {
-                            for (int i = 0; i < CurrentMonitors.Count; i++) {
-                                if (CurrentMonitors[i].id == targetId) { CurrentMonitors[i].gainG = clamped0to100; break; }
+                    lock (SyncLock) {
+                        for (int i = 0; i < CurrentMonitors.Count; i++) {
+                            if (CurrentMonitors[i].id == targetId || CurrentMonitors[i].isInternal) {
+                                CurrentMonitors[i].gainG = clamped0to100;
+                                break;
                             }
                         }
                     }
@@ -1020,10 +1227,11 @@ public class MonitorController {
                 case "gainb":
                     internalGainB = clamped0to100;
                     ok = UpdateInternalGpuRamp(gdi);
-                    if (ok) {
-                        lock (SyncLock) {
-                            for (int i = 0; i < CurrentMonitors.Count; i++) {
-                                if (CurrentMonitors[i].id == targetId) { CurrentMonitors[i].gainB = clamped0to100; break; }
+                    lock (SyncLock) {
+                        for (int i = 0; i < CurrentMonitors.Count; i++) {
+                            if (CurrentMonitors[i].id == targetId || CurrentMonitors[i].isInternal) {
+                                CurrentMonitors[i].gainB = clamped0to100;
+                                break;
                             }
                         }
                     }
@@ -1421,7 +1629,7 @@ public class MonitorController {
                 var u = updates[i];
                 if (u == null || u.id == null) continue;
                 for (int j = 0; j < CurrentMonitors.Count; j++) {
-                    if (CurrentMonitors[j].id == u.id) {
+                    if (CurrentMonitors[j].id == u.id || (u.isInternal && CurrentMonitors[j].isInternal)) {
                         if (u.isInternal) {
                             CurrentMonitors[j].brightness = u.curLcd;
                             CurrentMonitors[j].contrast = internalContrast;
@@ -1560,14 +1768,25 @@ public class MonitorController {
                     string json = Encoding.UTF8.GetString(jsonBuf);
 
                     string action = ExtractJsonString(json, "action");
-                    if (action == "set_panel_control") {
+                    if (action == "init_internal_display" || action == "set_internal_calibration") {
+                        int c = ExtractJsonInt(json, "contrast", -1);
+                        int r = ExtractJsonInt(json, "gainR", -1);
+                        if (r < 0) r = ExtractJsonInt(json, "gain_r", -1);
+                        int g = ExtractJsonInt(json, "gainG", -1);
+                        if (g < 0) g = ExtractJsonInt(json, "gain_g", -1);
+                        int b = ExtractJsonInt(json, "gainB", -1);
+                        if (b < 0) b = ExtractJsonInt(json, "gain_b", -1);
+                        SetInternalDisplayCalibration(c, r, g, b);
+                        WakeSignal.Set();
+                    } else if (action == "set_panel_control") {
                         string monId = ExtractJsonString(json, "monitorId");
                         string pnpId = ExtractJsonString(json, "pnpId");
                         string gdiDev = ExtractJsonString(json, "gdiDevice");
                         string control = ExtractJsonString(json, "control");
                         int val = ExtractJsonInt(json, "value", 0);
+                        bool isInt = ExtractJsonBool(json, "isInternal", false);
                         if (!string.IsNullOrEmpty(control)) {
-                            ApplyControl(monId, control, val, pnpId, gdiDev);
+                            ApplyControl(monId, control, val, pnpId, gdiDev, isInt);
                             WakeSignal.Set();
                         }
                     } else if (action == "set_brightness") {
@@ -1578,6 +1797,16 @@ public class MonitorController {
                         ApplyControl(monId, "brightness", val, pnpId, gdiDev);
                         WakeSignal.Set();
                     } else if (action == "probe_monitors" || action == "refresh_monitors" || action == "fetch_empirical") {
+                        int c = ExtractJsonInt(json, "contrast", -1);
+                        int r = ExtractJsonInt(json, "gainR", -1);
+                        if (r < 0) r = ExtractJsonInt(json, "gain_r", -1);
+                        int g = ExtractJsonInt(json, "gainG", -1);
+                        if (g < 0) g = ExtractJsonInt(json, "gain_g", -1);
+                        int b = ExtractJsonInt(json, "gainB", -1);
+                        if (b < 0) b = ExtractJsonInt(json, "gain_b", -1);
+                        if (c >= 0 || r >= 0 || g >= 0 || b >= 0) {
+                            SetInternalDisplayCalibration(c, r, g, b);
+                        }
                         int probeId = ExtractJsonInt(json, "probeId", 0);
                         bool isRefresh = (action == "refresh_monitors");
                         RequestEmpiricalProbe(probeId, isRefresh);
@@ -1696,6 +1925,20 @@ public class MonitorController {
         return defaultVal;
     }
 
+    public static bool ExtractJsonBool(string json, string key, bool defaultVal) {
+        if (string.IsNullOrEmpty(json)) return defaultVal;
+        string search = "\"" + key + "\"";
+        int idx = json.IndexOf(search);
+        if (idx < 0) return defaultVal;
+        int colon = json.IndexOf(':', idx + search.Length);
+        if (colon < 0) return defaultVal;
+        int start = colon + 1;
+        while (start < json.Length && (json[start] == ' ' || json[start] == '\t' || json[start] == '\r' || json[start] == '\n')) start++;
+        if (start + 4 <= json.Length && json.Substring(start, 4).Equals("true", StringComparison.OrdinalIgnoreCase)) return true;
+        if (start + 5 <= json.Length && json.Substring(start, 5).Equals("false", StringComparison.OrdinalIgnoreCase)) return false;
+        return defaultVal;
+    }
+
     public static string BuildTelemetryJson(
         string timestamp, int cpuClock, int cpuLoad, string peClock, double cpuPower, int cpuTemp,
         double igpuPower, string igpuRam, int cpuLimit, string ramUsed, string pageUsed, string commitUsed,
@@ -1743,6 +1986,8 @@ public class MonitorController {
                     sb.Append("\"gdiDevice\":"); AppendEscapedJson(sb, m.gdiDevice); sb.Append(',');
                     sb.Append("\"name\":"); AppendEscapedJson(sb, m.name ?? ""); sb.Append(',');
                     sb.Append("\"windowsDisplayNumber\":").Append(m.windowsDisplayNumber).Append(',');
+                    sb.Append("\"width\":").Append(m.width).Append(',');
+                    sb.Append("\"height\":").Append(m.height).Append(',');
                     sb.Append("\"isInternal\":").Append(m.isInternal ? "true," : "false,");
                     sb.Append("\"brightness\":").Append(m.brightness).Append(',');
                     sb.Append("\"contrast\":").Append(m.contrast).Append(',');
