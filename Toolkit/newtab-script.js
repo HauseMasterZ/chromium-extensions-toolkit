@@ -436,7 +436,8 @@ function executeHardwareDispatch(mid, ctrl, numVal) {
         pnpId: pnp,
         gdiDevice: gdi,
         control: ctrl,
-        value: numVal
+        value: numVal,
+        isInternal: Boolean(targetMon?.isInternal || (typeof mid === 'string' && mid.toLowerCase().includes('internal')) || (gdi && gdi.includes('DISPLAY1')))
     };
 
     let sent = false;
@@ -742,10 +743,18 @@ function renderPanelControls(monitors) {
             </colgroup>
             <thead>
                 <tr style="color: #fff;">
-                    ${sortedMonitors.map((m, mIdx) => {
-                        const displayNum = m.windowsDisplayNumber || (mIdx + 1);
-                        return `<th title="${m.name || ''}" style="padding: 2px 14px 4px 14px; font-weight: normal; ${mIdx > 0 ? 'border-left: 1px solid rgba(255, 255, 255, 0.12);' : ''} overflow: hidden; text-overflow: ellipsis;">#${displayNum}</th>`;
-                    }).join('')}
+                    ${(() => {
+                        const seenNewtabNums = new Set();
+                        return sortedMonitors.map((m, mIdx) => {
+                            let displayNum = m.windowsDisplayNumber || (mIdx + 1);
+                            if (seenNewtabNums.has(displayNum)) {
+                                displayNum = mIdx + 1;
+                                while (seenNewtabNums.has(displayNum)) displayNum++;
+                            }
+                            seenNewtabNums.add(displayNum);
+                            return `<th title="${m.name || ''}" style="padding: 2px 14px 4px 14px; font-weight: normal; ${mIdx > 0 ? 'border-left: 1px solid rgba(255, 255, 255, 0.12);' : ''} overflow: hidden; text-overflow: ellipsis;">#${displayNum}</th>`;
+                        }).join('');
+                    })()}
                 </tr>
             </thead>
             <tbody>

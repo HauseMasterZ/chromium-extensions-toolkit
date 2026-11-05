@@ -113,16 +113,36 @@
     if (!Array.isArray(telemetryMonitors) || telemetryMonitors.length === 0) return displays;
 
     const usedMonitors = new Set();
+    const usedNumbers = new Set();
 
-    // Pass 1: Explicit internal match or PnP ID / GDI device / Name substring match
+    // Pass 1: Explicit internal monitor matching
+    const internalMon = telemetryMonitors.find(mon => mon.isInternal);
+    let internalDisplay = displays.find(d => d.isInternal);
+    if (!internalDisplay && internalMon) {
+      internalDisplay = displays.find(d => d.isPrimary) || displays[0];
+      if (internalDisplay) internalDisplay.isInternal = true;
+    }
+    if (internalDisplay && internalMon) {
+      internalDisplay.windowsDisplayNumber = internalMon.windowsDisplayNumber || 1;
+      usedMonitors.add(internalMon);
+      usedNumbers.add(internalDisplay.windowsDisplayNumber);
+    }
+
+    // Pass 2: High-confidence matching for remaining displays (resolution bounds, PNP ID, GDI device, or model name)
     for (const d of displays) {
+      if (d === internalDisplay) continue;
       const dId = d.id || '';
       const dName = (d.name || '').toLowerCase();
       const match = telemetryMonitors.find(mon => {
         if (usedMonitors.has(mon)) return false;
-        if (d.isInternal && mon.isInternal) return true;
+        if (mon.isInternal) return false;
         if (mon.pnpId && (dId.includes(mon.pnpId) || dId === mon.pnpId)) return true;
         if (mon.gdiDevice && dId.includes(mon.gdiDevice)) return true;
+        if (mon.width && mon.height && d.bounds) {
+          const matchExact = (d.bounds.width === mon.width && d.bounds.height === mon.height);
+          const matchRotated = (d.bounds.width === mon.height && d.bounds.height === mon.width);
+          if (matchExact || matchRotated) return true;
+        }
         if (mon.name && d.name && d.name !== 'Generic PnP Monitor' && d.name !== 'Internal Display') {
           const monName = mon.name.toLowerCase();
           if (dName === monName || dName.includes(monName) || monName.includes(dName)) {
@@ -134,37 +154,46 @@
 
       if (match) {
         usedMonitors.add(match);
-        if (match.windowsDisplayNumber) d.windowsDisplayNumber = match.windowsDisplayNumber;
+        d.windowsDisplayNumber = match.windowsDisplayNumber;
+        usedNumbers.add(d.windowsDisplayNumber);
         if (match.isInternal) d.isInternal = true;
-      }
-    }
-
-    // Pass 2: If telemetry has an internal monitor and no display was recognized as internal
-    const internalMon = telemetryMonitors.find(mon => mon.isInternal);
-    if (internalMon && !displays.some(d => d.isInternal)) {
-      const unmatchedDisplay = displays.find(d => !d.windowsDisplayNumber) || displays[0];
-      if (unmatchedDisplay) {
-        unmatchedDisplay.isInternal = true;
-        if (internalMon.windowsDisplayNumber) {
-          unmatchedDisplay.windowsDisplayNumber = internalMon.windowsDisplayNumber;
-        }
-        usedMonitors.add(internalMon);
+      } else {
+        delete d.windowsDisplayNumber;
       }
     }
 
     // Pass 3: Align remaining displays with remaining telemetry monitors by spatial order
     const remainingMonitors = telemetryMonitors
-      .filter(m => !usedMonitors.has(m))
+      .filter(m => !usedMonitors.has(m) && !m.isInternal)
       .sort((a, b) => (a.windowsDisplayNumber || 0) - (b.windowsDisplayNumber || 0));
     const remainingDisplays = displays
-      .filter(d => !d.windowsDisplayNumber)
-      .sort((a, b) => (a.bounds?.left || 0) - (b.bounds?.left || 0));
+      .filter(d => d !== internalDisplay && (!d.windowsDisplayNumber || usedNumbers.has(d.windowsDisplayNumber) && displays.filter(x => x.windowsDisplayNumber === d.windowsDisplayNumber).length > 1))
+      .sort((a, b) => (a.bounds?.left || 0) - (b.bounds?.left || 0) || (a.bounds?.top || 0) - (b.bounds?.top || 0));
 
     for (let i = 0; i < Math.min(remainingMonitors.length, remainingDisplays.length); i++) {
       remainingDisplays[i].windowsDisplayNumber = remainingMonitors[i].windowsDisplayNumber;
-      if (remainingMonitors[i].isInternal) {
-        remainingDisplays[i].isInternal = true;
+      usedMonitors.add(remainingMonitors[i]);
+      usedNumbers.add(remainingMonitors[i].windowsDisplayNumber);
+    }
+
+    // Pass 4: Final Deduplication & Monotonic Guarantee
+    const assignedNumbers = new Set();
+    const sorted = [...displays].sort((a, b) => {
+      const numA = (typeof a.windowsDisplayNumber === 'number' && a.windowsDisplayNumber > 0) ? a.windowsDisplayNumber : (a.isInternal ? 1 : 999);
+      const numB = (typeof b.windowsDisplayNumber === 'number' && b.windowsDisplayNumber > 0) ? b.windowsDisplayNumber : (b.isInternal ? 1 : 999);
+      if (numA !== numB) return numA - numB;
+      return (a.bounds?.left || 0) - (b.bounds?.left || 0);
+    });
+
+    let nextFallbackNum = 1;
+    for (const d of sorted) {
+      if (!d.windowsDisplayNumber || assignedNumbers.has(d.windowsDisplayNumber)) {
+        while (assignedNumbers.has(nextFallbackNum)) {
+          nextFallbackNum++;
+        }
+        d.windowsDisplayNumber = nextFallbackNum;
       }
+      assignedNumbers.add(d.windowsDisplayNumber);
     }
 
     // Persist known internal display ID to preserve across host reconnects
@@ -193,6 +222,22 @@
         ]);
         if (Array.isArray(res?.cachedDisplays) && res.cachedDisplays.length > 0) {
           allDisplays = res.cachedDisplays;
+          const seenCachedNums = new Set();
+          let hasDupes = false;
+          for (const d of allDisplays) {
+            if (d.windowsDisplayNumber && seenCachedNums.has(d.windowsDisplayNumber)) {
+              hasDupes = true;
+              delete d.windowsDisplayNumber;
+            } else if (d.windowsDisplayNumber) {
+              seenCachedNums.add(d.windowsDisplayNumber);
+            }
+          }
+          if (hasDupes) {
+            allDisplays.forEach((d, idx) => {
+              if (!d.windowsDisplayNumber) d.windowsDisplayNumber = idx + 1;
+            });
+            chrome.storage.local.set({ cachedDisplays: allDisplays }).catch(() => {});
+          }
         }
         if (res?.featureDefaultZoom !== undefined) {
           isDefaultZoomEnabled = Boolean(res.featureDefaultZoom);
@@ -276,8 +321,7 @@
         if (Array.isArray(liveDisplays) && liveDisplays.length > 0) {
           // Carry over previous annotations so telemetry is never wiped out
           const displays = liveDisplays.map(d => {
-            const prev = allDisplays.find(p => p.id === d.id) ||
-                         allDisplays.find(p => p.bounds && d.bounds && p.bounds.width === d.bounds.width && p.bounds.height === d.bounds.height);
+            const prev = allDisplays.find(p => p.id === d.id);
             if (prev) {
               if (prev.windowsDisplayNumber) d.windowsDisplayNumber = prev.windowsDisplayNumber;
               if (prev.isInternal) d.isInternal = true;
