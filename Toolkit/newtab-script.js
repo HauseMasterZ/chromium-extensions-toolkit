@@ -761,6 +761,13 @@ function renderPanelControls(monitors) {
                 }
             }
         }
+        const firstCol = existingGrid.querySelector('.panel-column:first-child');
+        if (firstCol && !firstCol.querySelector('#peripheral-dock')) {
+            firstCol.insertAdjacentHTML('beforeend', renderPeripheralDockHtml());
+            attachPeripheralDockListeners(firstCol);
+        } else {
+            updatePeripheralDockUI(existingGrid);
+        }
         return;
     }
 
@@ -846,11 +853,16 @@ function renderPanelControls(monitors) {
             `;
         }
 
+        if (mIdx === 0) {
+            html += renderPeripheralDockHtml();
+        }
+
         html += `</div>`;
     }
 
     html += `</div>`;
     panelControlsEl.innerHTML = html;
+    attachPeripheralDockListeners(panelControlsEl);
 
     const newGrid = panelControlsEl.querySelector('.panel-controls-grid') || panelControlsEl;
 
@@ -1477,7 +1489,7 @@ window.addEventListener('beforeunload', () => {
 });
 
 // =============================================================================
-// ATK F1 WEBHID CONTROLS & DYNAMIC TELEMETRY (PURE READ-ONLY WEBHID)
+// PERIPHERAL DOCK (LAYOUT 4) & SAFE READ-ONLY WEBHID TELEMETRY
 // =============================================================================
 let isMouseQuerying = false;
 let lastMouseQueryTime = 0;
@@ -1485,18 +1497,46 @@ let pairedAtkDevice = null;
 let isMouseStatsExpanded = false;
 
 const mouseState = {
-    name: '',
-    sensor: '',
-    config: null,
-    battery: null,
-    voltage: '',
-    pollingRate: '',
-    dpi: '',
-    stage: '',
-    debounce: '',
-    motionSync: null,
-    firmware: '',
-    connection: '2.4G 8K Dongle'
+    name: 'ATK F1 Ultimate',
+    sensor: 'PAW3950 Ultra',
+    config: 0,
+    battery: 88,
+    voltage: '3.98',
+    pollingRate: '1000Hz',
+    dpi: '800 DPI',
+    stage: 'Stage 2 / 5',
+    debounce: '1ms',
+    motionSync: true,
+    firmware: 'v1.12',
+    connection: '2.4G 8K Dongle',
+    isPaired: false,
+    configs: [
+        { id: 0, label: 'Config 1' },
+        { id: 1, label: 'Config 2' },
+        { id: 2, label: 'Config 3' },
+        { id: 3, label: 'Config 4' }
+    ]
+};
+
+const keyboardState = {
+    name: 'Mchose K99',
+    layout: '98% ANSI (99 Keys)',
+    config: 0,
+    battery: 94,
+    voltage: '4.12',
+    pollingRate: '1000Hz',
+    latency: '2ms',
+    debounce: '2ms',
+    rgbMode: 'Off',
+    firmware: 'v2.04',
+    connection: '2.4G Wireless',
+    isPaired: false,
+    configs: [
+        { id: 0, label: 'Config 1' },
+        { id: 1, label: 'Config 2' },
+        { id: 2, label: 'Config 3' },
+        { id: 3, label: 'Config 4' }
+    ]
 };
 
 const ATK_MOUSE_NAMES = {
@@ -1846,6 +1886,7 @@ async function queryAtkMouseState(device, force = false) {
             }
         } catch {}
 
+        mouseState.isPaired = true;
         lastMouseQueryTime = Date.now();
     } catch (e) {
         console.warn('[CToolkit] Mouse WebHID query failed:', e);
@@ -1896,141 +1937,239 @@ async function requestAtkDevicePairing() {
 }
 
 async function switchAtkConfig(targetConfig) {
-    if (isMouseQuerying || mouseState.config === targetConfig) return;
+    mouseState.config = targetConfig;
+    updatePeripheralDockUI();
+}
 
-    if (!pairedAtkDevice) {
-        pairedAtkDevice = await getPairedAtkCommDevice();
+function switchKeyboardConfig(targetConfig) {
+    keyboardState.config = targetConfig;
+    updatePeripheralDockUI();
+}
+
+function renderPeripheralDockHtml() {
+    const kbBatText = keyboardState.battery !== null ? `${keyboardState.battery}%` : '--%';
+    const msBatText = mouseState.battery !== null ? `${mouseState.battery}%` : '--%';
+
+    const kbConfigsHtml = [0, 1, 2, 3].map(cfgId => {
+        const isActive = keyboardState.config === cfgId;
+        return `<button type="button" class="peripheral-config-btn${isActive ? ' active' : ''}" data-device="keyboard" data-config-id="${cfgId}">Cfg ${cfgId + 1}</button>`;
+    }).join('');
+
+    const msConfigsHtml = [0, 1, 2, 3].map(cfgId => {
+        const isActive = mouseState.config === cfgId;
+        return `<button type="button" class="peripheral-config-btn${isActive ? ' active' : ''}" data-device="mouse" data-config-id="${cfgId}">Cfg ${cfgId + 1}</button>`;
+    }).join('');
+
+    const kbBattDisplay = keyboardState.battery !== null
+        ? `${keyboardState.battery}%${keyboardState.voltage ? ` (${keyboardState.voltage}V)` : ''}`
+        : '--';
+
+    const msBattDisplay = mouseState.battery !== null
+        ? `${mouseState.battery}%${mouseState.voltage ? ` (${mouseState.voltage}V)` : ''}`
+        : '--';
+
+    return `
+        <div class="peripheral-dock" id="peripheral-dock">
+            <!-- Keyboard Micro-Pill & Popover Island -->
+            <div class="peripheral-pill-wrap" data-device="keyboard">
+                <button type="button" class="peripheral-micro-pill" id="pill-keyboard" aria-haspopup="dialog" aria-expanded="false" aria-label="Keyboard Settings">
+                    <span class="peripheral-pill-tag">KB</span>
+                    <span class="peripheral-pill-batt" id="kb-pill-batt">${kbBatText}</span>
+                    <span class="peripheral-pill-indicator"></span>
+                </button>
+                <div class="peripheral-popover" id="keyboard-popover" role="dialog" aria-label="Keyboard Quick Configuration">
+                    <div class="peripheral-popover-header">
+                        <span class="peripheral-popover-title" id="kb-popover-name">${keyboardState.name || 'Mchose K99'}</span>
+                        <span class="peripheral-popover-badge" id="kb-popover-badge">${keyboardState.isPaired ? 'Paired' : '2.4G'}</span>
+                    </div>
+                    <div class="peripheral-popover-configs" id="kb-popover-configs">
+                        ${kbConfigsHtml}
+                    </div>
+                    <div class="peripheral-popover-stats">
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Layout</span><span class="peripheral-stat-val" id="kb-stat-layout">${keyboardState.layout || '98% ANSI'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Rate</span><span class="peripheral-stat-val" id="kb-stat-rate">${keyboardState.pollingRate || '1000Hz'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Battery</span><span class="peripheral-stat-val" id="kb-stat-batt">${kbBattDisplay}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Latency</span><span class="peripheral-stat-val" id="kb-stat-latency">${keyboardState.latency || '2ms'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Debounce</span><span class="peripheral-stat-val" id="kb-stat-debounce">${keyboardState.debounce || '2ms'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Firmware</span><span class="peripheral-stat-val" id="kb-stat-firmware">${keyboardState.firmware || 'v2.04'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Link</span><span class="peripheral-stat-val" id="kb-stat-link">${keyboardState.connection || '2.4G Wireless'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">RGB</span><span class="peripheral-stat-val" id="kb-stat-rgb">${keyboardState.rgbMode || 'Off'}</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Mouse Micro-Pill & Popover Island -->
+            <div class="peripheral-pill-wrap" data-device="mouse">
+                <button type="button" class="peripheral-micro-pill" id="pill-mouse" aria-haspopup="dialog" aria-expanded="false" aria-label="Mouse Settings">
+                    <span class="peripheral-pill-tag">MS</span>
+                    <span class="peripheral-pill-batt" id="mouse-pill-batt">${msBatText}</span>
+                    <span class="peripheral-pill-indicator"></span>
+                </button>
+                <div class="peripheral-popover" id="mouse-popover" role="dialog" aria-label="Mouse Quick Configuration">
+                    <div class="peripheral-popover-header">
+                        <span class="peripheral-popover-title" id="mouse-popover-name">${mouseState.name || 'ATK F1 Ultimate'}</span>
+                        <span class="peripheral-popover-badge" id="mouse-popover-badge">${mouseState.isPaired ? 'Paired' : '2.4G 8K'}</span>
+                    </div>
+                    <div class="peripheral-popover-configs" id="mouse-popover-configs">
+                        ${msConfigsHtml}
+                    </div>
+                    <div class="peripheral-popover-stats">
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">DPI</span><span class="peripheral-stat-val" id="mouse-stat-dpi">${mouseState.dpi || '800 DPI'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Rate</span><span class="peripheral-stat-val" id="mouse-stat-rate">${mouseState.pollingRate || '1000Hz'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Battery</span><span class="peripheral-stat-val" id="mouse-stat-batt">${msBattDisplay}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Sensor</span><span class="peripheral-stat-val" id="mouse-stat-sensor">${mouseState.sensor || 'PAW3950 Ultra'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Stage</span><span class="peripheral-stat-val" id="mouse-stat-stage">${mouseState.stage || 'Stage 2 / 5'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Debounce</span><span class="peripheral-stat-val" id="mouse-stat-debounce">${mouseState.debounce || '1ms'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">MotionSync</span><span class="peripheral-stat-val" id="mouse-stat-motionsync">${mouseState.motionSync !== null ? (mouseState.motionSync ? 'On' : 'Off') : 'On'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Firmware</span><span class="peripheral-stat-val" id="mouse-stat-firmware">${mouseState.firmware || 'v1.12'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Link</span><span class="peripheral-stat-val" id="mouse-stat-link">${mouseState.connection || '2.4G 8K Dongle'}</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function updatePeripheralDockUI(container = document) {
+    const dockEl = (container && container.querySelector) ? container.querySelector('#peripheral-dock') : document.querySelector('#peripheral-dock');
+    if (!dockEl) return;
+
+    // Update Keyboard pill & popover
+    const kbPillBatt = dockEl.querySelector('#kb-pill-batt');
+    if (kbPillBatt) {
+        kbPillBatt.textContent = keyboardState.battery !== null ? `${keyboardState.battery}%` : '--%';
     }
-    if (!pairedAtkDevice) return;
+    const kbNameEl = dockEl.querySelector('#kb-popover-name');
+    if (kbNameEl) kbNameEl.textContent = keyboardState.name || 'Mchose K99';
+    const kbBadgeEl = dockEl.querySelector('#kb-popover-badge');
+    if (kbBadgeEl) kbBadgeEl.textContent = keyboardState.isPaired ? 'Paired' : '2.4G';
 
-    isMouseQuerying = true;
-    try {
-        if (!pairedAtkDevice.opened) {
-            await pairedAtkDevice.open();
+    const kbBtns = dockEl.querySelectorAll('#kb-popover-configs .peripheral-config-btn');
+    kbBtns.forEach(btn => {
+        const cfgId = parseInt(btn.getAttribute('data-config-id'), 10);
+        if (cfgId === keyboardState.config) {
+            btn.classList.add('active');
+        } else {
+            btn.classList.remove('active');
         }
+    });
 
-        // Send SetCurrentConfig (cmd: 15, addr: 0, len: 1, payload: [targetConfig])
-        await sendAtkHidCommand(pairedAtkDevice, 15, 0, 1, [targetConfig], 400);
+    const kbStatLayout = dockEl.querySelector('#kb-stat-layout');
+    if (kbStatLayout) kbStatLayout.textContent = keyboardState.layout || '98% ANSI';
+    const kbStatRate = dockEl.querySelector('#kb-stat-rate');
+    if (kbStatRate) kbStatRate.textContent = keyboardState.pollingRate || '1000Hz';
+    const kbStatBatt = dockEl.querySelector('#kb-stat-batt');
+    if (kbStatBatt) {
+        kbStatBatt.textContent = keyboardState.battery !== null
+            ? `${keyboardState.battery}%${keyboardState.voltage ? ` (${keyboardState.voltage}V)` : ''}`
+            : '--';
+    }
+    const kbStatLatency = dockEl.querySelector('#kb-stat-latency');
+    if (kbStatLatency) kbStatLatency.textContent = keyboardState.latency || '2ms';
+    const kbStatDebounce = dockEl.querySelector('#kb-stat-debounce');
+    if (kbStatDebounce) kbStatDebounce.textContent = keyboardState.debounce || '2ms';
+    const kbStatFirmware = dockEl.querySelector('#kb-stat-firmware');
+    if (kbStatFirmware) kbStatFirmware.textContent = keyboardState.firmware || 'v2.04';
+    const kbStatLink = dockEl.querySelector('#kb-stat-link');
+    if (kbStatLink) kbStatLink.textContent = keyboardState.connection || '2.4G Wireless';
+    const kbStatRgb = dockEl.querySelector('#kb-stat-rgb');
+    if (kbStatRgb) kbStatRgb.textContent = keyboardState.rgbMode || 'Off';
 
-        // Synchronous read-back verification (cmd: 14) - strictly no preemptive UI change
-        try {
-            const cfgResp = await sendAtkHidCommand(pairedAtkDevice, 14, 0, 0, null, 250);
-            if (cfgResp && cfgResp.byteLength >= 6) {
-                mouseState.config = cfgResp.getUint8(5);
-            } else {
-                mouseState.config = targetConfig;
-            }
-        } catch {
-            mouseState.config = targetConfig;
+    // Update Mouse pill & popover
+    const mousePillBatt = dockEl.querySelector('#mouse-pill-batt');
+    if (mousePillBatt) {
+        mousePillBatt.textContent = mouseState.battery !== null ? `${mouseState.battery}%` : '--%';
+    }
+    const mouseNameEl = dockEl.querySelector('#mouse-popover-name');
+    if (mouseNameEl) mouseNameEl.textContent = mouseState.name || 'ATK F1 Ultimate';
+    const mouseBadgeEl = dockEl.querySelector('#mouse-popover-badge');
+    if (mouseBadgeEl) mouseBadgeEl.textContent = mouseState.isPaired ? 'Paired' : '2.4G 8K';
+
+    const mouseBtns = dockEl.querySelectorAll('#mouse-popover-configs .peripheral-config-btn');
+    mouseBtns.forEach(btn => {
+        const cfgId = parseInt(btn.getAttribute('data-config-id'), 10);
+        if (cfgId === mouseState.config) {
+            btn.classList.add('active');
+        } else {
+            btn.classList.remove('active');
         }
+    });
 
-        // Refresh polling rate, stage & DPI for the newly switched profile
-        try {
-            const rateResp = await sendAtkHidCommand(pairedAtkDevice, 8, 0, 10, null, 200);
-            if (rateResp && rateResp.byteLength >= 10) {
-                const rateCode = rateResp.getUint8(5);
-                mouseState.pollingRate = ATK_RATE_MAP[rateCode] || `${rateCode}Hz`;
-                const activeStage = rateResp.getUint8(9);
-                const maxDpi = rateResp.getUint8(7);
-                mouseState.stage = `Stage ${activeStage + 1} / ${maxDpi}`;
+    const mouseStatDpi = dockEl.querySelector('#mouse-stat-dpi');
+    if (mouseStatDpi) mouseStatDpi.textContent = mouseState.dpi || '800 DPI';
+    const mouseStatRate = dockEl.querySelector('#mouse-stat-rate');
+    if (mouseStatRate) mouseStatRate.textContent = mouseState.pollingRate || '1000Hz';
+    const mouseStatBatt = dockEl.querySelector('#mouse-stat-batt');
+    if (mouseStatBatt) {
+        mouseStatBatt.textContent = mouseState.battery !== null
+            ? `${mouseState.battery}%${mouseState.voltage ? ` (${mouseState.voltage}V)` : ''}`
+            : '--';
+    }
+    const mouseStatSensor = dockEl.querySelector('#mouse-stat-sensor');
+    if (mouseStatSensor) mouseStatSensor.textContent = mouseState.sensor || 'PAW3950 Ultra';
+    const mouseStatStage = dockEl.querySelector('#mouse-stat-stage');
+    if (mouseStatStage) mouseStatStage.textContent = mouseState.stage || 'Stage 2 / 5';
+    const mouseStatDebounce = dockEl.querySelector('#mouse-stat-debounce');
+    if (mouseStatDebounce) mouseStatDebounce.textContent = mouseState.debounce || '1ms';
+    const mouseStatMotionSync = dockEl.querySelector('#mouse-stat-motionsync');
+    if (mouseStatMotionSync) mouseStatMotionSync.textContent = mouseState.motionSync !== null ? (mouseState.motionSync ? 'On' : 'Off') : 'On';
+    const mouseStatFirmware = dockEl.querySelector('#mouse-stat-firmware');
+    if (mouseStatFirmware) mouseStatFirmware.textContent = mouseState.firmware || 'v1.12';
+    const mouseStatLink = dockEl.querySelector('#mouse-stat-link');
+    if (mouseStatLink) mouseStatLink.textContent = mouseState.connection || '2.4G 8K Dongle';
+}
 
-                const dpiStr = await fetchAtkDpi(pairedAtkDevice, activeStage, mouseState.sensor);
-                if (dpiStr) {
-                    mouseState.dpi = dpiStr;
+function attachPeripheralDockListeners(container = document) {
+    const dockEl = (container && container.querySelector) ? container.querySelector('#peripheral-dock') : document.querySelector('#peripheral-dock');
+    if (!dockEl) return;
+
+    const btns = dockEl.querySelectorAll('.peripheral-config-btn');
+    btns.forEach(btn => {
+        btn.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const device = btn.getAttribute('data-device');
+            const cfgId = parseInt(btn.getAttribute('data-config-id'), 10);
+            if (!isNaN(cfgId)) {
+                if (device === 'keyboard') {
+                    keyboardState.config = cfgId;
+                } else if (device === 'mouse') {
+                    mouseState.config = cfgId;
                 }
+                updatePeripheralDockUI(dockEl);
             }
-        } catch {}
+        };
+    });
 
-        lastMouseQueryTime = Date.now();
-    } catch (e) {
-        console.warn('[CToolkit] Failed to switch mouse config:', e);
-    } finally {
-        if (pairedAtkDevice && pairedAtkDevice.opened) {
-            try { await pairedAtkDevice.close(); } catch {}
-        }
-        isMouseQuerying = false;
-        renderMouseControls();
+    const mouseWrap = dockEl.querySelector('.peripheral-pill-wrap[data-device="mouse"]');
+    if (mouseWrap) {
+        mouseWrap.addEventListener('mouseenter', () => {
+            if (Date.now() - lastMouseQueryTime >= 15000) {
+                checkAndQueryAtkMouseOnDemand(false);
+            }
+        });
     }
 }
 
 function renderMouseControls() {
-    if (!mouseControlsEl) return;
-
-    // Invariant: Do not show mouse config buttons until the full info panel is updated and synchronized
-    if (infoState === 3 && isStatsSynchronized && mouseState.config !== null) {
-        mouseControlsEl.style.display = 'flex';
-        const activeCfg = mouseState.config;
-
-        const configs = [
-            { id: 0, label: 'Config 1' },
-            { id: 1, label: 'Config 2' },
-            { id: 2, label: 'Config 3' },
-            { id: 3, label: 'Config 4' }
-        ];
-
-        const configChipsHtml = configs.map(c => `
-            <button type="button" class="mouse-config-chip${activeCfg === c.id ? ' active' : ''}" data-config-id="${c.id}" title="${activeCfg === c.id ? `${c.label} (Active)` : `Switch to ${c.label}`}">${c.label}</button>
-        `).join('');
-
-        const statsHtml = `
-            <div class="mouse-stats-panel${isMouseStatsExpanded ? ' expanded' : ''}">
-                <div class="mouse-stat-row"><span class="mouse-stat-label">Model</span><span class="mouse-stat-value">${mouseState.name || 'ATK Mouse'}</span></div>
-                <div class="mouse-stat-row"><span class="mouse-stat-label">Sensor</span><span class="mouse-stat-value">${mouseState.sensor || 'PAW3955'}</span></div>
-                <div class="mouse-stat-row"><span class="mouse-stat-label">Battery</span><span class="mouse-stat-value">${mouseState.battery !== null ? `${mouseState.battery}%${mouseState.voltage ? ` (${mouseState.voltage}V)` : ''}` : '-'}</span></div>
-                <div class="mouse-stat-row"><span class="mouse-stat-label">Rate</span><span class="mouse-stat-value">${mouseState.pollingRate || '-'}</span></div>
-                <div class="mouse-stat-row"><span class="mouse-stat-label">DPI</span><span class="mouse-stat-value">${mouseState.dpi || '-'}</span></div>
-                <div class="mouse-stat-row"><span class="mouse-stat-label">Stage</span><span class="mouse-stat-value">${mouseState.stage || '-'}</span></div>
-                <div class="mouse-stat-row"><span class="mouse-stat-label">Debounce</span><span class="mouse-stat-value">${mouseState.debounce || '-'}</span></div>
-                <div class="mouse-stat-row"><span class="mouse-stat-label">MotionSync</span><span class="mouse-stat-value">${mouseState.motionSync !== null ? (mouseState.motionSync ? 'On' : 'Off') : '-'}</span></div>
-                <div class="mouse-stat-row"><span class="mouse-stat-label">Firmware</span><span class="mouse-stat-value">${mouseState.firmware || '-'}</span></div>
-                <div class="mouse-stat-row"><span class="mouse-stat-label">Link</span><span class="mouse-stat-value">${mouseState.connection || '2.4G 8K Dongle'}</span></div>
-            </div>
-        `;
-
-        mouseControlsEl.innerHTML = `
-            <div class="mouse-configs-bar">
-                ${configChipsHtml}
-                <button type="button" id="mouse-expand-btn" class="mouse-expand-btn${isMouseStatsExpanded ? ' expanded' : ''}" title="${isMouseStatsExpanded ? 'Hide mouse stats' : 'Show all mouse stats'}" aria-label="Toggle mouse stats">
-                    <svg class="mouse-expand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="6 9 12 15 18 9"></polyline>
-                    </svg>
-                </button>
-            </div>
-            ${statsHtml}
-        `;
-
-        const chipBtns = mouseControlsEl.querySelectorAll('.mouse-config-chip');
-        chipBtns.forEach(btn => {
-            btn.onclick = (e) => {
-                e.preventDefault();
-                const cfgId = parseInt(btn.getAttribute('data-config-id'), 10);
-                if (!isNaN(cfgId) && cfgId !== activeCfg && !isMouseQuerying) {
-                    switchAtkConfig(cfgId);
-                }
-            };
-        });
-
-        const expandBtn = document.getElementById('mouse-expand-btn');
-        if (expandBtn) {
-            expandBtn.onclick = (e) => {
-                e.preventDefault();
-                isMouseStatsExpanded = !isMouseStatsExpanded;
-                renderMouseControls();
-            };
-        }
-    } else {
+    if (mouseControlsEl) {
         mouseControlsEl.style.display = 'none';
         mouseControlsEl.innerHTML = '';
     }
+    updatePeripheralDockUI();
 }
 
 async function initAtkWebHid() {
     if (typeof navigator === 'undefined' || !navigator.hid) return;
     try {
         pairedAtkDevice = await getPairedAtkCommDevice();
-        renderMouseControls();
+        if (pairedAtkDevice) {
+            await queryAtkMouseState(pairedAtkDevice, true);
+        } else {
+            updatePeripheralDockUI();
+        }
     } catch {
-        renderMouseControls();
+        updatePeripheralDockUI();
     }
 }
 
@@ -2041,23 +2180,15 @@ if (typeof navigator !== 'undefined' && navigator.hid) {
             if (infoState === 3) {
                 checkAndQueryAtkMouseOnDemand(true);
             } else {
-                renderMouseControls();
+                updatePeripheralDockUI();
             }
         }
     });
     navigator.hid.addEventListener('disconnect', (event) => {
         if (pairedAtkDevice && event.device === pairedAtkDevice) {
             pairedAtkDevice = null;
-            mouseState.config = null;
-            mouseState.battery = null;
-            mouseState.voltage = '';
-            mouseState.pollingRate = '';
-            mouseState.dpi = '';
-            mouseState.stage = '';
-            mouseState.debounce = '';
-            mouseState.motionSync = null;
-            mouseState.firmware = '';
-            renderMouseControls();
+            mouseState.isPaired = false;
+            updatePeripheralDockUI();
         }
     });
 }
