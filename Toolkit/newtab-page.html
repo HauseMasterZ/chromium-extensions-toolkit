@@ -47,6 +47,11 @@
         .panel-cell {
             padding: 2px 14px;
         }
+        .panel-column {
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
         .panel-column:not(:first-child) {
             border-left: 1px solid rgba(255, 255, 255, 0.12);
         }
@@ -97,137 +102,205 @@
             background: #111;
             color: #fff;
         }
-        .mouse-controls {
-            display: none;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
-            margin-top: 10px;
-            font-size: 13px;
-            color: #ccc;
-            font-variant-numeric: tabular-nums;
-            user-select: text;
-            line-height: 1.35;
-        }
-        .mouse-configs-bar {
+        /* Layout 4 Floating Micro-Pill Dock & Popover Islands */
+        .peripheral-dock {
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 6px;
+            gap: 8px;
+            margin-top: auto;
+            padding: 6px 14px 4px 14px;
+            box-sizing: border-box;
+            width: 100%;
             user-select: none;
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
         }
-        .mouse-config-chip {
+        .peripheral-pill-wrap {
+            position: relative;
+            display: inline-flex;
+        }
+        .peripheral-micro-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            height: 22px;
+            padding: 0 9px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: #ccc;
+            font-size: 11px;
+            font-family: inherit;
+            font-variant-numeric: tabular-nums;
+            cursor: pointer;
+            outline: none;
+            white-space: nowrap;
+            transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+        }
+        .peripheral-micro-pill:hover,
+        .peripheral-pill-wrap:hover .peripheral-micro-pill,
+        .peripheral-pill-wrap:focus-within .peripheral-micro-pill {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.28);
+            color: #fff;
+        }
+        .peripheral-pill-tag {
+            font-weight: 600;
+            font-size: 10px;
+            color: #888;
+            letter-spacing: 0.5px;
+            transition: color 0.15s ease;
+        }
+        .peripheral-micro-pill:hover .peripheral-pill-tag,
+        .peripheral-pill-wrap:hover .peripheral-pill-tag,
+        .peripheral-pill-wrap:focus-within .peripheral-pill-tag {
+            color: #ff3333;
+        }
+        .peripheral-pill-batt {
+            font-size: 11px;
+            color: #ccc;
+        }
+        .peripheral-pill-indicator {
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transition: background 0.15s ease, transform 0.15s ease;
+        }
+        .peripheral-micro-pill:hover .peripheral-pill-indicator,
+        .peripheral-pill-wrap:hover .peripheral-pill-indicator,
+        .peripheral-pill-wrap:focus-within .peripheral-pill-indicator {
+            background: #ff3333;
+            transform: scale(1.25);
+        }
+        .peripheral-popover {
+            position: absolute;
+            bottom: calc(100% + 7px);
+            left: 50%;
+            transform: translateX(-50%) translateY(4px) scale(0.98);
+            width: 224px;
+            padding: 10px 12px;
+            border-radius: 6px;
+            background: rgba(12, 12, 12, 0.94);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7), 0 2px 6px rgba(0, 0, 0, 0.4);
+            z-index: 1000;
+            pointer-events: none;
+            opacity: 0;
+            visibility: hidden;
+            contain: layout style;
+            text-align: left;
+            white-space: normal;
+            transition: opacity 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+                        transform 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+                        visibility 0.15s;
+            will-change: opacity, transform;
+        }
+        /* Invisible Hover Bridge connecting pill to popover */
+        .peripheral-popover::after {
+            content: '';
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            height: 10px;
+            background: transparent;
+            pointer-events: auto;
+        }
+        .peripheral-pill-wrap:hover .peripheral-popover,
+        .peripheral-pill-wrap:focus-within .peripheral-popover,
+        .peripheral-popover:hover {
+            opacity: 1;
+            visibility: visible;
+            transform: translateX(-50%) translateY(0) scale(1);
+            pointer-events: auto;
+            transition-delay: 0s;
+        }
+        .peripheral-popover-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 8px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .peripheral-popover-title {
+            font-size: 11px;
+            font-weight: 500;
+            color: #fff;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .peripheral-popover-badge {
+            font-size: 10px;
+            color: #888;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 3px;
+            padding: 1px 5px;
+            white-space: nowrap;
+        }
+        .peripheral-popover-configs {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 4px;
+            margin-bottom: 8px;
+        }
+        .peripheral-config-btn {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            padding: 2px 9px;
+            padding: 3px 0;
             border-radius: 3px;
-            font-size: 12px;
+            font-size: 10px;
             font-family: inherit;
             font-weight: 400;
             color: #888;
             background: rgba(255, 255, 255, 0.04);
             border: 1px solid rgba(255, 255, 255, 0.12);
-            user-select: none;
-            letter-spacing: 0.2px;
             cursor: pointer;
             outline: none;
-            transition: all 0.15s ease;
+            transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
         }
-        .mouse-config-chip:hover:not(.active) {
+        .peripheral-config-btn:hover:not(.active) {
             color: #ccc;
-            border-color: rgba(255, 255, 255, 0.28);
-            background: rgba(255, 255, 255, 0.08);
-        }
-        .mouse-config-chip.active {
-            color: #fff;
-            font-weight: 500;
-            border: 1px solid #ff3333;
-            background: rgba(255, 51, 51, 0.08);
-            cursor: default;
-        }
-        .mouse-config-chip:disabled {
-            cursor: default;
-        }
-        .mouse-expand-btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 20px;
-            height: 20px;
-            padding: 0;
-            border-radius: 3px;
-            background: rgba(255, 255, 255, 0.04);
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            color: #888;
-            cursor: pointer;
-            transition: all 0.15s ease;
-        }
-        .mouse-expand-btn:hover {
-            color: #fff;
             border-color: rgba(255, 255, 255, 0.25);
             background: rgba(255, 255, 255, 0.08);
         }
-        .mouse-expand-icon {
-            display: block;
-            width: 10px;
-            height: 10px;
-            transition: transform 0.2s ease;
+        .peripheral-config-btn.active {
+            color: #fff;
+            font-weight: 500;
+            border-color: #ff3333;
+            background: rgba(255, 51, 51, 0.12);
+            cursor: default;
         }
-        .mouse-expand-btn.expanded .mouse-expand-icon {
-            transform: rotate(180deg);
-        }
-        .mouse-stats-panel {
-            display: none;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 4px 20px;
-            margin-top: 6px;
-            padding: 8px 14px;
-            background: rgba(0, 0, 0, 0.25);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 4px;
-            font-size: 12px;
-            text-align: left;
-            min-width: 300px;
-            box-sizing: border-box;
-            user-select: text;
-        }
-        .mouse-stats-panel.expanded {
+        .peripheral-popover-stats {
             display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 3px 12px;
+            font-size: 11px;
+            font-variant-numeric: tabular-nums;
+            line-height: 1.3;
         }
-        .mouse-stat-row {
+        .peripheral-stat-item {
             display: flex;
-            align-items: center;
             justify-content: space-between;
-            gap: 12px;
+            align-items: center;
             white-space: nowrap;
         }
-        .mouse-stat-label {
+        .peripheral-stat-lbl {
             color: #777;
+            margin-right: 6px;
         }
-        .mouse-stat-value {
+        .peripheral-stat-val {
             color: #ccc;
-            font-variant-numeric: tabular-nums;
         }
-        .mouse-btn {
-            background: rgba(255, 255, 255, 0.06);
-            border: 1px solid rgba(255, 255, 255, 0.18);
-            border-radius: 3px;
-            color: #ddd;
-            padding: 2px 10px;
-            font-size: 12px;
-            cursor: pointer;
-            font-family: inherit;
-            transition: all 0.15s ease;
-        }
-        .mouse-btn:hover {
-            background: rgba(255, 255, 255, 0.14);
-            color: #fff;
-            border-color: rgba(255, 255, 255, 0.35);
-        }
-        .mouse-btn:active {
-            background: rgba(255, 255, 255, 0.22);
+        #mouse-controls, .mouse-controls {
+            display: none !important;
         }
     </style>
 </head>
@@ -254,7 +327,6 @@
             <div id="weather"></div>
             <div id="hardware" style="display: none; font-size: 13px; font-weight: 400; color: #ccc;"></div>
             <div id="panel-controls" style="display: none; font-size: 13px; font-weight: 400; color: #ccc;"></div>
-            <div id="mouse-controls" class="mouse-controls"></div>
         </div>
     </div>
     <script src="newtab-script.js"></script>
