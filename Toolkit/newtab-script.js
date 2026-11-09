@@ -1494,6 +1494,7 @@ window.addEventListener('beforeunload', () => {
 let isMouseQuerying = false;
 let lastMouseQueryTime = 0;
 let pairedAtkDevice = null;
+let pendingTargetConfig = null;
 
 const mouseState = {
     name: 'ATK F1 Ultimate',
@@ -1537,6 +1538,26 @@ const keyboardState = {
         { id: 3, label: 'Config 4' }
     ]
 };
+
+try {
+    const savedMouseCfg = localStorage.getItem('atkMouseConfig');
+    if (savedMouseCfg !== null) {
+        const parsed = parseInt(savedMouseCfg, 10);
+        if (!isNaN(parsed) && parsed >= 0 && parsed <= 3) {
+            mouseState.config = parsed;
+        }
+    }
+} catch {}
+
+try {
+    const savedKbCfg = localStorage.getItem('keyboardConfig');
+    if (savedKbCfg !== null) {
+        const parsed = parseInt(savedKbCfg, 10);
+        if (!isNaN(parsed) && parsed >= 0 && parsed <= 3) {
+            keyboardState.config = parsed;
+        }
+    }
+} catch {}
 
 const ATK_MOUSE_NAMES = {
     '1,62': 'ATK F1 V3 ULTIMATE +',
@@ -1808,7 +1829,10 @@ async function queryAtkMouseState(device, force = false) {
         try {
             const cfgResp = await sendAtkHidCommand(device, 14, 0, 0, null, 150);
             if (cfgResp && cfgResp.byteLength >= 6) {
-                mouseState.config = cfgResp.getUint8(5);
+                if (pendingTargetConfig === null) {
+                    mouseState.config = cfgResp.getUint8(5);
+                    try { localStorage.setItem('atkMouseConfig', String(mouseState.config)); } catch {}
+                }
             }
         } catch {}
 
@@ -1912,6 +1936,149 @@ async function checkAndQueryAtkMouseOnDemand(force = false) {
     } catch {
         renderMouseControls();
     }
+}
+
+async function requestAtkDevicePairing() {
+    if (typeof navigator === 'undefined' || !navigator.hid) {
+        return;
+    }
+    try {
+        const selected = await navigator.hid.requestDevice({
+            filters: [
+                { vendorId: 0x373B, usagePage: 0xFF02, usage: 0x0002 }
+            ]
+        });
+        const matched = selected.find(isAtkCommDevice) || (selected.length > 0 ? selected[0] : null);
+        if (matched) {
+            pairedAtkDevice = matched;
+            await queryAtkMouseState(matched, true);
+        }
+    } catch (e) {
+        console.warn('[CToolkit] WebHID pairing cancelled or failed:', e);
+    }
+}
+
+async function switchAtkConfig(targetConfig) {
+    if (typeof targetConfig !== 'number' || isNaN(targetConfig) || targetConfig < 0 || targetConfig > 3) return;
+
+    pendingTargetConfig = targetConfig;
+    mouseState.config = targetConfig;
+    try { localStorage.setItem('atkMouseConfig', String(targetConfig)); } catch {}
+    updatePeripheralDockUI();
+
+    // Await active query completion or timeout to prevent bus collisions
+    const startTime = Date.now();
+    while (isMouseQuerying) {
+        if (Date.now() - startTime > 1200) {
+            isMouseQuerying = false;
+            break;
+        }
+        await new Promise(r => setTimeout(r, 30));
+        if (pendingTargetConfig !== targetConfig) {
+            return;
+        }
+    }
+
+    isMouseQuerying = true;
+    const finalTarget = pendingTargetConfig;
+    pendingTargetConfig = null;
+
+    try {
+        if (!pairedAtkDevice) {
+            pairedAtkDevice = await getPairedAtkCommDevice();
+        }
+        if (!pairedAtkDevice && typeof navigator !== 'undefined' && navigator.hid?.requestDevice) {
+            try {
+                const selected = await navigator.hid.requestDevice({
+                    filters: [
+                        { vendorId: 0x373B, usagePage: 0xFF02, usage: 0x0002 }
+                    ]
+                });
+                const matched = selected.find(isAtkCommDevice) || (selected.length > 0 ? selected[0] : null);
+                if (matched) {
+                    pairedAtkDevice = matched;
+                }
+            } catch (e) {
+                console.warn('[CToolkit] WebHID pairing cancelled or failed:', e);
+            }
+        }
+        if (!pairedAtkDevice) {
+            return;
+        }
+
+        await new Promise(r => setTimeout(r, 20));
+        if (!pairedAtkDevice.opened) {
+            await pairedAtkDevice.open();
+        }
+
+        // Send SetCurrentConfig (cmd: 15, addr: 0, len: 1, payload: [finalTarget])
+        try {
+            await sendAtkHidCommand(pairedAtkDevice, 15, 0, 1, [finalTarget], 400);
+        } catch (err) {
+            console.warn('[CToolkit] SetCurrentConfig cmd 15 sent:', err);
+        }
+
+        // Synchronous read-back verification (cmd: 14)
+        try {
+            const cfgResp = await sendAtkHidCommand(pairedAtkDevice, 14, 0, 0, null, 250);
+            if (cfgResp && cfgResp.byteLength >= 6) {
+                mouseState.config = cfgResp.getUint8(5);
+            } else {
+                mouseState.config = finalTarget;
+            }
+        } catch {
+            mouseState.config = finalTarget;
+        }
+
+        // Refresh polling rate, stage & DPI for the newly switched profile (cmd: 8)
+        let activeStage = 0;
+        try {
+            const rateResp = await sendAtkHidCommand(pairedAtkDevice, 8, 0, 10, null, 200);
+            if (rateResp && rateResp.byteLength >= 10) {
+                const rateCode = rateResp.getUint8(5);
+                mouseState.pollingRate = ATK_RATE_MAP[rateCode] || `${rateCode}Hz`;
+                activeStage = rateResp.getUint8(9);
+                const maxDpi = rateResp.getUint8(7);
+                mouseState.stage = `Stage ${activeStage + 1} / ${maxDpi}`;
+
+                const dpiStr = await fetchAtkDpi(pairedAtkDevice, activeStage, mouseState.sensor);
+                if (dpiStr) {
+                    mouseState.dpi = dpiStr;
+                }
+            }
+        } catch {}
+
+        // Debounce & MotionSync from EEPROM addr 169 (cmd: 8)
+        try {
+            const debResp = await sendAtkHidCommand(pairedAtkDevice, 8, 169, 10, null, 150);
+            if (debResp && debResp.byteLength >= 8) {
+                mouseState.debounce = `${debResp.getUint8(5)}ms`;
+                mouseState.motionSync = debResp.getUint8(7) === 1;
+            }
+        } catch {}
+
+        mouseState.isPaired = true;
+        lastMouseQueryTime = Date.now();
+        try { localStorage.setItem('atkMouseConfig', String(mouseState.config)); } catch {}
+    } catch (e) {
+        console.warn('[CToolkit] Failed to switch mouse config:', e);
+        mouseState.config = finalTarget;
+    } finally {
+        if (pairedAtkDevice && pairedAtkDevice.opened) {
+            try { await pairedAtkDevice.close(); } catch {}
+        }
+        isMouseQuerying = false;
+        updatePeripheralDockUI();
+    }
+}
+
+function switchKeyboardConfig(targetConfig) {
+    if (typeof targetConfig !== 'number' || isNaN(targetConfig) || targetConfig < 0 || targetConfig > 3) return;
+    keyboardState.config = targetConfig;
+    try {
+        localStorage.setItem('keyboardConfig', String(targetConfig));
+    } catch {}
+    updatePeripheralDockUI();
 }
 
 function renderPeripheralDockHtml() {
@@ -2108,22 +2275,47 @@ function attachPeripheralDockListeners(container = document) {
             const cfgId = parseInt(btn.getAttribute('data-config-id'), 10);
             if (!isNaN(cfgId)) {
                 if (device === 'keyboard') {
-                    keyboardState.config = cfgId;
+                    switchKeyboardConfig(cfgId);
                 } else if (device === 'mouse') {
-                    mouseState.config = cfgId;
+                    switchAtkConfig(cfgId);
                 }
-                updatePeripheralDockUI(dockEl);
             }
         };
     });
 
     const mouseWrap = dockEl.querySelector('.peripheral-pill-wrap[data-device="mouse"]');
     if (mouseWrap) {
-        mouseWrap.addEventListener('mouseenter', () => {
+        mouseWrap.onmouseenter = () => {
             if (Date.now() - lastMouseQueryTime >= 15000) {
                 checkAndQueryAtkMouseOnDemand(false);
             }
-        });
+        };
+    }
+
+    const pillMouse = dockEl.querySelector('#pill-mouse');
+    if (pillMouse) {
+        pillMouse.onclick = (e) => {
+            e.preventDefault();
+            if (!pairedAtkDevice || !mouseState.isPaired) {
+                requestAtkDevicePairing();
+            } else {
+                checkAndQueryAtkMouseOnDemand(true);
+            }
+        };
+    }
+
+    const badgeMouse = dockEl.querySelector('#mouse-popover-badge');
+    if (badgeMouse) {
+        badgeMouse.style.cursor = 'pointer';
+        badgeMouse.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!pairedAtkDevice || !mouseState.isPaired) {
+                requestAtkDevicePairing();
+            } else {
+                checkAndQueryAtkMouseOnDemand(true);
+            }
+        };
     }
 }
 
