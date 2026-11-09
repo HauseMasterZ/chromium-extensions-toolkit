@@ -1436,7 +1436,7 @@ function setInfoState(state) {
             mouseControlsEl.innerHTML = '';
         }
         renderMouseControls();
-        checkAndQueryAtkMouseOnDemand(true);
+        checkAndQueryAtkMouseOnDemand(false);
 
         isStatsSynchronized = false;
         hasMonitorProbeCompleted = false;
