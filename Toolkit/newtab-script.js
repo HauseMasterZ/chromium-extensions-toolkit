@@ -1811,7 +1811,7 @@ async function getPairedAtkCommDevice() {
 }
 
 async function queryAtkMouseState(device, force = false) {
-    if (!device || isMouseQuerying) return;
+    if (!device || isMouseQuerying || (infoState !== 3 && pendingTargetConfig === null)) return;
     const now = Date.now();
 
     if (!force && (now - lastMouseQueryTime < 15000) && mouseState.config !== null && mouseState.dpi) {
@@ -2328,10 +2328,10 @@ function renderMouseControls() {
 }
 
 async function initAtkWebHid() {
-    if (typeof navigator === 'undefined' || !navigator.hid) return;
+    if (infoState !== 3 || typeof navigator === 'undefined' || !navigator.hid) return;
     try {
         pairedAtkDevice = await getPairedAtkCommDevice();
-        if (pairedAtkDevice && infoState === 3) {
+        if (pairedAtkDevice) {
             await queryAtkMouseState(pairedAtkDevice, true);
         } else {
             updatePeripheralDockUI();
