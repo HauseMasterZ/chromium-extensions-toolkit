@@ -74,3 +74,9 @@
 ## 14. Display Auto-Zoom Concurrency & Reentrancy Guards
 - Programmatic Reentrancy Guard: Programmatic zoom adjustments (`setZoomSettings`, `setZoom`) must set temporary reentrancy lock tokens to prevent `chrome.tabs.onZoomChange` from misidentifying the extension's own per-tab mode switches as manual user zoom overrides.
 - Bounded Memory Lifecycle: Ephemeral tab and window tracking structures (such as `pendingPurgedTabs`) must be cleared following session initialization and strictly guarded against unbounded monotonic memory growth.
+
+## 15. WebHID Invariant & Info Panel Boundary Isolation
+- Under no circumstances execute, initialize, or poll WebHID (`navigator.hid`, `queryAtkMouseState`, `checkAndQueryAtkMouseOnDemand`, `device.open`) on page load or outside State 3 (`infoState === 3`).
+- All WebHID access in `Toolkit/newtab-script.js` must be strictly gated behind `if (infoState !== 3) return;` to prevent Chromium from surfacing the taskbar/tray HID notification icon on new tab creation.
+- Mechanically enforced via `.git/hooks/pre-commit`, `.agents/scripts/verify_invariants.py`, and `.agents/scripts/workspace_guard.py`.
+
