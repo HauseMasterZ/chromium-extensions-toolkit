@@ -3,6 +3,7 @@
 
 (function() {
     const host = window.location.hostname.toLowerCase();
+    const isProton = host === 'proton.me' || host.endsWith('.proton.me') || host === 'protonmail.com' || host.endsWith('.protonmail.com') || host === 'protonvpn.com' || host.endsWith('.protonvpn.com');
     if (host === 'v3-hub.atk.store' || host.endsWith('.atk.store') || host === 'atk.store' || host.includes('mchose.com.cn')) {
         if (typeof DarkReader !== 'undefined' && DarkReader.disable) {
             DarkReader.disable();
@@ -147,6 +148,18 @@
                             [class*="productImageContainer"] img {
                                 filter: none !important;
                             }
+                            ${isProton ? `
+                            /* Proton authentication & layout gradient neutralization */
+                            .sign-layout-bg,
+                            [class*="sign-layout-bg"],
+                            [class*="signup-v2-account-gradient"],
+                            [class*="sign-layout-container"],
+                            [class*="signup-v2-bg"],
+                            [class*="referral-signup-bg-gradient"] {
+                                background: #000000 !important;
+                                background-image: none !important;
+                            }
+                            ` : ''}
                         `,
                         ignoreImageAnalysis: ['*']
                     });
