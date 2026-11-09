@@ -1923,7 +1923,7 @@ async function queryAtkMouseState(device, force = false) {
 }
 
 async function checkAndQueryAtkMouseOnDemand(force = false) {
-    if (typeof navigator === 'undefined' || !navigator.hid) return;
+    if (infoState !== 3 || typeof navigator === 'undefined' || !navigator.hid) return;
     try {
         if (!pairedAtkDevice) {
             pairedAtkDevice = await getPairedAtkCommDevice();
@@ -2331,7 +2331,7 @@ async function initAtkWebHid() {
     if (typeof navigator === 'undefined' || !navigator.hid) return;
     try {
         pairedAtkDevice = await getPairedAtkCommDevice();
-        if (pairedAtkDevice) {
+        if (pairedAtkDevice && infoState === 3) {
             await queryAtkMouseState(pairedAtkDevice, true);
         } else {
             updatePeripheralDockUI();
