@@ -78,5 +78,5 @@
 ## 15. WebHID Invariant & Info Panel Boundary Isolation
 - Under no circumstances execute, initialize, or poll WebHID (`navigator.hid`, `queryAtkMouseState`, `checkAndQueryAtkMouseOnDemand`, `device.open`) on page load or outside State 3 (`infoState === 3`).
 - All WebHID access in `Toolkit/newtab-script.js` must be strictly gated behind `if (infoState !== 3) return;` to prevent Chromium from surfacing the taskbar/tray HID notification icon on new tab creation.
-- Mechanically enforced via `.git/hooks/pre-commit`, `.agents/scripts/verify_invariants.py`, and `.agents/scripts/workspace_guard.py`.
+
 

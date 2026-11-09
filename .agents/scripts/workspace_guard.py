@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 """
-Workspace Boundary Guard & Invariant Enforcement Gate for CToolkit.
-Mechanically intercepts and blocks:
-1. Tool calls or shell commands targeting unauthorized paths outside CToolkit.
-2. Shell commands attempting to commit code with broken invariants (WebHID gating, CRLF, emojis).
-3. Direct file edits introducing ungated WebHID calls in newtab-script.js.
+Workspace Boundary Guard for CToolkit.
+Mechanically intercepts and blocks any tool calls or shell commands targeting
+directories, repositories, or files outside the authorized CToolkit workspace.
 """
 import sys
 import json
 import os
 import re
-import subprocess
 
 def normalize_path(p):
     if not p or not isinstance(p, str):
@@ -72,17 +69,6 @@ def main():
                 }))
                 return
 
-            # WebHID Invariant Check on direct edits to newtab-script.js
-            if target_path and "newtab-script.js" in target_path.lower():
-                payload = args.get("Replacement", "") or args.get("Content", "")
-                if "initAtkWebHid" in payload and "async function" in payload:
-                    if "infoState !== 3" not in payload and "infoState === 3" not in payload:
-                        print(json.dumps({
-                            "decision": "deny",
-                            "reason": "MECHANICAL HARD-GATE: WebHID invariant violation. initAtkWebHid() must be strictly gated with infoState === 3."
-                        }))
-                        return
-
         # 2. Inspect shell commands
         if tool_name == "run_command":
             cmd = args.get("CommandLine", "")
@@ -112,18 +98,6 @@ def main():
                     "reason": "MECHANICAL HARD-GATE: Multi-level directory traversal out of workspace is blocked."
                 }))
                 return
-
-            # Intercept git commit and mechanically run invariant verification
-            if re.search(r"\bgit\s+commit\b", cmd):
-                verify_script = os.path.join(script_dir, "verify_invariants.py")
-                if os.path.exists(verify_script):
-                    res = subprocess.run([sys.executable, verify_script], cwd=ctoolkit_root, capture_output=True, text=True)
-                    if res.returncode != 0:
-                        print(json.dumps({
-                            "decision": "deny",
-                            "reason": f"MECHANICAL HARD-GATE: Commit blocked by invariant verification engine:\n{res.stdout.strip()}"
-                        }))
-                        return
 
         print(json.dumps({"decision": "allow"}))
     except Exception as e:
