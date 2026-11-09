@@ -1493,6 +1493,7 @@ window.addEventListener('beforeunload', () => {
 // =============================================================================
 let isMouseQuerying = false;
 let lastMouseQueryTime = 0;
+const ATK_MOUSE_QUERY_COOLDOWN_MS = 10000;
 let pairedAtkDevice = null;
 let pendingTargetConfig = null;
 
@@ -1814,7 +1815,7 @@ async function queryAtkMouseState(device, force = false) {
     if (!device || isMouseQuerying || (infoState !== 3 && pendingTargetConfig === null)) return;
     const now = Date.now();
 
-    if (!force && (now - lastMouseQueryTime < 15000) && mouseState.config !== null && mouseState.dpi) {
+    if (!force && (now - lastMouseQueryTime < ATK_MOUSE_QUERY_COOLDOWN_MS) && mouseState.config !== null && mouseState.dpi) {
         renderMouseControls();
         return;
     }
@@ -1928,7 +1929,7 @@ async function checkAndQueryAtkMouseOnDemand(force = false) {
         if (!pairedAtkDevice) {
             pairedAtkDevice = await getPairedAtkCommDevice();
         }
-        if (pairedAtkDevice && (!lastMouseQueryTime || force || Date.now() - lastMouseQueryTime > 15000)) {
+        if (pairedAtkDevice && (!lastMouseQueryTime || force || Date.now() - lastMouseQueryTime > ATK_MOUSE_QUERY_COOLDOWN_MS)) {
             await queryAtkMouseState(pairedAtkDevice, force);
         } else {
             renderMouseControls();
@@ -2286,7 +2287,7 @@ function attachPeripheralDockListeners(container = document) {
     const mouseWrap = dockEl.querySelector('.peripheral-pill-wrap[data-device="mouse"]');
     if (mouseWrap) {
         mouseWrap.onmouseenter = () => {
-            if (Date.now() - lastMouseQueryTime >= 15000) {
+            if (Date.now() - lastMouseQueryTime >= ATK_MOUSE_QUERY_COOLDOWN_MS) {
                 checkAndQueryAtkMouseOnDemand(false);
             }
         };
