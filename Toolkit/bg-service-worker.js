@@ -265,6 +265,15 @@ async function syncWeather(force = false) {
       } catch {}
     }
 
+    // Check offline status before attempting network request
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      try {
+        const { weatherCache } = await chrome.storage.local.get('weatherCache');
+        if (weatherCache) return weatherCache;
+      } catch {}
+      return null;
+    }
+
     try {
       const coords = await getOrUpdateCoordinates();
       if (!coords?.lat || !coords?.lon) {
@@ -272,7 +281,7 @@ async function syncWeather(force = false) {
       }
 
       const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${coords.lat}&longitude=${coords.lon}&current=temperature_2m,wind_speed_10m&hourly=precipitation_probability&timezone=auto&forecast_days=1`, {
-        signal: AbortSignal.timeout(5000)
+        signal: AbortSignal.timeout(7000)
       });
       if (!res.ok) throw new Error(`Weather fetch failed: ${res.status}`);
       const data = await res.json();
@@ -293,7 +302,15 @@ async function syncWeather(force = false) {
       });
       return weatherString;
     } catch (e) {
-      console.error('[CToolkit] Weather sync error:', e);
+      console.warn('[CToolkit] Weather sync transient network failure, falling back to cache:', e?.message || e);
+      try {
+        // Schedule a single retry after 15 seconds if network was temporarily unavailable during startup
+        chrome.alarms?.create('retry_weather_alarm', { when: Date.now() + 15000 });
+      } catch {}
+      try {
+        const { weatherCache } = await chrome.storage.local.get('weatherCache');
+        if (weatherCache) return weatherCache;
+      } catch {}
       return null;
     } finally {
       weatherSyncPromise = null;
@@ -330,6 +347,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     syncRemoteClearUrlsRules(true);
     syncRemoteShortenersList(true);
   } else if (alarm.name === 'sync_weather_alarm') {
+    syncWeather(true);
+  } else if (alarm.name === 'retry_weather_alarm') {
     syncWeather(true);
   } else if (alarm.name === 'host_idle_teardown_alarm') {
     if (telemetryClients.size === 0) {
@@ -1111,7 +1130,11 @@ function rehydrateFeatureScripts() {
     updateYtFloatSearchScript(res.featureYtFloatSearch);
     updateWhatsappScript(res.featureWhatsapp);
     if (res?.darkmode_domains) {
-      updateRegisteredDarkModeScript(res.darkmode_domains);
+      const sanitized = res.darkmode_domains.filter(d => !isDarkModeBlacklisted(d));
+      if (sanitized.length !== res.darkmode_domains.length) {
+        chrome.storage.local.set({ darkmode_domains: sanitized });
+      }
+      updateRegisteredDarkModeScript(sanitized);
     }
   });
 }
@@ -1533,8 +1556,48 @@ async function resolveAndCleanShortUrl(rawUrl) {
   }
 }
 
-function toggleDarkMode(tabId) {
+const DARK_MODE_EXCLUDED_HOSTS = [
+  'v3-hub.atk.store',
+  'hub.atk.store',
+  'atk.store',
+  'www.mchose.com.cn',
+  'mchose.com.cn'
+];
+
+function isDarkModeBlacklisted(urlOrHostname) {
+  if (!urlOrHostname) return false;
+  try {
+    const raw = String(urlOrHostname).trim().toLowerCase();
+    const hostname = raw.includes('://') ? new URL(raw).hostname.toLowerCase() : raw.split('/')[0].split(':')[0];
+    return DARK_MODE_EXCLUDED_HOSTS.some(ex => hostname === ex || hostname.endsWith('.' + ex));
+  } catch {
+    return false;
+  }
+}
+
+async function toggleDarkMode(tabId) {
   if (!tabId) return;
+
+  let tab = null;
+  try { tab = await chrome.tabs.get(tabId); } catch {}
+  if (tab?.url && isDarkModeBlacklisted(tab.url)) {
+    // Hardware web driver portals are strictly exempt from DarkReader injection
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          if (typeof DarkReader !== 'undefined' && DarkReader.disable) {
+            DarkReader.disable();
+          }
+          document.documentElement.classList.add('darkreader--disabled');
+          document.documentElement.classList.remove('darkreader-ready');
+          window.__DARK_MODE_IS_ACTIVE__ = false;
+        }
+      });
+    } catch {}
+    updateDomainMemory(tabId, false);
+    return;
+  }
 
   chrome.scripting.executeScript({
     target: { tabId },
@@ -1553,7 +1616,11 @@ function toggleDarkMode(tabId) {
   }).catch(console.error);
 }
 
-function injectDarkMode(tabId) {
+async function injectDarkMode(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab?.url && isDarkModeBlacklisted(tab.url)) return;
+  } catch {}
   chrome.scripting.insertCSS({ target: { tabId }, files: ['fast-inject.css'] });
   chrome.scripting.executeScript({ target: { tabId }, files: ['darkreader.js', 'autodark-init.js'] });
 }
@@ -1562,19 +1629,38 @@ async function updateDomainMemory(tabId, isEnabled) {
   try {
     const tab = await chrome.tabs.get(tabId);
     if (!tab?.url || tab.url.startsWith('chrome://') || tab.url.startsWith('https://chrome.google.com/webstore')) return;
-    const hostname = new URL(tab.url).hostname;
+    const hostname = new URL(tab.url).hostname.toLowerCase();
     if (!hostname) return;
 
-    const { darkmode_domains = [] } = await chrome.storage.local.get('darkmode_domains');
-    const index = darkmode_domains.indexOf(hostname);
+    if (isDarkModeBlacklisted(hostname)) {
+      // Purge any accidental blacklisted entries or parent domains
+      const { darkmode_domains = [] } = await chrome.storage.local.get('darkmode_domains');
+      const filtered = darkmode_domains.filter(d => !isDarkModeBlacklisted(d));
+      if (filtered.length !== darkmode_domains.length) {
+        await chrome.storage.local.set({ darkmode_domains: filtered });
+        updateRegisteredDarkModeScript(filtered);
+      }
+      return;
+    }
+
+    let { darkmode_domains = [] } = await chrome.storage.local.get('darkmode_domains');
     let changed = false;
 
-    if (isEnabled && index === -1) {
-      darkmode_domains.push(hostname);
-      changed = true;
-    } else if (!isEnabled && index !== -1) {
-      darkmode_domains.splice(index, 1);
-      changed = true;
+    if (isEnabled) {
+      if (!darkmode_domains.includes(hostname)) {
+        darkmode_domains.push(hostname);
+        changed = true;
+      }
+    } else {
+      // When disabling dark mode on a domain/subdomain, remove exact match AND any matching parent domain
+      const beforeLen = darkmode_domains.length;
+      darkmode_domains = darkmode_domains.filter(d => {
+        const lowerD = d.toLowerCase();
+        return lowerD !== hostname && !hostname.endsWith('.' + lowerD) && !lowerD.endsWith('.' + hostname);
+      });
+      if (darkmode_domains.length !== beforeLen) {
+        changed = true;
+      }
     }
 
     if (changed) {
@@ -1597,23 +1683,35 @@ function updateRegisteredDarkModeScript(domains) {
       }
     } catch {}
 
-    if (domains?.length) {
-      const matches = domains.flatMap(d => {
+    const validDomains = (domains || []).filter(d => !isDarkModeBlacklisted(d));
+    if (validDomains.length) {
+      const matches = validDomains.flatMap(d => {
         const base = d.replace(/^www\./, '');
         return [`*://${base}/*`, `*://*.${base}/*`];
       });
+
+      const excludeMatches = [
+        '*://v3-hub.atk.store/*',
+        '*://*.atk.store/*',
+        '*://atk.store/*',
+        '*://www.mchose.com.cn/*',
+        '*://*.mchose.com.cn/*',
+        '*://mchose.com.cn/*'
+      ];
 
       try {
         await chrome.scripting.registerContentScripts([
           {
             id: 'dynamic-dark-mode-css',
             matches,
+            excludeMatches,
             css: ['fast-inject.css'],
             runAt: 'document_start'
           },
           {
             id: 'dynamic-dark-mode-js',
             matches,
+            excludeMatches,
             js: ['darkreader.js', 'autodark-init.js'],
             runAt: 'document_idle'
           }
@@ -1633,37 +1731,9 @@ let nativeTelemetryPort = null;
 const telemetryClients = new Set();
 let lastTelemetryData = null;
 let hostTeardownTimer = null;
-
-// Telemetry session storage throttling state (3 to 5s window with immediate config dispatch)
 let lastTelemetrySessionWriteTime = 0;
-let telemetrySessionTimer = null;
 let lastMonitorConfigSig = null;
-const TELEMETRY_STORAGE_THROTTLE_MS = 4000;
-
-function getMonitorConfigSignature(monitors) {
-  if (!Array.isArray(monitors)) return '';
-  return monitors.filter(Boolean).map(m => {
-    return [
-      m.id || '',
-      m.name || '',
-      m.pnpId || '',
-      m.gdiDevice || '',
-      m.windowsDisplayNumber || '',
-      m.isInternal ? 1 : 0,
-      m.brightness,
-      m.contrast,
-      m.blackBoost,
-      m.colorPreset,
-      m.gainR,
-      m.gainG,
-      m.gainB,
-      m.overdrive,
-      m.strobing,
-      m.features ? JSON.stringify(m.features) : '',
-      m.capabilities ? JSON.stringify(m.capabilities) : ''
-    ].join('|');
-  }).join('||');
-}
+let telemetrySessionTimer = null;
 
 function cancelHostTeardown() {
   if (hostTeardownTimer) {
@@ -1676,24 +1746,24 @@ function cancelHostTeardown() {
 }
 
 function scheduleHostTeardown() {
-  cancelHostTeardown();
+  if (hostTeardownTimer) return;
   hostTeardownTimer = setTimeout(() => {
     if (telemetryClients.size === 0) {
       stopNativeTelemetry();
     }
     hostTeardownTimer = null;
-  }, 20000);
+  }, 10000);
 
   try {
     chrome.alarms.create('host_idle_teardown_alarm', {
-      when: Date.now() + 20000
+      when: Date.now() + 10000
     });
   } catch {}
 }
 
-// Clean up any legacy persistent monitor cache entries to ensure strictly empirical telemetry
+// Ephemeral telemetry: ensure any legacy persistent cache is purged
 try {
-  chrome.storage.local.remove(['cached_monitors']);
+  chrome.storage?.local?.remove(['cached_empirical_monitors', 'cached_monitors']);
 } catch (e) {}
 
 const internalDisplaySettings = {
@@ -1733,6 +1803,17 @@ try {
 
 function recordInternalDisplaySetting(msg) {
   if (!msg || msg.action !== 'set_panel_control') return;
+  const ctrl = String(msg.control || '').toLowerCase().replace(/_/g, '');
+  const val = Number(msg.value);
+  if (isNaN(val)) return;
+
+  if (lastTelemetryData?.monitors) {
+    const target = lastTelemetryData.monitors.find(m => m.id === msg.monitorId || m.pnpId === msg.monitorId || (msg.pnpId && m.pnpId === msg.pnpId));
+    if (target && msg.control) {
+      target[msg.control] = val;
+    }
+  }
+
   const isInternal = Boolean(
     msg.isInternal ||
     (lastTelemetryData?.monitors?.find(m => m.id === msg.monitorId || m.pnpId === msg.monitorId || (msg.pnpId && m.pnpId === msg.pnpId))?.isInternal) ||
@@ -1741,10 +1822,6 @@ function recordInternalDisplaySetting(msg) {
   );
 
   if (!isInternal) return;
-
-  const ctrl = String(msg.control || '').toLowerCase().replace(/_/g, '');
-  const val = Number(msg.value);
-  if (isNaN(val)) return;
 
   const clamped = Math.max(0, Math.min(100, val));
   if (ctrl === 'contrast') {
@@ -1768,8 +1845,8 @@ chrome.runtime.onConnect.addListener((clientPort) => {
   cancelHostTeardown();
   telemetryClients.add(clientPort);
 
-  // Send latest live empirical telemetry frame if native host is active
-  if (nativeTelemetryPort && lastTelemetryData) {
+  // Send latest live empirical telemetry frame immediately if available and native host active
+  if (nativeTelemetryPort && lastTelemetryData && lastTelemetryData.monitors && lastTelemetryData.cpuLoad !== undefined) {
     try {
       clientPort.postMessage(lastTelemetryData);
     } catch (e) {}
@@ -1790,23 +1867,24 @@ chrome.runtime.onConnect.addListener((clientPort) => {
         if (typeof msg.gainG !== 'number') msg.gainG = internalDisplaySettings.gainG;
         if (typeof msg.gainB !== 'number') msg.gainB = internalDisplaySettings.gainB;
       }
-    }
-    if (!nativeTelemetryPort) {
-      startNativeTelemetry();
-    }
-    if (nativeTelemetryPort && msg) {
-      try {
-        nativeTelemetryPort.postMessage(msg);
-      } catch (e) {
-        console.error('Failed to post clientPort message to native host:', e);
-      }
+      dispatchNativeHostMessage(msg);
     }
   });
 
   clientPort.onDisconnect.addListener(() => {
     telemetryClients.delete(clientPort);
     if (telemetryClients.size === 0) {
-      scheduleHostTeardown();
+      const isDataReady = Boolean(
+        lastTelemetryData &&
+        lastTelemetryData.hasProbed &&
+        Array.isArray(lastTelemetryData.monitors) &&
+        lastTelemetryData.cpuLoad !== undefined
+      );
+      if (!isDataReady) {
+        stopNativeTelemetry();
+      } else {
+        scheduleHostTeardown();
+      }
     }
   });
 });
@@ -1831,13 +1909,36 @@ function startNativeTelemetry() {
 
     nativeTelemetryPort.onMessage.addListener((data) => {
       if (data && !data.error) {
-        lastTelemetryData = data;
-        const currentSig = getMonitorConfigSignature(data.monitors);
+        if (data.monitors && data.hasProbed) {
+          lastTelemetryData = data;
+        } else if (lastTelemetryData) {
+          lastTelemetryData = {
+            ...data,
+            hasProbed: lastTelemetryData.hasProbed,
+            monitors: lastTelemetryData.monitors
+          };
+        } else {
+          lastTelemetryData = data;
+        }
+      }
+
+      // Live dispatches remain immediate at 0ms latency
+      const frameToSend = (lastTelemetryData && lastTelemetryData.monitors) ? lastTelemetryData : data;
+      for (const client of telemetryClients) {
+        try {
+          client.postMessage(frameToSend);
+        } catch (e) {
+          telemetryClients.delete(client);
+        }
+      }
+
+      if (frameToSend && frameToSend.monitors && Array.isArray(frameToSend.monitors)) {
+        const currentSig = frameToSend.monitors.map(m => `${m.id || ''}:${m.windowsDisplayNumber || ''}:${m.width}x${m.height}`).join('|');
         const sigChanged = (lastMonitorConfigSig === null || currentSig !== lastMonitorConfigSig);
         const now = Date.now();
         const elapsed = now - lastTelemetrySessionWriteTime;
 
-        if (sigChanged || elapsed >= TELEMETRY_STORAGE_THROTTLE_MS) {
+        if (sigChanged || elapsed >= 2000) {
           if (telemetrySessionTimer) {
             clearTimeout(telemetrySessionTimer);
             telemetrySessionTimer = null;
@@ -1845,34 +1946,36 @@ function startNativeTelemetry() {
           lastTelemetrySessionWriteTime = now;
           lastMonitorConfigSig = currentSig;
           try {
-            if (chrome.storage && chrome.storage.session) {
-              chrome.storage.session.set({ latest_telemetry: data });
-            }
+            chrome.storage?.session?.set({ latest_telemetry: frameToSend }).catch(() => {});
           } catch (e) {}
         } else if (!telemetrySessionTimer) {
           telemetrySessionTimer = setTimeout(() => {
             telemetrySessionTimer = null;
             if (lastTelemetryData && chrome.storage?.session) {
               try {
-                chrome.storage.session.set({ latest_telemetry: lastTelemetryData });
+                chrome.storage.session.set({ latest_telemetry: lastTelemetryData }).catch(() => {});
                 lastTelemetrySessionWriteTime = Date.now();
-                lastMonitorConfigSig = getMonitorConfigSignature(lastTelemetryData.monitors);
+                if (lastTelemetryData.monitors) {
+                  lastMonitorConfigSig = lastTelemetryData.monitors.map(m => `${m.id || ''}:${m.windowsDisplayNumber || ''}:${m.width}x${m.height}`).join('|');
+                }
               } catch (e) {}
             }
-          }, TELEMETRY_STORAGE_THROTTLE_MS - elapsed);
+          }, 2000 - elapsed);
         }
       }
 
-      // Live dispatches remain immediate at 0ms latency
-      for (const client of telemetryClients) {
-        try {
-          client.postMessage(data);
-        } catch (e) {
-          telemetryClients.delete(client);
-        }
-      }
       if (telemetryClients.size === 0) {
-        scheduleHostTeardown();
+        const isDataReady = Boolean(
+          lastTelemetryData &&
+          lastTelemetryData.hasProbed &&
+          Array.isArray(lastTelemetryData.monitors) &&
+          lastTelemetryData.cpuLoad !== undefined
+        );
+        if (!isDataReady) {
+          stopNativeTelemetry();
+        } else {
+          scheduleHostTeardown();
+        }
       }
     });
 
@@ -1884,7 +1987,6 @@ function startNativeTelemetry() {
         clearTimeout(telemetrySessionTimer);
         telemetrySessionTimer = null;
       }
-      lastMonitorConfigSig = null;
       for (const client of telemetryClients) {
         try {
           client.postMessage({ error: true, message: err });
@@ -1904,7 +2006,6 @@ function startNativeTelemetry() {
       clearTimeout(telemetrySessionTimer);
       telemetrySessionTimer = null;
     }
-    lastMonitorConfigSig = null;
     for (const client of telemetryClients) {
       try {
         client.postMessage({ error: true, message: e.message || 'Host Launch Failed' });
@@ -1926,5 +2027,14 @@ function stopNativeTelemetry() {
     nativeTelemetryPort = null;
   }
   lastTelemetryData = null;
-  lastMonitorConfigSig = null;
 }
+
+// Ensure latest_telemetry is hydrated on service worker startup
+(async () => {
+  try {
+    const sessionData = await chrome.storage?.session?.get('latest_telemetry').catch(() => ({}));
+    if (!sessionData?.latest_telemetry?.monitors && !nativeTelemetryPort) {
+      startNativeTelemetry();
+    }
+  } catch {}
+})();

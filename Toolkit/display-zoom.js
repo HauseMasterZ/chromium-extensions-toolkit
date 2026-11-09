@@ -117,15 +117,50 @@
 
     // Pass 1: Explicit internal monitor matching
     const internalMon = telemetryMonitors.find(mon => mon.isInternal);
-    let internalDisplay = displays.find(d => d.isInternal);
-    if (!internalDisplay && internalMon) {
-      internalDisplay = displays.find(d => d.isPrimary) || displays[0];
-      if (internalDisplay) internalDisplay.isInternal = true;
-    }
-    if (internalDisplay && internalMon) {
-      internalDisplay.windowsDisplayNumber = internalMon.windowsDisplayNumber || 1;
-      usedMonitors.add(internalMon);
-      usedNumbers.add(internalDisplay.windowsDisplayNumber);
+    let internalDisplay = null;
+
+    if (internalMon) {
+      // 1A. High-confidence physical resolution match (exact or rotated)
+      if (internalMon.width && internalMon.height) {
+        internalDisplay = displays.find(d => d.bounds && (
+          (d.bounds.width === internalMon.width && d.bounds.height === internalMon.height) ||
+          (d.bounds.width === internalMon.height && d.bounds.height === internalMon.width)
+        ));
+      }
+
+      // 1B. PnP ID or GDI device match
+      if (!internalDisplay && internalMon.pnpId) {
+        internalDisplay = displays.find(d => d.id && (d.id.includes(internalMon.pnpId) || d.id === internalMon.pnpId));
+      }
+      if (!internalDisplay && internalMon.gdiDevice) {
+        internalDisplay = displays.find(d => d.id && d.id.includes(internalMon.gdiDevice));
+      }
+
+      // 1C. Match against last known internal display ID if resolution is consistent
+      if (!internalDisplay) {
+        internalDisplay = displays.find(d => d.isInternal && d.bounds && (
+          !internalMon.width || !internalMon.height ||
+          (d.bounds.width === internalMon.width && d.bounds.height === internalMon.height) ||
+          (d.bounds.width === internalMon.height && d.bounds.height === internalMon.width)
+        ));
+      }
+
+      // 1D. Single display system fallback
+      if (!internalDisplay && displays.length === 1) {
+        internalDisplay = displays[0];
+      }
+
+      // Strip any bogus isInternal flags from other displays
+      displays.forEach(d => {
+        if (d !== internalDisplay) d.isInternal = false;
+      });
+
+      if (internalDisplay) {
+        internalDisplay.isInternal = true;
+        internalDisplay.windowsDisplayNumber = internalMon.windowsDisplayNumber || 1;
+        usedMonitors.add(internalMon);
+        usedNumbers.add(internalDisplay.windowsDisplayNumber);
+      }
     }
 
     // Pass 2: High-confidence matching for remaining displays (resolution bounds, PNP ID, GDI device, or model name)
@@ -156,7 +191,7 @@
         usedMonitors.add(match);
         d.windowsDisplayNumber = match.windowsDisplayNumber;
         usedNumbers.add(d.windowsDisplayNumber);
-        if (match.isInternal) d.isInternal = true;
+        d.isInternal = Boolean(match.isInternal);
       } else {
         delete d.windowsDisplayNumber;
       }
@@ -167,7 +202,7 @@
       .filter(m => !usedMonitors.has(m) && !m.isInternal)
       .sort((a, b) => (a.windowsDisplayNumber || 0) - (b.windowsDisplayNumber || 0));
     const remainingDisplays = displays
-      .filter(d => d !== internalDisplay && (!d.windowsDisplayNumber || usedNumbers.has(d.windowsDisplayNumber) && displays.filter(x => x.windowsDisplayNumber === d.windowsDisplayNumber).length > 1))
+      .filter(d => d !== internalDisplay && (!d.windowsDisplayNumber || (usedNumbers.has(d.windowsDisplayNumber) && displays.filter(x => x.windowsDisplayNumber === d.windowsDisplayNumber).length > 1)))
       .sort((a, b) => (a.bounds?.left || 0) - (b.bounds?.left || 0) || (a.bounds?.top || 0) - (b.bounds?.top || 0));
 
     for (let i = 0; i < Math.min(remainingMonitors.length, remainingDisplays.length); i++) {
@@ -249,6 +284,14 @@
           const matched = allDisplays.find(d => d.id === res.lastKnownInternalDisplayId);
           if (matched) matched.isInternal = true;
         }
+
+        try {
+          const sessionData = chrome.storage?.session ? await chrome.storage.session.get('latest_telemetry').catch(() => ({})) : {};
+          const latest_telemetry = sessionData?.latest_telemetry;
+          if (latest_telemetry?.monitors && allDisplays.length > 0) {
+            annotateDisplaysWithTelemetry(allDisplays, latest_telemetry.monitors);
+          }
+        } catch {}
       } catch {}
 
       try {
@@ -342,6 +385,17 @@
               }
             }
           } catch {}
+
+          if (!displays.some(d => typeof d.windowsDisplayNumber === 'number' && d.windowsDisplayNumber > 0)) {
+            const sortedByPos = [...displays].sort((a, b) => {
+              if (a.isInternal && !b.isInternal) return -1;
+              if (b.isInternal && !a.isInternal) return 1;
+              return (a.bounds?.left || 0) - (b.bounds?.left || 0);
+            });
+            sortedByPos.forEach((d, idx) => {
+              d.windowsDisplayNumber = idx + 1;
+            });
+          }
 
           allDisplays = displays;
           try {
@@ -454,9 +508,10 @@
   function getZoomValFromConfig(cfg, display) {
     if (!cfg || typeof cfg !== 'object' || !display) return null;
     const keys = [
-      display.id,
-      display.windowsDisplayNumber,
       (typeof display.windowsDisplayNumber === 'number' && display.windowsDisplayNumber > 0) ? `#${display.windowsDisplayNumber}` : null,
+      (typeof display.windowsDisplayNumber === 'number' && display.windowsDisplayNumber > 0) ? String(display.windowsDisplayNumber) : null,
+      display.windowsDisplayNumber,
+      display.id,
       display.name
     ];
     for (const key of keys) {
@@ -578,9 +633,11 @@
 
     let display = null;
     if (resolvedWindowId) {
-      const cachedDisplayId = windowCurrentDisplay.get(resolvedWindowId);
-      if (cachedDisplayId) {
-        display = allDisplays.find(d => d.id === cachedDisplayId);
+      if (!options.force) {
+        const cachedDisplayId = windowCurrentDisplay.get(resolvedWindowId);
+        if (cachedDisplayId) {
+          display = allDisplays.find(d => d.id === cachedDisplayId);
+        }
       }
       if (!display) {
         try {
