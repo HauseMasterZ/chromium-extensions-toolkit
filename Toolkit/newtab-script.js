@@ -99,9 +99,10 @@ try {
 } catch {}
 
 
-// Hardware Telemetry & Info-Panel 4-State Cycle (Streaming 0.5Hz)
+// Hardware Telemetry & Info-Panel 3-State Cycle (Streaming 0.5Hz)
 const hardwareEl = document.getElementById('hardware');
 const panelControlsEl = document.getElementById('panel-controls');
+const mouseControlsEl = document.getElementById('mouse-controls');
 
 // =============================================================================
 // INDIVIDUAL MONITOR CONFIGURATIONS & FEATURE FLAGS
@@ -168,10 +169,10 @@ const MONITOR_CONFIG_PROFILES = {
     },
 
     // -------------------------------------------------------------------------
-    // Profile: Secondary Display (Lenovo)
+    // Profile: Monitor #3 (Lenovo LOQ 24-10)
     // -------------------------------------------------------------------------
     'LENOVO': {
-        name: 'Secondary Display',
+        name: 'Lenovo LOQ 24-10',
         features: [
             { key: 'brightness', label: 'Brightness', type: 'number', min: 0, max: 100 },
             { key: 'contrast', label: 'Contrast', type: 'number', min: 0, max: 100 },
@@ -187,9 +188,11 @@ const MONITOR_CONFIG_PROFILES = {
                 { value: 1, text: 'Level 1' },
                 { value: 2, text: 'Level 2' },
                 { value: 3, text: 'Level 3' },
-                { value: 4, text: 'Level 4' }
+                { value: 4, text: 'Level 4' },
+                { value: 5, text: 'Level 5' },
+                { value: 6, text: 'Level 6' },
+                { value: 7, text: 'Level 7' }
             ]},
-            { key: 'blackLevel', label: 'Black Level', type: 'number', min: 0, max: 100 },
             { key: 'colorPreset', label: 'Color Preset', type: 'select', options: [
                 { value: 1, text: 'sRGB' },
                 { value: 5, text: '6500K (Standard)' },
@@ -200,14 +203,14 @@ const MONITOR_CONFIG_PROFILES = {
             { key: 'gainR', label: 'Red Gain', type: 'number', min: 0, max: 100, requiresUserMode: true },
             { key: 'gainG', label: 'Green Gain', type: 'number', min: 0, max: 100, requiresUserMode: true },
             { key: 'gainB', label: 'Blue Gain', type: 'number', min: 0, max: 100, requiresUserMode: true },
-            { key: 'overdrive', label: 'Response Time', type: 'select', options: [
+            { key: 'overdrive', label: 'Over Drive', type: 'select', options: [
                 { value: 0, text: 'Off' },
                 { value: 3, text: 'Level 1' },
                 { value: 4, text: 'Level 2' },
                 { value: 5, text: 'Level 3' },
-                { value: 6, text: 'Extreme' }
+                { value: 6, text: 'Level 4 (Extreme)' }
             ]},
-            { key: 'mprt', label: 'MPRT (Strobing)', type: 'select', options: [
+            { key: 'strobing', label: 'MPRT (Strobing)', type: 'select', options: [
                 { value: 0, text: 'Off' },
                 { value: 1, text: 'On' }
             ]},
@@ -215,7 +218,15 @@ const MONITOR_CONFIG_PROFILES = {
                 { value: 0, text: 'Off' },
                 { value: 1, text: 'On' }
             ]},
-            { key: 'volume', label: 'Volume', type: 'volume', min: 0, max: 100 },
+            { key: 'gameMode', label: 'Game Mode', type: 'select', options: [
+                { value: 10, text: 'Standard' },
+                { value: 1, text: 'FPS 1' },
+                { value: 2, text: 'FPS 2' },
+                { value: 3, text: 'Racing' },
+                { value: 4, text: 'RTS' },
+                { value: 5, text: 'Game 1' },
+                { value: 6, text: 'Game 2' }
+            ]},
             { key: 'inputSource', label: 'Input Source', type: 'select', options: [
                 { value: 15, text: 'DisplayPort 1' },
                 { value: 17, text: 'HDMI 1' },
@@ -295,37 +306,27 @@ const ColorPresetAdapter = {
     }
 };
 
-let infoState = 1; // 1: Weather (Default), 2: Panel Controls, 3: Empty, 4: Sensors
+let infoState = 1; // Default is always State 1: Weather (1: Weather, 2: Empty, 3: Telemetry)
+try { localStorage.removeItem('newtab_info_state'); } catch {}
+
 let telemetryPort = null;
 let telemetryReconnectTimer = null;
 let currentPanelTopologySignature = null;
 let latestMonitors = [];
+let latestTelemetry = null;
 let clientProbeCounter = 0;
 let waitingForProbeId = 0;
 let probeTimeoutId = null;
 
-// Clean up any legacy persistent monitor cache entries to ensure strictly empirical telemetry
+// Ephemeral runtime: purge any legacy stored cache keys
 try {
-    localStorage.removeItem('lastDetectedMonitors');
-    localStorage.removeItem('panelControlsCache');
-} catch (e) {}
-
-// Pre-hydrate in-memory latest telemetry from active browser session if available
-try {
-    if (chrome.storage && chrome.storage.session) {
-        chrome.storage.session.get(['latest_telemetry'], (res) => {
-            if (res && res.latest_telemetry && !latestTelemetry) {
-                latestTelemetry = res.latest_telemetry;
-                if (infoState === 4 && hardwareEl) {
-                    ensureTelemetryTable();
-                    renderTelemetry(latestTelemetry);
-                } else if (infoState === 2 && res.latest_telemetry.monitors) {
-                    latestMonitors = res.latest_telemetry.monitors;
-                    renderPanelControls(latestMonitors);
-                }
-            }
-        });
-    }
+    localStorage.removeItem('cached_empirical_monitors');
+    localStorage.removeItem('newtab_info_state');
+    localStorage.removeItem('atk_mouse_state');
+    localStorage.removeItem('mouse_config');
+    sessionStorage.removeItem('cached_hardware_telemetry');
+    sessionStorage.removeItem('atk_mouse_state');
+    chrome.storage?.local?.remove(['cached_empirical_monitors', 'cached_monitors', 'atk_mouse_state', 'mouse_config']);
 } catch (e) {}
 
 // Explicit In-Flight Lease Manager to eliminate telemetry race conditions & rubber-banding
@@ -427,6 +428,9 @@ const lastDispatchTimes = new Map();
 
 function executeHardwareDispatch(mid, ctrl, numVal) {
     const targetMon = latestMonitors.find(m => m.id === mid || m.pnpId === mid);
+    if (targetMon) {
+        targetMon[ctrl] = numVal;
+    }
     const pnp = targetMon?.pnpId || mid;
     const gdi = targetMon?.gdiDevice;
 
@@ -542,28 +546,47 @@ function flushPendingDispatch(mid, ctrl, fallbackValue = null) {
     return false;
 }
 
+const CANONICAL_FEATURE_LABELS = {
+    brightness: 'Brightness',
+    contrast: 'Contrast',
+    colorPreset: 'Color Preset',
+    gainR: 'Red Gain',
+    gainG: 'Green Gain',
+    gainB: 'Blue Gain',
+    overdrive: 'Overdrive',
+    strobing: 'VRB / MPRT',
+    freeSync: 'FreeSync / VRR',
+    inputSource: 'Input Source'
+};
+
+const ALLOWED_FEATURE_KEYS = [
+    'brightness', 'contrast',
+    'colorPreset', 'gainR', 'gainG', 'gainB',
+    'overdrive', 'strobing', 'freeSync',
+    'inputSource'
+];
+
 function getUnifiedFeatureList(monitors) {
-    const seen = new Set();
-    const list = [];
+    if (!Array.isArray(monitors) || monitors.length === 0) return [];
+
+    const featCounts = new Map();
     for (const m of monitors) {
         const feats = getFeaturesForMonitor(m);
         for (const f of feats) {
-            if (!seen.has(f.key)) {
-                seen.add(f.key);
-                list.push(f.key);
-            }
+            featCounts.set(f.key, (featCounts.get(f.key) || 0) + 1);
         }
     }
-    const priority = [
-        'brightness', 'contrast', 'gamma', 'darkBoost', 'blackBoost', 'blackLevel',
-        'colorPreset', 'gainR', 'gainG', 'gainB',
-        'overdrive', 'strobing', 'mprt', 'freeSync',
-        'superSharpness', 'blueLight',
-        'volume', 'inputSource', 'powerMode'
-    ];
+
+    const list = [];
+    for (const [key, count] of featCounts.entries()) {
+        if (key === 'powerMode') continue;
+        if (monitors.length > 1 && count < 2) continue;
+        list.push(key);
+    }
+
     list.sort((a, b) => {
-        const idxA = priority.indexOf(a);
-        const idxB = priority.indexOf(b);
+        const idxA = ALLOWED_FEATURE_KEYS.indexOf(a);
+        const idxB = ALLOWED_FEATURE_KEYS.indexOf(b);
         return (idxA >= 0 ? idxA : 999) - (idxB >= 0 ? idxB : 999);
     });
     return list;
@@ -574,21 +597,30 @@ let panelGainRows = [];
 let panelGainCells = [];
 let lastUserModeKey = '';
 
-function syncRgbGainVisibility(table) {
-    const tbl = table || (panelControlsEl ? panelControlsEl.querySelector('table') : null);
-    if (!tbl) return;
+function syncRgbGainVisibility(container) {
+    const root = container || (panelControlsEl ? (panelControlsEl.querySelector('.panel-controls-grid') || panelControlsEl.querySelector('table')) : null);
+    if (!root) return;
 
     // Detect which monitors currently have User / Custom color preset active via indexed map
     const userModeMonitors = new Set();
+    let hasExternalUserMode = false;
     for (let i = 0; i < latestMonitors.length; i++) {
         const m = latestMonitors[i];
-        if (m.isInternal) {
-            userModeMonitors.add(m.id);
-            if (m.pnpId) userModeMonitors.add(m.pnpId);
-        } else {
+        if (!m.isInternal) {
             const sel = panelElementsMap.get(`${m.id}_colorPreset`);
             if (sel && ColorPresetAdapter.isUserMode(sel.value)) {
                 userModeMonitors.add(m.id);
+                if (m.pnpId) userModeMonitors.add(m.pnpId);
+                hasExternalUserMode = true;
+            }
+        }
+    }
+    if (hasExternalUserMode) {
+        for (let i = 0; i < latestMonitors.length; i++) {
+            const m = latestMonitors[i];
+            if (m.isInternal) {
+                userModeMonitors.add(m.id);
+                if (m.pnpId) userModeMonitors.add(m.pnpId);
             }
         }
     }
@@ -598,22 +630,22 @@ function syncRgbGainVisibility(table) {
     for (const mid of userModeMonitors) {
         userModeKey += mid + ';';
     }
-    if (userModeKey === lastUserModeKey && tbl._hasRenderedGains) {
+    if (userModeKey === lastUserModeKey && root._hasRenderedGains) {
         return;
     }
     lastUserModeKey = userModeKey;
-    tbl._hasRenderedGains = true;
+    root._hasRenderedGains = true;
 
     const anyUserMode = userModeMonitors.size > 0;
 
-    // Smoothly toggle table row visibility without DOM destruction
-    const gainRows = panelGainRows.length > 0 ? panelGainRows : Array.from(tbl.querySelectorAll('tr[data-requires-user-mode="true"]'));
+    // Smoothly toggle row visibility without DOM destruction
+    const gainRows = panelGainRows.length > 0 ? panelGainRows : Array.from(root.querySelectorAll('[data-requires-user-mode="true"]'));
     for (let i = 0; i < gainRows.length; i++) {
         gainRows[i].style.display = anyUserMode ? '' : 'none';
     }
 
     // Toggle per-monitor cell content: editable input when in user mode, N/A indicator when not
-    const gainCells = panelGainCells.length > 0 ? panelGainCells : Array.from(tbl.querySelectorAll('td[data-ctrl="gainR"], td[data-ctrl="gainG"], td[data-ctrl="gainB"]'));
+    const gainCells = panelGainCells.length > 0 ? panelGainCells : Array.from(root.querySelectorAll('[data-ctrl="gainR"], [data-ctrl="gainG"], [data-ctrl="gainB"]'));
     for (let i = 0; i < gainCells.length; i++) {
         const cell = gainCells[i];
         if (!cell._mid) {
@@ -642,10 +674,13 @@ function renderPanelControls(monitors) {
             panelGainRows = [];
             panelGainCells = [];
             lastUserModeKey = '';
+            panelControlsEl.style.marginTop = '6px';
             panelControlsEl.textContent = 'No DDC/CI compatible monitors detected';
         }
         return;
     }
+
+    panelControlsEl.style.marginTop = '0';
 
     // Ensure every monitor uses its canonical pnpId as primary identifier (avoid redundant copy if already normalized)
     const normalizedMonitors = (monitors.length > 0 && monitors[0].pnpId && monitors[0].id === monitors[0].pnpId)
@@ -664,16 +699,16 @@ function renderPanelControls(monitors) {
 
     // Topology signature is purely based on monitor IDs (stable across preset changes)
     const topologySignature = sortedMonitors.map(m => m.id).join(',');
-    const existingTable = panelControlsEl.querySelector('table');
+    const existingGrid = panelControlsEl.querySelector('.panel-controls-grid') || panelControlsEl.querySelector('table');
 
-    // Fine-grained in-place update if table is already mounted for this topology
-    if (existingTable && currentPanelTopologySignature === topologySignature) {
+    // Fine-grained in-place update if grid is already mounted for this topology
+    if (existingGrid && currentPanelTopologySignature === topologySignature) {
         for (const m of sortedMonitors) {
             const rawFeats = getFeaturesForMonitor(m);
             for (const f of rawFeats) {
                 let el = panelElementsMap.get(`${m.id}_${f.key}`);
                 if (!el) {
-                    el = existingTable.querySelector(`[data-mid="${m.id}"][data-ctrl="${f.key}"]`);
+                    el = existingGrid.querySelector(`[data-mid="${m.id}"][data-ctrl="${f.key}"]`);
                     if (el) panelElementsMap.set(`${m.id}_${f.key}`, el);
                 }
                 if (!el) continue;
@@ -720,7 +755,7 @@ function renderPanelControls(monitors) {
                     if (Number(el.value) !== numVal) {
                         el.value = numVal;
                         if (f.key === 'colorPreset') {
-                            syncRgbGainVisibility(existingTable);
+                            syncRgbGainVisibility(existingGrid);
                         }
                     }
                 }
@@ -729,62 +764,37 @@ function renderPanelControls(monitors) {
         return;
     }
 
-    // Full table creation (only runs once per hardware topology change)
+    // Full grid creation (only runs once per hardware topology change)
     currentPanelTopologySignature = topologySignature;
 
     const numMonitors = sortedMonitors.length;
-    const monitorWidth = Math.floor(750 / numMonitors);
-    const unifiedFeatureKeys = getUnifiedFeatureList(sortedMonitors);
+    const monitorColWidth = 250;
+    const tableWidth = numMonitors === 3 ? 750 : (numMonitors * monitorColWidth);
 
-    let html = `
-        <table style="table-layout: fixed; width: 750px; margin: 6px auto 0 auto; border-collapse: collapse; font-size: 13px; line-height: 1.6; color: #ccc; text-align: left; font-variant-numeric: tabular-nums; white-space: nowrap;">
-            <colgroup>
-                ${sortedMonitors.map(() => `<col style="width: ${monitorWidth}px;">`).join('')}
-            </colgroup>
-            <thead>
-                <tr style="color: #fff;">
-                    ${(() => {
-                        const seenNewtabNums = new Set();
-                        return sortedMonitors.map((m, mIdx) => {
-                            let displayNum = m.windowsDisplayNumber || (mIdx + 1);
-                            if (seenNewtabNums.has(displayNum)) {
-                                displayNum = mIdx + 1;
-                                while (seenNewtabNums.has(displayNum)) displayNum++;
-                            }
-                            seenNewtabNums.add(displayNum);
-                            return `<th title="${m.name || ''}" style="padding: 2px 14px 4px 14px; font-weight: normal; ${mIdx > 0 ? 'border-left: 1px solid rgba(255, 255, 255, 0.12);' : ''} overflow: hidden; text-overflow: ellipsis;">#${displayNum}</th>`;
-                        }).join('');
-                    })()}
-                </tr>
-            </thead>
-            <tbody>
-    `;
+    let html = `<div class="panel-controls-grid" style="display: flex; justify-content: center; width: ${tableWidth}px; margin: 0 auto; border-top: 1px solid rgba(255, 255, 255, 0.12); font-size: 13px; line-height: 1.35; color: #ccc; text-align: left; font-variant-numeric: tabular-nums; white-space: nowrap;">`;
 
-    for (const featKey of unifiedFeatureKeys) {
-        // Determine if any monitor profile requires user mode for this feature
-        const isUserModeRequired = featKey === 'gainR' || featKey === 'gainG' || featKey === 'gainB';
-        const trAttr = isUserModeRequired ? 'data-requires-user-mode="true"' : '';
+    const seenNewtabNums = new Set();
+    for (let mIdx = 0; mIdx < numMonitors; mIdx++) {
+        const m = sortedMonitors[mIdx];
+        let displayNum = m.windowsDisplayNumber || (mIdx + 1);
+        if (seenNewtabNums.has(displayNum)) {
+            displayNum = mIdx + 1;
+            while (seenNewtabNums.has(displayNum)) displayNum++;
+        }
+        seenNewtabNums.add(displayNum);
 
-        html += `<tr ${trAttr}>`;
-        for (let mIdx = 0; mIdx < numMonitors; mIdx++) {
-            const m = sortedMonitors[mIdx];
-            const rawFeats = getFeaturesForMonitor(m);
-            const f = rawFeats.find(item => item.key === featKey);
-            const borderStyle = mIdx > 0 ? 'border-left: 1px solid rgba(255, 255, 255, 0.12);' : '';
+        const rawFeats = getFeaturesForMonitor(m);
+        const feats = rawFeats.filter(f => ALLOWED_FEATURE_KEYS.includes(f.key));
+        feats.sort((a, b) => {
+            const idxA = ALLOWED_FEATURE_KEYS.indexOf(a.key);
+            const idxB = ALLOWED_FEATURE_KEYS.indexOf(b.key);
+            return (idxA >= 0 ? idxA : 999) - (idxB >= 0 ? idxB : 999);
+        });
 
-            if (!f) {
-                // Monitor does not support this feature row -> graceful empty placeholder
-                html += `
-                    <td class="panel-cell panel-cell-empty" data-mid="${m.id}" data-ctrl="${featKey}" style="padding: 3px 14px; ${borderStyle}">
-                        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-                            <span style="color: #444; overflow: hidden; text-overflow: ellipsis; padding-right: 8px;">--</span>
-                            <span style="color: #444; font-size: 12px;">--</span>
-                        </div>
-                    </td>
-                `;
-                continue;
-            }
+        html += `<div class="panel-column" style="width: ${monitorColWidth}px; flex: 0 0 ${monitorColWidth}px; box-sizing: border-box;">`;
+        html += `<div title="${m.name || ''}" style="padding: 2px 14px 3px 14px; font-weight: normal; color: #fff; overflow: hidden; text-overflow: ellipsis;">#${displayNum}</div>`;
 
+        for (const f of feats) {
             let val = m[f.key];
             if (f.key === 'colorPreset') val = ColorPresetAdapter.normalize(val);
 
@@ -823,26 +833,30 @@ function renderPanelControls(monitors) {
                 controlContent = `<input type="text" class="panel-input" data-mid="${m.id}" data-ctrl="${f.key}" data-min="${f.min}" data-max="${f.max}" value="${val ?? 50}">`;
             }
 
+            const isUserModeRequired = f.key === 'gainR' || f.key === 'gainG' || f.key === 'gainB';
+            const trAttr = isUserModeRequired ? 'data-requires-user-mode="true"' : '';
+
             html += `
-                <td class="${cellClass}" data-mid="${m.id}" data-ctrl="${f.key}" style="padding: 3px 14px; ${borderStyle}">
+                <div class="${cellClass}" data-mid="${m.id}" data-ctrl="${f.key}" ${trAttr} style="padding: 2px 14px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
                         <span style="color: #888; overflow: hidden; text-overflow: ellipsis; padding-right: 8px;">${f.label}</span>
                         <div>${controlContent}</div>
                     </div>
-                </td>
+                </div>
             `;
         }
-        html += `</tr>`;
+
+        html += `</div>`;
     }
 
-    html += `</tbody></table>`;
+    html += `</div>`;
     panelControlsEl.innerHTML = html;
 
-    const newTable = panelControlsEl.querySelector('table');
+    const newGrid = panelControlsEl.querySelector('.panel-controls-grid') || panelControlsEl;
 
     // Index inputs and gain rows in fast-path lookup maps
     panelElementsMap.clear();
-    const inputsAndSelects = newTable.querySelectorAll('.panel-input, .panel-select');
+    const inputsAndSelects = newGrid.querySelectorAll('.panel-input, .panel-select');
     inputsAndSelects.forEach(el => {
         const mid = el.getAttribute('data-mid');
         const ctrl = el.getAttribute('data-ctrl');
@@ -850,10 +864,10 @@ function renderPanelControls(monitors) {
             panelElementsMap.set(`${mid}_${ctrl}`, el);
         }
     });
-    panelGainRows = Array.from(newTable.querySelectorAll('tr[data-requires-user-mode="true"]'));
-    panelGainCells = Array.from(newTable.querySelectorAll('td[data-ctrl="gainR"], td[data-ctrl="gainG"], td[data-ctrl="gainB"]'));
+    panelGainRows = Array.from(newGrid.querySelectorAll('[data-requires-user-mode="true"]'));
+    panelGainCells = Array.from(newGrid.querySelectorAll('[data-ctrl="gainR"], [data-ctrl="gainG"], [data-ctrl="gainB"]'));
 
-    syncRgbGainVisibility(newTable);
+    syncRgbGainVisibility(newGrid);
     initPanelControlDelegation();
 }
 
@@ -906,7 +920,7 @@ function initPanelControlDelegation() {
                 select.selectedIndex = nextIdx;
                 const numVal = Number(select.value);
                 if (ctrl === 'colorPreset') {
-                    syncRgbGainVisibility(panelControlsEl.querySelector('table'));
+                    syncRgbGainVisibility(panelControlsEl.querySelector('.panel-controls-grid') || panelControlsEl.querySelector('table'));
                 }
                 scheduleThrottledDispatch(mid, ctrl, numVal, 45);
             }
@@ -1008,14 +1022,15 @@ function initPanelControlDelegation() {
 
         const val = Number(select.value);
         if (ctrl === 'colorPreset') {
-            syncRgbGainVisibility(panelControlsEl.querySelector('table'));
+            syncRgbGainVisibility(panelControlsEl.querySelector('.panel-controls-grid') || panelControlsEl.querySelector('table'));
         }
         flushPendingDispatch(mid, ctrl, val);
     });
 }
 
 let telemetryCells = null;
-let latestTelemetry = null;
+let isStatsSynchronized = false;
+let hasMonitorProbeCompleted = false;
 
 function ensureTelemetryTable() {
     if (telemetryCells && hardwareEl && hardwareEl.querySelector('table')) return;
@@ -1023,39 +1038,39 @@ function ensureTelemetryTable() {
     const existingTable = hardwareEl.querySelector('table');
     if (!existingTable) {
         hardwareEl.innerHTML = `
-        <table style="table-layout: fixed; width: 750px; margin: 6px auto 0 auto; border-collapse: collapse; font-size: 13px; line-height: 1.6; color: #ccc; text-align: left; font-variant-numeric: tabular-nums; white-space: nowrap;">
+        <table style="table-layout: fixed; width: 750px; margin: 0 auto; border-collapse: collapse; font-size: 13px; line-height: 1.35; color: #ccc; text-align: left; font-variant-numeric: tabular-nums; white-space: nowrap;">
             <colgroup>
-                <col style="width: 215px;">
-                <col style="width: 315px;">
-                <col style="width: 220px;">
+                <col style="width: 250px;">
+                <col style="width: 250px;">
+                <col style="width: 250px;">
             </colgroup>
             <thead>
                 <tr style="color: #fff;">
-                    <th style="padding: 2px 20px 4px 8px; font-weight: normal;">CPU</th>
-                    <th style="padding: 2px 20px 4px 20px; font-weight: normal; border-left: 1px solid rgba(255, 255, 255, 0.12);">GPU</th>
-                    <th style="padding: 2px 8px 4px 20px; font-weight: normal; border-left: 1px solid rgba(255, 255, 255, 0.12);">TJMax</th>
+                    <th style="padding: 2px 14px 3px 14px; font-weight: normal;">CPU</th>
+                    <th style="padding: 2px 14px 3px 14px; font-weight: normal; border-left: 1px solid rgba(255, 255, 255, 0.12);">GPU</th>
+                    <th style="padding: 2px 14px 3px 14px; font-weight: normal; border-left: 1px solid rgba(255, 255, 255, 0.12);">TJMax</th>
                 </tr>
             </thead>
             <tbody>
                 <tr>
-                    <td id="tc-c1" style="padding: 3px 20px 3px 8px; overflow: hidden;">Load: --% &nbsp;|&nbsp; -- MHz</td>
-                    <td id="tc-g1" style="padding: 3px 20px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;">Load: --% &nbsp;|&nbsp; Core clk: -- MHz</td>
-                    <td id="tc-o1" style="padding: 3px 8px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;">P-State: --</td>
+                    <td id="tc-c1" style="padding: 2px 14px; overflow: hidden;">Load: --% &nbsp;|&nbsp; -- MHz</td>
+                    <td id="tc-g1" style="padding: 2px 14px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;">Load: --% &nbsp;|&nbsp; Core clk: -- MHz</td>
+                    <td id="tc-o1" style="padding: 2px 14px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;">P-State: --</td>
                 </tr>
                 <tr>
-                    <td id="tc-c2" style="padding: 3px 20px 3px 8px; overflow: hidden;">P: -- GHz | E: -- GHz</td>
-                    <td id="tc-g2" style="padding: 3px 20px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;">Mem clk: -- MHz &nbsp;|&nbsp; Temp: --&deg;C</td>
-                    <td id="tc-o2" style="padding: 3px 8px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;">CPU Throttle: --</td>
+                    <td id="tc-c2" style="padding: 2px 14px; overflow: hidden;">P: -- GHz | E: -- GHz</td>
+                    <td id="tc-g2" style="padding: 2px 14px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;">Mem clk: -- MHz &nbsp;|&nbsp; Temp: --&deg;C</td>
+                    <td id="tc-o2" style="padding: 2px 14px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;">CPU Throttle: --</td>
                 </tr>
                 <tr>
-                    <td id="tc-c3" style="padding: 3px 20px 3px 8px; overflow: hidden;">PKG: --W &nbsp;|&nbsp; Temp: --&deg;C</td>
-                    <td id="tc-g3" style="padding: 3px 20px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;">iGPU: --W (--) &nbsp;|&nbsp; dGPU: --W</td>
-                    <td id="tc-o3" style="padding: 3px 8px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;">GPU: -- &nbsp;|&nbsp; VRM: --</td>
+                    <td id="tc-c3" style="padding: 2px 14px; overflow: hidden;">PKG: --W &nbsp;|&nbsp; Temp: --&deg;C</td>
+                    <td id="tc-g3" style="padding: 2px 14px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;">iGPU: --W (--) &nbsp;|&nbsp; dGPU: --W</td>
+                    <td id="tc-o3" style="padding: 2px 14px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;">GPU: -- &nbsp;|&nbsp; VRM: --</td>
                 </tr>
                 <tr>
-                    <td id="tc-c4" style="padding: 3px 20px 3px 8px; overflow: hidden;">RAM: --</td>
-                    <td id="tc-g4" style="padding: 3px 20px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;">VRAM: --</td>
-                    <td id="tc-o4" style="padding: 3px 8px 3px 20px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;">Page: --</td>
+                    <td id="tc-c4" style="padding: 2px 14px; overflow: hidden;">RAM: --</td>
+                    <td id="tc-g4" style="padding: 2px 14px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;">VRAM: --</td>
+                    <td id="tc-o4" style="padding: 2px 14px; border-left: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;">Page: --</td>
                 </tr>
             </tbody>
         </table>
@@ -1077,68 +1092,11 @@ function ensureTelemetryTable() {
     };
 }
 
-function renderTelemetry(response) {
-    if (!response || response.error) {
-        if (infoState === 4 && hardwareEl) {
-            const msg = (response && response.message) ? response.message : 'Sensor Read Failed';
-            hardwareEl.textContent = `Host Offline (${msg})`;
-            telemetryCells = null;
-        } else if (infoState === 2 && panelControlsEl) {
-            const hasExistingTable = panelControlsEl.querySelector('table');
-            if (!hasExistingTable) {
-                const msg = (response && response.message) ? response.message : 'Host Offline';
-                panelControlsEl.textContent = `Host Offline (${msg})`;
-            }
-        }
-        return;
-    }
+function updateTelemetryCells(response) {
+    if (!telemetryCells || !response) return;
+    if (response.cpuLoad === undefined || response.cpuClock === undefined) return;
 
-    latestTelemetry = response;
-
-    if (infoState === 2) {
-        if (waitingForProbeId > 0) {
-            const respProbeId = Number(response.probeId || 0);
-            if (respProbeId < waitingForProbeId || response.isProbing || !response.hasProbed) {
-                if (!panelControlsEl.querySelector('table')) {
-                    panelControlsEl.textContent = 'Searching for DDC/CI displays...';
-                }
-                return;
-            }
-            waitingForProbeId = 0;
-            if (probeTimeoutId) {
-                clearTimeout(probeTimeoutId);
-                probeTimeoutId = null;
-            }
-            panelControlsEl.style.opacity = '1';
-        }
-
-        if (response.hasProbed === true && Array.isArray(response.monitors) && response.monitors.length > 0) {
-            const normalized = response.monitors.map(m => ({
-                ...m,
-                id: m.pnpId || m.id
-            }));
-            latestMonitors = normalized;
-            renderPanelControls(normalized);
-        } else if (response.hasProbed === true && Array.isArray(response.monitors) && response.monitors.length === 0) {
-            currentPanelTopologySignature = null;
-            panelElementsMap.clear();
-            panelGainRows = [];
-            panelGainCells = [];
-            lastUserModeKey = '';
-            panelControlsEl.textContent = 'No DDC/CI compatible monitors detected';
-        } else if (!response.hasProbed || !response.monitors) {
-            if (!panelControlsEl.querySelector('table')) {
-                panelControlsEl.textContent = 'Searching for DDC/CI displays...';
-            }
-        }
-    }
-
-    if (infoState !== 4 || !hardwareEl) return;
-
-    ensureTelemetryTable();
-    if (!telemetryCells) return;
-
-    const cpuLimitVal = Number(response.cpuLimit);
+    const cpuLimitVal = response.cpuLimit !== undefined ? Number(response.cpuLimit) : 100;
     const cpuThrottleText = cpuLimitVal < 100 ? `Yes (${cpuLimitVal}%)` : `No (${cpuLimitVal}%)`;
     const isGpuThrottleActive = String(response.hwThermal || '').trim().toLowerCase() === 'active';
     const isVrmActive = String(response.vrmBrake || '').trim().toLowerCase() === 'active';
@@ -1151,21 +1109,154 @@ function renderTelemetry(response) {
         }
     };
 
+    const formatPower = (val) => (typeof val === 'number' ? val.toFixed(1) : (val ?? '--'));
+
     setCell(telemetryCells.c1, `Load: ${response.cpuLoad}% \u00A0|\u00A0 ${response.cpuClock} MHz`);
     setCell(telemetryCells.g1, `Load: ${response.gpuLoad}% \u00A0|\u00A0 Core clk: ${response.coreClock} MHz`);
-    setCell(telemetryCells.o1, `P-State: ${response.pState}`);
+    setCell(telemetryCells.o1, `P-State: ${response.pState || '--'}`);
 
-    setCell(telemetryCells.c2, response.peClock);
-    setCell(telemetryCells.g2, `Mem clk: ${response.memClock} MHz \u00A0|\u00A0 Temp: ${response.gpuTemp}°C`);
+    setCell(telemetryCells.c2, response.peClock || '--');
+    setCell(telemetryCells.g2, `Mem clk: ${response.memClock ?? '--'} MHz \u00A0|\u00A0 Temp: ${response.gpuTemp ?? '--'}°C`);
     setCell(telemetryCells.o2, `CPU Throttle: ${cpuThrottleText}`);
 
-    setCell(telemetryCells.c3, `PKG: ${response.cpuPower}W \u00A0|\u00A0 Temp: ${response.cpuTemp}°C`);
-    setCell(telemetryCells.g3, `iGPU: ${response.igpuPower}W (${response.igpuRam}) \u00A0|\u00A0 dGPU: ${response.gpuPower}W`);
+    setCell(telemetryCells.c3, `PKG: ${formatPower(response.cpuPower)}W \u00A0|\u00A0 Temp: ${response.cpuTemp ?? '--'}°C`);
+    setCell(telemetryCells.g3, `iGPU: ${formatPower(response.igpuPower)}W (${response.igpuRam || '--'}) \u00A0|\u00A0 dGPU: ${formatPower(response.gpuPower)}W`);
     setCell(telemetryCells.o3, `GPU: ${gpuThrottleText} \u00A0|\u00A0 VRM: ${vrmThrottleText}`);
 
-    setCell(telemetryCells.c4, `RAM: ${response.ramUsed}`);
-    setCell(telemetryCells.g4, `VRAM: ${response.vramUsed}`);
+    setCell(telemetryCells.c4, `RAM: ${response.ramUsed || '--'}`);
+    setCell(telemetryCells.g4, `VRAM: ${response.vramUsed || '--'}`);
     setCell(telemetryCells.o4, `Page: ${response.pageUsed || 'N/A'}`);
+}
+
+function checkAndSynchronizeStatsDisplay() {
+    if (isStatsSynchronized || infoState !== 3) return;
+    const isHwReady = Boolean(latestTelemetry && latestTelemetry.cpuLoad !== undefined && latestTelemetry.cpuClock !== undefined);
+    const isPanelReady = Boolean(hasMonitorProbeCompleted || (latestMonitors && latestMonitors.length > 0));
+
+    if (!isHwReady || !isPanelReady) {
+        if (hardwareEl && !hardwareEl.querySelector('table')) {
+            hardwareEl.textContent = 'Loading data...';
+            hardwareEl.style.display = 'block';
+        }
+        if (panelControlsEl) {
+            panelControlsEl.style.display = 'none';
+        }
+        return;
+    }
+
+    isStatsSynchronized = true;
+
+    if (hardwareEl) {
+        ensureTelemetryTable();
+        if (latestTelemetry) {
+            updateTelemetryCells(latestTelemetry);
+        }
+        hardwareEl.style.display = 'block';
+    }
+
+    if (panelControlsEl) {
+        if (latestMonitors && latestMonitors.length > 0) {
+            renderPanelControls(latestMonitors);
+        } else {
+            currentPanelTopologySignature = null;
+            panelElementsMap.clear();
+            panelGainRows = [];
+            panelGainCells = [];
+            lastUserModeKey = '';
+            panelControlsEl.style.marginTop = '6px';
+            panelControlsEl.textContent = 'No DDC/CI compatible monitors detected';
+        }
+        panelControlsEl.style.opacity = '1';
+        panelControlsEl.style.display = 'block';
+    }
+
+    renderMouseControls();
+}
+
+function renderTelemetry(response) {
+    if (!response || response.error) {
+        if (infoState === 3) {
+            const msg = (response && response.message) ? response.message : 'Host Offline';
+            if (hardwareEl) {
+                hardwareEl.textContent = `Host Offline (${msg})`;
+                telemetryCells = null;
+            }
+            if (panelControlsEl) {
+                const hasExistingTable = panelControlsEl.querySelector('.panel-controls-grid') || panelControlsEl.querySelector('table');
+                if (!hasExistingTable) {
+                    panelControlsEl.textContent = `Host Offline (${msg})`;
+                }
+            }
+        }
+        return;
+    }
+
+    if (response.cpuLoad !== undefined) {
+        latestTelemetry = response;
+    } else if (response.monitors) {
+        if (latestTelemetry) {
+            latestTelemetry = { ...latestTelemetry, ...response };
+        } else {
+            latestTelemetry = response;
+        }
+    }
+
+    if (infoState !== 3) return;
+
+    if (waitingForProbeId > 0) {
+        const respProbeId = Number(response.probeId || 0);
+        if (respProbeId >= waitingForProbeId && !response.isProbing) {
+            waitingForProbeId = 0;
+            if (probeTimeoutId) {
+                clearTimeout(probeTimeoutId);
+                probeTimeoutId = null;
+            }
+        }
+    }
+
+    if (response.hasProbed === true) {
+        hasMonitorProbeCompleted = true;
+        if (Array.isArray(response.monitors) && response.monitors.length > 0) {
+            latestMonitors = response.monitors.map(m => ({
+                ...m,
+                id: m.pnpId || m.id
+            }));
+        } else if (Array.isArray(response.monitors) && response.monitors.length === 0) {
+            latestMonitors = [];
+        }
+    } else if (Array.isArray(response.monitors) && response.monitors.length > 0) {
+        latestMonitors = response.monitors.map(m => ({
+            ...m,
+            id: m.pnpId || m.id
+        }));
+    }
+
+    if (!isStatsSynchronized) {
+        checkAndSynchronizeStatsDisplay();
+        return;
+    }
+
+    if (latestMonitors && latestMonitors.length > 0) {
+        panelControlsEl.style.display = 'block';
+        renderPanelControls(latestMonitors);
+    } else if (hasMonitorProbeCompleted && latestMonitors.length === 0) {
+        currentPanelTopologySignature = null;
+        panelElementsMap.clear();
+        panelGainRows = [];
+        panelGainCells = [];
+        lastUserModeKey = '';
+        panelControlsEl.style.marginTop = '6px';
+        panelControlsEl.style.display = 'block';
+        panelControlsEl.textContent = 'No DDC/CI compatible monitors detected';
+    }
+
+    if (!hardwareEl) return;
+    ensureTelemetryTable();
+    if (!telemetryCells) return;
+
+    if (response.cpuLoad !== undefined && response.cpuClock !== undefined) {
+        updateTelemetryCells(response);
+    }
 }
 
 function requestEmpiricalMonitorProbe() {
@@ -1177,13 +1268,15 @@ function requestEmpiricalMonitorProbe() {
     probeTimeoutId = setTimeout(() => {
         if (waitingForProbeId === probeId) {
             waitingForProbeId = 0;
+            hasMonitorProbeCompleted = true;
             if (panelControlsEl) panelControlsEl.style.opacity = '1';
-            if (latestTelemetry && latestTelemetry.monitors && Array.isArray(latestTelemetry.monitors)) {
+            checkAndSynchronizeStatsDisplay();
+            if (isStatsSynchronized && latestTelemetry && latestTelemetry.monitors && Array.isArray(latestTelemetry.monitors)) {
                 renderPanelControls(latestTelemetry.monitors);
             }
         }
         probeTimeoutId = null;
-    }, 8000);
+    }, 4000);
 
     const probeMsg = { action: 'probe_monitors', probeId: probeId };
     if (telemetryPort) {
@@ -1206,14 +1299,18 @@ function startTelemetryStream() {
         clearTimeout(telemetryReconnectTimer);
         telemetryReconnectTimer = null;
     }
-    if (telemetryPort || document.hidden || (infoState !== 2 && infoState !== 4)) return;
-    if (infoState === 4 && hardwareEl) {
-        ensureTelemetryTable();
-        if (latestTelemetry) {
-            renderTelemetry(latestTelemetry);
+    if (telemetryPort || document.hidden || infoState !== 3) return;
+
+    if (!isStatsSynchronized) {
+        if (hardwareEl) {
+            hardwareEl.style.display = 'block';
+            hardwareEl.textContent = 'Loading data...';
+            telemetryCells = null;
         }
-    } else if (infoState === 2 && panelControlsEl && !panelControlsEl.querySelector('table')) {
-        panelControlsEl.textContent = 'Searching for DDC/CI displays...';
+        if (panelControlsEl) {
+            panelControlsEl.style.display = 'none';
+            panelControlsEl.innerHTML = '';
+        }
     }
 
     try {
@@ -1223,17 +1320,26 @@ function startTelemetryStream() {
             renderTelemetry(data);
         });
 
-        if (infoState === 2) {
+        if (infoState === 3) {
             requestEmpiricalMonitorProbe();
         }
 
         telemetryPort.onDisconnect.addListener(() => {
             telemetryPort = null;
-            if ((infoState === 2 || infoState === 4) && !document.hidden) {
+            isStatsSynchronized = false;
+            hasMonitorProbeCompleted = false;
+            latestTelemetry = null;
+            latestMonitors = [];
+            currentPanelTopologySignature = null;
+            panelElementsMap.clear();
+            panelGainRows = [];
+            panelGainCells = [];
+            lastUserModeKey = '';
+            if (infoState === 3 && !document.hidden) {
                 if (telemetryReconnectTimer) clearTimeout(telemetryReconnectTimer);
                 telemetryReconnectTimer = setTimeout(() => {
                     telemetryReconnectTimer = null;
-                    if ((infoState === 2 || infoState === 4) && !document.hidden && !telemetryPort) {
+                    if (infoState === 3 && !document.hidden && !telemetryPort) {
                         startTelemetryStream();
                     }
                 }, 1000);
@@ -1241,8 +1347,10 @@ function startTelemetryStream() {
         });
     } catch (e) {
         telemetryPort = null;
-        if (infoState === 4 && hardwareEl) hardwareEl.textContent = 'Connection Error';
-        else if (infoState === 2 && panelControlsEl) panelControlsEl.textContent = 'Connection Error';
+        if (infoState === 3) {
+            if (hardwareEl) hardwareEl.textContent = 'Connection Error';
+            if (panelControlsEl) panelControlsEl.style.display = 'none';
+        }
     }
 }
 
@@ -1251,17 +1359,31 @@ function stopTelemetryStream() {
         clearTimeout(telemetryReconnectTimer);
         telemetryReconnectTimer = null;
     }
+    if (probeTimeoutId) {
+        clearTimeout(probeTimeoutId);
+        probeTimeoutId = null;
+    }
     if (telemetryPort) {
         try {
             telemetryPort.disconnect();
         } catch (e) {}
         telemetryPort = null;
     }
+    isStatsSynchronized = false;
+    hasMonitorProbeCompleted = false;
+    waitingForProbeId = 0;
+    latestTelemetry = null;
+    latestMonitors = [];
+    currentPanelTopologySignature = null;
+    panelElementsMap.clear();
+    panelGainRows = [];
+    panelGainCells = [];
+    lastUserModeKey = '';
 }
 
 function setInfoState(state) {
     infoState = state;
-    if (infoState !== 2) {
+    if (infoState !== 3) {
         if (waitingForProbeId > 0) {
             waitingForProbeId = 0;
             if (probeTimeoutId) {
@@ -1272,53 +1394,57 @@ function setInfoState(state) {
         if (panelControlsEl) panelControlsEl.style.opacity = '1';
     }
     if (infoState === 1) {
-        // State 1: Weather
+        // State 1: Weather (Default)
         stopTelemetryStream();
         if (weatherEl) {
             weatherEl.style.display = 'block';
             weatherEl.style.visibility = 'visible';
         }
-        if (panelControlsEl) panelControlsEl.style.display = 'none';
-        if (hardwareEl) hardwareEl.style.display = 'none';
-    } else if (infoState === 2) {
-        // State 2: Panel Controls
-        if (weatherEl) weatherEl.style.display = 'none';
-        if (hardwareEl) hardwareEl.style.display = 'none';
-        if (panelControlsEl) {
-            panelControlsEl.style.display = 'block';
-            if (!panelControlsEl.querySelector('table')) {
-                currentPanelTopologySignature = null;
-                panelElementsMap.clear();
-                panelGainRows = [];
-                panelGainCells = [];
-                lastUserModeKey = '';
-                panelControlsEl.textContent = 'Searching for DDC/CI displays...';
-            } else {
-                panelControlsEl.style.opacity = '0.75';
-            }
+        if (mouseControlsEl) {
+            mouseControlsEl.style.display = 'none';
+            mouseControlsEl.innerHTML = '';
         }
+        if (hardwareEl) hardwareEl.style.display = 'none';
+        if (panelControlsEl) panelControlsEl.style.display = 'none';
+    } else if (infoState === 2) {
+        // State 2: Empty (Show Nothing)
+        stopTelemetryStream();
+        if (weatherEl) weatherEl.style.display = 'none';
+        if (mouseControlsEl) {
+            mouseControlsEl.style.display = 'none';
+            mouseControlsEl.innerHTML = '';
+        }
+        if (hardwareEl) hardwareEl.style.display = 'none';
+        if (panelControlsEl) panelControlsEl.style.display = 'none';
+    } else if (infoState === 3) {
+        // State 3: Telemetry (Combined Hardware Telemetry Spec & Monitor Panel Spec)
+        if (weatherEl) weatherEl.style.display = 'none';
+        if (mouseControlsEl) {
+            mouseControlsEl.style.display = 'none';
+            mouseControlsEl.innerHTML = '';
+        }
+        renderMouseControls();
+        checkAndQueryAtkMouseOnDemand(true);
+
+        isStatsSynchronized = false;
+        hasMonitorProbeCompleted = false;
+        latestTelemetry = null;
+        latestMonitors = [];
+
+        if (hardwareEl) {
+            hardwareEl.style.display = 'block';
+            hardwareEl.textContent = 'Loading data...';
+            telemetryCells = null;
+        }
+        if (panelControlsEl) {
+            panelControlsEl.style.display = 'none';
+            panelControlsEl.innerHTML = '';
+        }
+
         if (!telemetryPort) {
             startTelemetryStream();
         } else {
             requestEmpiricalMonitorProbe();
-        }
-    } else if (infoState === 3) {
-        // State 3: Empty (Show Nothing)
-        stopTelemetryStream();
-        if (weatherEl) weatherEl.style.display = 'none';
-        if (panelControlsEl) panelControlsEl.style.display = 'none';
-        if (hardwareEl) hardwareEl.style.display = 'none';
-    } else if (infoState === 4) {
-        // State 4: Sensors
-        if (weatherEl) weatherEl.style.display = 'none';
-        if (panelControlsEl) panelControlsEl.style.display = 'none';
-        if (hardwareEl) {
-            hardwareEl.style.display = 'block';
-            ensureTelemetryTable();
-            if (latestTelemetry) {
-                renderTelemetry(latestTelemetry);
-            }
-            startTelemetryStream();
         }
     }
 }
@@ -1326,7 +1452,7 @@ function setInfoState(state) {
 const logoEl = document.querySelector('.logo');
 if (logoEl) {
     logoEl.addEventListener('click', () => {
-        const nextState = (infoState % 4) + 1;
+        const nextState = (infoState % 3) + 1;
         setInfoState(nextState);
     });
 }
@@ -1337,12 +1463,9 @@ document.addEventListener('visibilitychange', () => {
         stopTelemetryStream();
     } else {
         updateTime();
-        if ((infoState === 2 || infoState === 4) && !telemetryPort) {
+        if (infoState === 3 && !telemetryPort) {
             startTelemetryStream();
-        } else if (infoState === 2) {
-            if (panelControlsEl && panelControlsEl.querySelector('table')) {
-                panelControlsEl.style.opacity = '0.75';
-            }
+        } else if (infoState === 3) {
             requestEmpiricalMonitorProbe();
         }
     }
@@ -1352,6 +1475,594 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('beforeunload', () => {
     stopTelemetryStream();
 });
+
+// =============================================================================
+// ATK F1 WEBHID CONTROLS & DYNAMIC TELEMETRY (PURE READ-ONLY WEBHID)
+// =============================================================================
+let isMouseQuerying = false;
+let lastMouseQueryTime = 0;
+let pairedAtkDevice = null;
+let isMouseStatsExpanded = false;
+
+const mouseState = {
+    name: '',
+    sensor: '',
+    config: null,
+    battery: null,
+    voltage: '',
+    pollingRate: '',
+    dpi: '',
+    stage: '',
+    debounce: '',
+    motionSync: null,
+    firmware: '',
+    connection: '2.4G 8K Dongle'
+};
+
+const ATK_MOUSE_NAMES = {
+    '1,62': 'ATK F1 V3 ULTIMATE +',
+    '1,63': 'ATK F1 V3 ULTIMATE +',
+    '1,64': 'ATK F1 V3 ULTIMATE +',
+    '1,12': 'ATK F1 Ultra Max 2.0',
+    '1,33': 'ATK F1 Ultra Max 2.0',
+    '2,36': 'ATK F1 PRO',
+    '2,37': 'ATK F1 PRO MAX',
+    '2,42': 'ATK F1 Ultimate',
+    '2,45': 'ATK F1 Ultra',
+    '2,50': 'ATK F1 EXTREME',
+    '2,48': 'ATK Dragonfly F1 PRO MAX Elden',
+    '2,52': 'ATK Dragonfly F1 PRO MAX JOJO',
+    '2,104': 'ATK Dragonfly F1 PRO',
+    '2,105': 'ATK Dragonfly F1 PRO MAX',
+    '2,5': 'ATK Dragonfly F1 MOBA',
+    '2,6': 'ATK Dragonfly F1 MOBA',
+    '2,33': 'ATK Dragonfly F1 MOBA',
+    '2,106': 'ATK Dragonfly F1 MOBA',
+    '2,95': 'DRAGONFLY F1 V2 SE NK',
+    '2,93': 'DRAGONFLY F1 V2 Plus NK',
+    '2,94': 'DRAGONFLY F1 V2 NK',
+    '1,6': 'ATK A9 Ultra Max 2.0',
+    '1,15': 'ATK A9 Ultra Max 2.0 Tri-Mode',
+    '1,27': 'ATK A9 Mini',
+    '1,28': 'ATK A9 Mini'
+};
+
+const ATK_SENSOR_MAP = {
+    '1,62': 'PAW3955',
+    '1,63': 'PAW3955',
+    '1,64': 'PAW3955',
+    '1,12': 'PAW3950 Ultra',
+    '1,33': 'PAW3950 Ultra',
+    '2,36': 'PAW3395',
+    '2,37': 'PAW3395',
+    '2,42': 'PAW3950 Ultra',
+    '2,45': 'PAW3950 Ultra',
+    '2,50': 'PAW3950 Ultra',
+    '2,48': 'PAW3395',
+    '2,52': 'PAW3395',
+    '2,104': 'PAW3395',
+    '2,105': 'PAW3395',
+    '2,5': 'PAW3395',
+    '2,6': 'PAW3395',
+    '2,33': 'PAW3395',
+    '2,106': 'PAW3395',
+    '2,95': 'PAW3395',
+    '2,93': 'PAW3395',
+    '2,94': 'PAW3395',
+    '1,6': 'PAW3950 Ultra',
+    '1,15': 'PAW3950 Ultra',
+    '1,27': 'PAW3395',
+    '1,28': 'PAW3395'
+};
+
+const ATK_RATE_MAP = {
+    64: '8000Hz',
+    32: '4000Hz',
+    16: '2000Hz',
+    1: '1000Hz',
+    2: '500Hz',
+    4: '250Hz',
+    8: '125Hz'
+};
+
+function calculateAtkChecksum(reportId, data15) {
+    let sum = reportId;
+    for (let i = 0; i < 15; i++) {
+        sum += (data15[i] || 0);
+    }
+    return (85 - (sum & 0xFF)) & 0xFF;
+}
+
+function buildAtkPacket(commandId, address = 0, dataLen = 0, payloadBytes = null) {
+    const pkt = new Uint8Array(16);
+    pkt[0] = commandId;
+    pkt[1] = 0;
+    pkt[2] = (address >> 8) & 0xFF;
+    pkt[3] = address & 0xFF;
+    pkt[4] = dataLen;
+    if (payloadBytes && payloadBytes.length > 0) {
+        for (let i = 0; i < payloadBytes.length && i < 10; i++) {
+            pkt[5 + i] = payloadBytes[i];
+        }
+    }
+    pkt[15] = calculateAtkChecksum(8, pkt);
+    return pkt;
+}
+
+function sendAtkHidCommand(device, commandId, address = 0, dataLen = 0, payloadBytes = null, timeoutMs = 800) {
+    return new Promise((resolve, reject) => {
+        if (!device || !device.opened) {
+            return reject(new Error('Device not open'));
+        }
+
+        let isSettled = false;
+        const timer = setTimeout(() => {
+            cleanup();
+            if (!isSettled) {
+                isSettled = true;
+                reject(new Error(`Command ${commandId} timeout (${timeoutMs}ms)`));
+            }
+        }, timeoutMs);
+
+        function onReport(event) {
+            if (event.reportId !== 8) return;
+            const data = event.data;
+            if (!data || data.byteLength < 6) return;
+            if (data.getUint8(0) === commandId) {
+                cleanup();
+                if (!isSettled) {
+                    isSettled = true;
+                    resolve(data);
+                }
+            }
+        }
+
+        function cleanup() {
+            clearTimeout(timer);
+            try {
+                device.removeEventListener('inputreport', onReport);
+            } catch {}
+        }
+
+        device.addEventListener('inputreport', onReport);
+
+        const packet = buildAtkPacket(commandId, address, dataLen, payloadBytes);
+        device.sendReport(8, packet).catch(err => {
+            cleanup();
+            if (!isSettled) {
+                isSettled = true;
+                reject(err);
+            }
+        });
+    });
+}
+
+function decodeAtkDpi(xDpi, yDpi, dpiEx, sensor = 'PAW3955') {
+    const a = (dpiEx & 12) >> 2;
+    const s = (dpiEx & 192) >> 6;
+    const o = xDpi | (a << 8);
+    const g = yDpi | (s << 8);
+
+    let xVal;
+    let yVal;
+
+    const sensorUpper = String(sensor || '').toUpperCase();
+    if (sensorUpper.includes('ULTRA')) {
+        // PAW3950 Ultra (ya): <= 10000 uses 10 DPI steps; > 10000 uses 50 DPI steps + 10050 base
+        const ze = 10050;
+        const l = dpiEx & 2;
+        const h = dpiEx & 32;
+        xVal = l ? (o * 50 + ze) : ((o + 1) * 10);
+        yVal = h ? (g * 50 + ze) : ((g + 1) * 10);
+        if (dpiEx & 1) xVal *= 2;
+        if (dpiEx & 16) yVal *= 2;
+    } else if (sensorUpper.includes('CORE26K')) {
+        const multX = (dpiEx & 2) ? 100 : 50;
+        const multY = (dpiEx & 32) ? 100 : 50;
+        xVal = (o + 1) * multX * ((dpiEx & 1) ? 2 : 1);
+        yVal = (g + 1) * multY * ((dpiEx & 16) ? 2 : 1);
+    } else {
+        // PAW3950, PAW3395, PAW3395Ultra, PAW3950DM default (Pa): (o + 1) * 50
+        xVal = (o + 1) * 50 * ((dpiEx & 1) ? 2 : 1);
+        yVal = (g + 1) * 50 * ((dpiEx & 16) ? 2 : 1);
+    }
+
+    if (xVal > 0 && xVal < 50000) {
+        if (yVal > 0 && yVal < 50000 && xVal !== yVal) {
+            return `${xVal}x${yVal} DPI`;
+        }
+        return `${xVal} DPI`;
+    }
+    return '';
+}
+
+async function fetchAtkDpi(device, activeStage, sensor) {
+    if (!device) return '';
+    const isPaw3955 = Boolean(sensor && sensor.includes('3955'));
+
+    // For PAW3955MASTER: EEPROM address 6912 + activeStage * 6 (paw3955Dpi1..8)
+    if (isPaw3955) {
+        try {
+            const dpiAddr = 6912 + activeStage * 6;
+            const dpiResp = await sendAtkHidCommand(device, 8, dpiAddr, 6, null, 150);
+            if (dpiResp && dpiResp.byteLength >= 11) {
+                const t = dpiResp.getUint8(5);
+                const a = dpiResp.getUint8(6);
+                const s = dpiResp.getUint8(7);
+                const o = dpiResp.getUint8(8);
+                const g = dpiResp.getUint8(9);
+                const m = t | (a << 8);
+                const w = s | (o << 8);
+                const b = (g & 1) !== 0 ? 2 : 1;
+                const D = (g & 16) !== 0 ? 2 : 1;
+                const xVal = (m + 1) * b;
+                const yVal = (w + 1) * D;
+                if (xVal > 0 && xVal < 50000) {
+                    if (yVal > 0 && yVal < 50000 && xVal !== yVal) {
+                        return `${xVal}x${yVal} DPI`;
+                    }
+                    return `${xVal} DPI`;
+                }
+            }
+        } catch {}
+    }
+
+    // Standard/Classic EEPROM address: 12 + Math.floor(activeStage / 2) * 8
+    try {
+        const dpiEepromAddr = 12 + Math.floor(activeStage / 2) * 8;
+        const dpiResp = await sendAtkHidCommand(device, 8, dpiEepromAddr, 8, null, 150);
+        if (dpiResp && dpiResp.byteLength >= 13) {
+            const stageOffset = (activeStage % 2) * 4;
+            const xDpi = dpiResp.getUint8(5 + stageOffset);
+            const yDpi = dpiResp.getUint8(5 + stageOffset + 1);
+            const dpiEx = dpiResp.getUint8(5 + stageOffset + 2);
+            return decodeAtkDpi(xDpi, yDpi, dpiEx, sensor);
+        }
+    } catch {}
+
+    return '';
+}
+
+function isAtkCommDevice(d) {
+    if (!d || (d.vendorId !== 0x373B && d.vendorId !== 14139)) return false;
+    if (Array.isArray(d.collections)) {
+        for (const col of d.collections) {
+            if ((col.usagePage === 0xFF02 || col.usagePage === 65282) && (col.usage === 0x0002 || col.usage === 2)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+async function getPairedAtkCommDevice() {
+    if (typeof navigator === 'undefined' || !navigator.hid) return null;
+    try {
+        const devices = await navigator.hid.getDevices();
+        for (const dev of devices) {
+            if (isAtkCommDevice(dev)) {
+                return dev;
+            }
+        }
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+async function queryAtkMouseState(device, force = false) {
+    if (!device || isMouseQuerying) return;
+    const now = Date.now();
+
+    if (!force && (now - lastMouseQueryTime < 15000) && mouseState.config !== null && mouseState.dpi) {
+        renderMouseControls();
+        return;
+    }
+
+    isMouseQuerying = true;
+    try {
+        if (!device.opened) {
+            await device.open();
+        }
+
+        // 1. Active Config (cmd: 14)
+        try {
+            const cfgResp = await sendAtkHidCommand(device, 14, 0, 0, null, 150);
+            if (cfgResp && cfgResp.byteLength >= 6) {
+                mouseState.config = cfgResp.getUint8(5);
+            }
+        } catch {}
+
+        // 2. Model & Sensor via CID/MID (cmd: 16)
+        try {
+            const cidResp = await sendAtkHidCommand(device, 16, 0, 0, null, 150);
+            if (cidResp && cidResp.byteLength >= 7) {
+                const cid = cidResp.getUint8(5);
+                const mid = cidResp.getUint8(6);
+                const key = `${cid},${mid}`;
+                mouseState.name = ATK_MOUSE_NAMES[key] || device.productName || 'ATK Wireless Mouse';
+                mouseState.sensor = ATK_SENSOR_MAP[key] || 'PAW3955';
+            }
+        } catch {}
+
+        if (!mouseState.name) {
+            mouseState.name = device.productName || 'ATK Wireless Mouse';
+        }
+        if (!mouseState.sensor) {
+            mouseState.sensor = 'PAW3955';
+        }
+
+        // 3. Battery Level & Voltage (cmd: 4)
+        try {
+            const batResp = await sendAtkHidCommand(device, 4, 0, 0, null, 150);
+            if (batResp && batResp.byteLength >= 6) {
+                mouseState.battery = batResp.getUint8(5);
+                if (batResp.byteLength >= 9) {
+                    const mv = batResp.getUint16(7);
+                    if (mv > 2000 && mv < 5000) {
+                        mouseState.voltage = (mv / 1000.0).toFixed(2);
+                    }
+                }
+            }
+        } catch {}
+
+        // 4. Firmware Version (cmd: 18)
+        try {
+            const verResp = await sendAtkHidCommand(device, 18, 0, 0, null, 150);
+            if (verResp && verResp.byteLength >= 7) {
+                const major = verResp.getUint8(5);
+                const minor = verResp.getUint8(6);
+                mouseState.firmware = `v${major}.${minor.toString(16).padStart(2, '0')}`;
+            }
+        } catch {}
+
+        // 5. Polling Rate & Active DPI Stage from EEPROM addr 0 (cmd: 8)
+        let activeStage = 0;
+        try {
+            const rateResp = await sendAtkHidCommand(device, 8, 0, 10, null, 150);
+            if (rateResp && rateResp.byteLength >= 10) {
+                const rateCode = rateResp.getUint8(5);
+                mouseState.pollingRate = ATK_RATE_MAP[rateCode] || `${rateCode}Hz`;
+                activeStage = rateResp.getUint8(9);
+                const maxDpi = rateResp.getUint8(7);
+                mouseState.stage = `Stage ${activeStage + 1} / ${maxDpi}`;
+            }
+        } catch {}
+
+        // 6. Debounce & MotionSync from EEPROM addr 169 (cmd: 8)
+        try {
+            const debResp = await sendAtkHidCommand(device, 8, 169, 10, null, 150);
+            if (debResp && debResp.byteLength >= 8) {
+                mouseState.debounce = `${debResp.getUint8(5)}ms`;
+                mouseState.motionSync = debResp.getUint8(7) === 1;
+            }
+        } catch {}
+
+        // 7. Exact DPI for active stage from EEPROM (cmd: 8)
+        try {
+            const dpiStr = await fetchAtkDpi(device, activeStage, mouseState.sensor);
+            if (dpiStr) {
+                mouseState.dpi = dpiStr;
+            }
+        } catch {}
+
+        lastMouseQueryTime = Date.now();
+    } catch (e) {
+        console.warn('[CToolkit] Mouse WebHID query failed:', e);
+    } finally {
+        if (device && device.opened) {
+            try { await device.close(); } catch {}
+        }
+        isMouseQuerying = false;
+        renderMouseControls();
+    }
+}
+
+async function checkAndQueryAtkMouseOnDemand(force = false) {
+    if (typeof navigator === 'undefined' || !navigator.hid) return;
+    try {
+        if (!pairedAtkDevice) {
+            pairedAtkDevice = await getPairedAtkCommDevice();
+        }
+        if (pairedAtkDevice && (!lastMouseQueryTime || force || Date.now() - lastMouseQueryTime > 15000)) {
+            await queryAtkMouseState(pairedAtkDevice, force);
+        } else {
+            renderMouseControls();
+        }
+    } catch {
+        renderMouseControls();
+    }
+}
+
+async function requestAtkDevicePairing() {
+    if (typeof navigator === 'undefined' || !navigator.hid) {
+        alert('WebHID is not supported in this browser.');
+        return;
+    }
+    try {
+        const selected = await navigator.hid.requestDevice({
+            filters: [
+                { vendorId: 0x373B, usagePage: 0xFF02, usage: 0x0002 }
+            ]
+        });
+        const matched = selected.find(isAtkCommDevice) || (selected.length > 0 ? selected[0] : null);
+        if (matched) {
+            pairedAtkDevice = matched;
+            await queryAtkMouseState(matched, true);
+        }
+    } catch (e) {
+        console.warn('[CToolkit] WebHID pairing cancelled or failed:', e);
+    }
+}
+
+async function switchAtkConfig(targetConfig) {
+    if (isMouseQuerying || mouseState.config === targetConfig) return;
+
+    if (!pairedAtkDevice) {
+        pairedAtkDevice = await getPairedAtkCommDevice();
+    }
+    if (!pairedAtkDevice) return;
+
+    isMouseQuerying = true;
+    try {
+        if (!pairedAtkDevice.opened) {
+            await pairedAtkDevice.open();
+        }
+
+        // Send SetCurrentConfig (cmd: 15, addr: 0, len: 1, payload: [targetConfig])
+        await sendAtkHidCommand(pairedAtkDevice, 15, 0, 1, [targetConfig], 400);
+
+        // Synchronous read-back verification (cmd: 14) - strictly no preemptive UI change
+        try {
+            const cfgResp = await sendAtkHidCommand(pairedAtkDevice, 14, 0, 0, null, 250);
+            if (cfgResp && cfgResp.byteLength >= 6) {
+                mouseState.config = cfgResp.getUint8(5);
+            } else {
+                mouseState.config = targetConfig;
+            }
+        } catch {
+            mouseState.config = targetConfig;
+        }
+
+        // Refresh polling rate, stage & DPI for the newly switched profile
+        try {
+            const rateResp = await sendAtkHidCommand(pairedAtkDevice, 8, 0, 10, null, 200);
+            if (rateResp && rateResp.byteLength >= 10) {
+                const rateCode = rateResp.getUint8(5);
+                mouseState.pollingRate = ATK_RATE_MAP[rateCode] || `${rateCode}Hz`;
+                const activeStage = rateResp.getUint8(9);
+                const maxDpi = rateResp.getUint8(7);
+                mouseState.stage = `Stage ${activeStage + 1} / ${maxDpi}`;
+
+                const dpiStr = await fetchAtkDpi(pairedAtkDevice, activeStage, mouseState.sensor);
+                if (dpiStr) {
+                    mouseState.dpi = dpiStr;
+                }
+            }
+        } catch {}
+
+        lastMouseQueryTime = Date.now();
+    } catch (e) {
+        console.warn('[CToolkit] Failed to switch mouse config:', e);
+    } finally {
+        if (pairedAtkDevice && pairedAtkDevice.opened) {
+            try { await pairedAtkDevice.close(); } catch {}
+        }
+        isMouseQuerying = false;
+        renderMouseControls();
+    }
+}
+
+function renderMouseControls() {
+    if (!mouseControlsEl) return;
+
+    // Invariant: Do not show mouse config buttons until the full info panel is updated and synchronized
+    if (infoState === 3 && isStatsSynchronized && mouseState.config !== null) {
+        mouseControlsEl.style.display = 'flex';
+        const activeCfg = mouseState.config;
+
+        const configs = [
+            { id: 0, label: 'Config 1' },
+            { id: 1, label: 'Config 2' },
+            { id: 2, label: 'Config 3' },
+            { id: 3, label: 'Config 4' }
+        ];
+
+        const configChipsHtml = configs.map(c => `
+            <button type="button" class="mouse-config-chip${activeCfg === c.id ? ' active' : ''}" data-config-id="${c.id}" title="${activeCfg === c.id ? `${c.label} (Active)` : `Switch to ${c.label}`}">${c.label}</button>
+        `).join('');
+
+        const statsHtml = `
+            <div class="mouse-stats-panel${isMouseStatsExpanded ? ' expanded' : ''}">
+                <div class="mouse-stat-row"><span class="mouse-stat-label">Model</span><span class="mouse-stat-value">${mouseState.name || 'ATK Mouse'}</span></div>
+                <div class="mouse-stat-row"><span class="mouse-stat-label">Sensor</span><span class="mouse-stat-value">${mouseState.sensor || 'PAW3955'}</span></div>
+                <div class="mouse-stat-row"><span class="mouse-stat-label">Battery</span><span class="mouse-stat-value">${mouseState.battery !== null ? `${mouseState.battery}%${mouseState.voltage ? ` (${mouseState.voltage}V)` : ''}` : '-'}</span></div>
+                <div class="mouse-stat-row"><span class="mouse-stat-label">Rate</span><span class="mouse-stat-value">${mouseState.pollingRate || '-'}</span></div>
+                <div class="mouse-stat-row"><span class="mouse-stat-label">DPI</span><span class="mouse-stat-value">${mouseState.dpi || '-'}</span></div>
+                <div class="mouse-stat-row"><span class="mouse-stat-label">Stage</span><span class="mouse-stat-value">${mouseState.stage || '-'}</span></div>
+                <div class="mouse-stat-row"><span class="mouse-stat-label">Debounce</span><span class="mouse-stat-value">${mouseState.debounce || '-'}</span></div>
+                <div class="mouse-stat-row"><span class="mouse-stat-label">MotionSync</span><span class="mouse-stat-value">${mouseState.motionSync !== null ? (mouseState.motionSync ? 'On' : 'Off') : '-'}</span></div>
+                <div class="mouse-stat-row"><span class="mouse-stat-label">Firmware</span><span class="mouse-stat-value">${mouseState.firmware || '-'}</span></div>
+                <div class="mouse-stat-row"><span class="mouse-stat-label">Link</span><span class="mouse-stat-value">${mouseState.connection || '2.4G 8K Dongle'}</span></div>
+            </div>
+        `;
+
+        mouseControlsEl.innerHTML = `
+            <div class="mouse-configs-bar">
+                ${configChipsHtml}
+                <button type="button" id="mouse-expand-btn" class="mouse-expand-btn${isMouseStatsExpanded ? ' expanded' : ''}" title="${isMouseStatsExpanded ? 'Hide mouse stats' : 'Show all mouse stats'}" aria-label="Toggle mouse stats">
+                    <svg class="mouse-expand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                    </svg>
+                </button>
+            </div>
+            ${statsHtml}
+        `;
+
+        const chipBtns = mouseControlsEl.querySelectorAll('.mouse-config-chip');
+        chipBtns.forEach(btn => {
+            btn.onclick = (e) => {
+                e.preventDefault();
+                const cfgId = parseInt(btn.getAttribute('data-config-id'), 10);
+                if (!isNaN(cfgId) && cfgId !== activeCfg && !isMouseQuerying) {
+                    switchAtkConfig(cfgId);
+                }
+            };
+        });
+
+        const expandBtn = document.getElementById('mouse-expand-btn');
+        if (expandBtn) {
+            expandBtn.onclick = (e) => {
+                e.preventDefault();
+                isMouseStatsExpanded = !isMouseStatsExpanded;
+                renderMouseControls();
+            };
+        }
+    } else {
+        mouseControlsEl.style.display = 'none';
+        mouseControlsEl.innerHTML = '';
+    }
+}
+
+async function initAtkWebHid() {
+    if (typeof navigator === 'undefined' || !navigator.hid) return;
+    try {
+        pairedAtkDevice = await getPairedAtkCommDevice();
+        renderMouseControls();
+    } catch {
+        renderMouseControls();
+    }
+}
+
+if (typeof navigator !== 'undefined' && navigator.hid) {
+    navigator.hid.addEventListener('connect', async (event) => {
+        if (isAtkCommDevice(event.device)) {
+            pairedAtkDevice = event.device;
+            if (infoState === 3) {
+                checkAndQueryAtkMouseOnDemand(true);
+            } else {
+                renderMouseControls();
+            }
+        }
+    });
+    navigator.hid.addEventListener('disconnect', (event) => {
+        if (pairedAtkDevice && event.device === pairedAtkDevice) {
+            pairedAtkDevice = null;
+            mouseState.config = null;
+            mouseState.battery = null;
+            mouseState.voltage = '';
+            mouseState.pollingRate = '';
+            mouseState.dpi = '';
+            mouseState.stage = '';
+            mouseState.debounce = '';
+            mouseState.motionSync = null;
+            mouseState.firmware = '';
+            renderMouseControls();
+        }
+    });
+}
+
+initAtkWebHid();
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.action === 'read_clipboard') {
@@ -1380,7 +2091,4 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 });
 
-if (infoState === 2) {
-    requestEmpiricalMonitorProbe();
-}
 })();

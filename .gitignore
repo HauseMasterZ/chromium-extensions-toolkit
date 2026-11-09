@@ -4,6 +4,9 @@ Toolkit/native-host/com.gpu.telemetry.json
 # Local scratch and debug files
 scratch/
 .system_generated/
+.agents/teamwork/
+test_*.ps1
+verify_*.ps1
 
 # Operating System & Temporary Files
 Thumbs.db

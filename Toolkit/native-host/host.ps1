@@ -683,6 +683,7 @@ public class MonitorController {
         public int strobing;
         public int mprt;
         public int freeSync;
+        public int gameMode;
         public int superSharpness;
         public int blueLight;
     }
@@ -714,7 +715,7 @@ public class MonitorController {
         public int rGain = -1, gGain = -1, bGain = -1;
         public int preset = -1;
         public int vol = -1, input = -1, power = -1, blackB = -1;
-        public int gamma = -1, darkB = -1, mprt = -1, strobing = -1, od = -1, fs = -1, ss = -1, bl = -1;
+        public int gamma = -1, darkB = -1, mprt = -1, strobing = -1, od = -1, fs = -1, gameMode = -1, ss = -1, bl = -1;
     }
 
     public static volatile bool IsRunning = true;
@@ -731,6 +732,17 @@ public class MonitorController {
     public static string SavedInternalPnpId = null;
     public static object SyncLock = new object();
     public static readonly object ProbeLock = new object();
+
+    public static string CacheFilePath = null;
+    public static Dictionary<string, DisplayDeviceItem> EmpiricalCache = new Dictionary<string, DisplayDeviceItem>(StringComparer.OrdinalIgnoreCase);
+
+    public static void SaveEmpiricalCache() {
+        // Ephemeral runtime: persistent disk cache disabled
+    }
+
+    public static void LoadEmpiricalCache(string customJson = null) {
+        // Ephemeral runtime: persistent disk cache disabled
+    }
 
     public delegate bool WmiSetBrightnessDelegate(byte val);
     public static WmiSetBrightnessDelegate WmiSetBrightnessHandler = null;
@@ -762,8 +774,13 @@ public class MonitorController {
     }
 
     public static void BindPhysicalMonitors(Dictionary<string, string> friendlyNames) {
-        if (friendlyNames != null) {
-            SavedFriendlyNames = friendlyNames;
+        if (friendlyNames != null && !object.ReferenceEquals(friendlyNames, SavedFriendlyNames)) {
+            if (SavedFriendlyNames == null) SavedFriendlyNames = new Dictionary<string, string>();
+            foreach (var kvp in friendlyNames) {
+                SavedFriendlyNames[kvp.Key] = kvp.Value;
+            }
+        } else if (SavedFriendlyNames == null) {
+            SavedFriendlyNames = new Dictionary<string, string>();
         }
 
         var activeGdiDevices = new List<string>();
@@ -795,6 +812,7 @@ public class MonitorController {
         });
 
         var boundList = new List<BoundPhysicalMonitor>();
+        var allocatedSets = new List<PHYSICAL_MONITOR[]>();
         int ddcIndex = 0;
         try {
             ReleaseBoundMonitors();
@@ -810,101 +828,105 @@ public class MonitorController {
                     ? (activeGdiDevices.IndexOf(gdiDev) + 1)
                     : (ddcIndex + 1);
 
+                // Early internal panel identification (bypasses failing DDC bus transactions)
+                bool isInternalMatch = (!string.IsNullOrEmpty(SavedInternalPnpId) && string.Equals(SavedInternalPnpId, pnpId, StringComparison.OrdinalIgnoreCase)) ||
+                                       (!string.IsNullOrEmpty(gdiDev) && gdiDev.IndexOf("DISPLAY1", StringComparison.OrdinalIgnoreCase) >= 0);
+
+                byte curLcd = 50;
+                if (isInternalMatch && QueryLcdBrightness(out curLcd) == 0) {
+                    if (string.IsNullOrEmpty(SavedInternalPnpId) && !string.IsNullOrEmpty(pnpId)) {
+                        SavedInternalPnpId = pnpId;
+                    }
+                    string modelName = null;
+                    if (!string.IsNullOrEmpty(pnpId)) {
+                        if (SavedFriendlyNames.ContainsKey(pnpId)) {
+                            modelName = SavedFriendlyNames[pnpId];
+                        } else {
+                            modelName = GetMonitorFriendlyNameFromEdid(pnpId);
+                            if (!string.IsNullOrEmpty(modelName)) SavedFriendlyNames[pnpId] = modelName;
+                        }
+                    }
+                    if (string.IsNullOrEmpty(modelName)) modelName = "Internal Display";
+
+                    string canonicalId = !string.IsNullOrEmpty(pnpId) ? pnpId : (!string.IsNullOrEmpty(gdiDev) ? gdiDev : "internal");
+
+                    var bound = new BoundPhysicalMonitor();
+                    bound.id = canonicalId;
+                    bound.hPhys = IntPtr.Zero; // Win32 invariant: internal panels use kernel IOCTL/WMI/DC
+                    bound.count = 0;
+                    bound.monitors = null;
+                    bound.gdiDevice = gdiDev ?? "";
+                    bound.pnpId = pnpId ?? "";
+                    bound.name = modelName;
+                    bound.windowsDisplayNumber = winNum;
+                    bound.width = mWidth;
+                    bound.height = mHeight;
+                    bound.isAcer = false;
+                    bound.isInternal = true;
+                    bound.isSoftwareBrightnessActive = false;
+                    bound.initialBrightness = (int)curLcd;
+                    boundList.Add(bound);
+                    ddcIndex++;
+                    continue;
+                }
+
                 uint count = 0;
                 if (GetNumberOfPhysicalMonitorsFromHMONITOR(hMonitor, out count) && count > 0) {
                     var physicalMonitors = new PHYSICAL_MONITOR[count];
                     if (GetPhysicalMonitorsFromHMONITOR(hMonitor, count, physicalMonitors)) {
-                        bool anyBound = false;
+                        allocatedSets.Add(physicalMonitors);
                         for (int i = 0; i < count; i++) {
                             IntPtr hPhys = physicalMonitors[i].hPhysicalMonitor;
 
-                            uint bMin = 0, bCur = 50, bMax = 100;
-                            bool hasDdcBrightness = GetMonitorBrightness(hPhys, out bMin, out bCur, out bMax);
-                            if (!hasDdcBrightness) {
-                                uint pvct, vCur, vMax;
-                                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x10, out pvct, out vCur, out vMax)) {
-                                    hasDdcBrightness = true;
-                                    bCur = vCur;
-                                }
-                            }
-
                             string modelName = null;
                             if (!string.IsNullOrEmpty(pnpId)) {
-                                if (friendlyNames != null && friendlyNames.ContainsKey(pnpId)) {
-                                    modelName = friendlyNames[pnpId];
-                                }
-                                if (string.IsNullOrEmpty(modelName)) {
+                                if (SavedFriendlyNames.ContainsKey(pnpId)) {
+                                    modelName = SavedFriendlyNames[pnpId];
+                                } else {
                                     modelName = GetMonitorFriendlyNameFromEdid(pnpId);
+                                    if (!string.IsNullOrEmpty(modelName)) SavedFriendlyNames[pnpId] = modelName;
                                 }
                             }
+                            if (string.IsNullOrEmpty(modelName)) {
+                                modelName = "Monitor " + winNum;
+                            }
 
-                            if (hasDdcBrightness) {
-                                if (string.IsNullOrEmpty(modelName)) {
-                                    modelName = "Monitor " + winNum;
-                                }
+                            bool isAcer = (!string.IsNullOrEmpty(pnpId) && pnpId.StartsWith("ACR", StringComparison.OrdinalIgnoreCase)) ||
+                                          (!string.IsNullOrEmpty(modelName) && modelName.IndexOf("Acer", StringComparison.OrdinalIgnoreCase) >= 0);
 
-                                bool isAcer = (!string.IsNullOrEmpty(pnpId) && pnpId.StartsWith("ACR", StringComparison.OrdinalIgnoreCase)) ||
-                                              (!string.IsNullOrEmpty(modelName) && modelName.IndexOf("Acer", StringComparison.OrdinalIgnoreCase) >= 0);
+                            string canonicalId = !string.IsNullOrEmpty(pnpId) ? pnpId : (!string.IsNullOrEmpty(gdiDev) ? gdiDev : ("mon_" + ddcIndex));
 
-                                string canonicalId = !string.IsNullOrEmpty(pnpId) ? pnpId : (!string.IsNullOrEmpty(gdiDev) ? gdiDev : ("mon_" + ddcIndex));
-
-                                var bound = new BoundPhysicalMonitor();
-                                bound.id = canonicalId;
-                                bound.hPhys = hPhys;
-                                bound.count = count;
-                                bound.monitors = physicalMonitors;
-                                bound.gdiDevice = gdiDev ?? "";
-                                bound.pnpId = pnpId ?? "";
-                                bound.name = modelName;
-                                bound.windowsDisplayNumber = winNum;
-                                bound.width = mWidth;
-                                bound.height = mHeight;
-                                bound.isAcer = isAcer;
-                                bound.isInternal = false;
-                                bound.isSoftwareBrightnessActive = false;
-                                bound.initialBrightness = (int)bCur;
-                                boundList.Add(bound);
-                                ddcIndex++;
-                                anyBound = true;
-                            } else {
-                                byte curLcd;
-                                bool isLcdAvailable = (QueryLcdBrightness(out curLcd) == 0);
-                                bool isInternalMatch = (!string.IsNullOrEmpty(SavedInternalPnpId) && string.Equals(SavedInternalPnpId, pnpId, StringComparison.OrdinalIgnoreCase)) ||
-                                                       (!string.IsNullOrEmpty(gdiDev) && gdiDev.IndexOf("DISPLAY1", StringComparison.OrdinalIgnoreCase) >= 0);
-
-                                if (isLcdAvailable && isInternalMatch) {
-                                    if (string.IsNullOrEmpty(SavedInternalPnpId) && !string.IsNullOrEmpty(pnpId)) {
-                                        SavedInternalPnpId = pnpId;
-                                    }
-                                    if (string.IsNullOrEmpty(modelName)) {
-                                        modelName = "Internal Display";
-                                    }
-
-                                    string canonicalId = !string.IsNullOrEmpty(pnpId) ? pnpId : (!string.IsNullOrEmpty(gdiDev) ? gdiDev : "internal");
-
-                                    var bound = new BoundPhysicalMonitor();
-                                    bound.id = canonicalId;
-                                    bound.hPhys = hPhys;
-                                    bound.count = count;
-                                    bound.monitors = physicalMonitors;
-                                    bound.gdiDevice = gdiDev ?? "";
-                                    bound.pnpId = pnpId ?? "";
-                                    bound.name = modelName;
-                                    bound.windowsDisplayNumber = winNum;
-                                    bound.width = mWidth;
-                                    bound.height = mHeight;
-                                    bound.isAcer = false;
-                                    bound.isInternal = true;
-                                    bound.isSoftwareBrightnessActive = false;
-                                    bound.initialBrightness = (int)curLcd;
-                                    boundList.Add(bound);
-                                    ddcIndex++;
-                                    anyBound = true;
+                            int initBright = -1;
+                            for (int c = 0; c < CurrentMonitors.Count; c++) {
+                                if (CurrentMonitors[c].id == canonicalId && CurrentMonitors[c].brightness >= 0) {
+                                    initBright = CurrentMonitors[c].brightness;
+                                    break;
                                 }
                             }
-                        }
-                        if (!anyBound) {
-                            try { DestroyPhysicalMonitors(count, physicalMonitors); } catch {}
+                            if (initBright < 0 && EmpiricalCache.ContainsKey(canonicalId)) {
+                                initBright = EmpiricalCache[canonicalId].brightness;
+                            } else if (initBright < 0 && !string.IsNullOrEmpty(pnpId) && EmpiricalCache.ContainsKey(pnpId)) {
+                                initBright = EmpiricalCache[pnpId].brightness;
+                            }
+                            if (initBright < 0) initBright = 50;
+
+                            var bound = new BoundPhysicalMonitor();
+                            bound.id = canonicalId;
+                            bound.hPhys = hPhys; // Win32 invariant: can legitimately be (IntPtr)0
+                            bound.count = count;
+                            bound.monitors = physicalMonitors;
+                            bound.gdiDevice = gdiDev ?? "";
+                            bound.pnpId = pnpId ?? "";
+                            bound.name = modelName;
+                            bound.windowsDisplayNumber = winNum;
+                            bound.width = mWidth;
+                            bound.height = mHeight;
+                            bound.isAcer = isAcer;
+                            bound.isInternal = false;
+                            bound.isSoftwareBrightnessActive = false;
+                            bound.initialBrightness = initBright;
+                            boundList.Add(bound);
+                            ddcIndex++;
                         }
                     }
                 }
@@ -918,8 +940,8 @@ public class MonitorController {
                 byte curLcd;
                 if (QueryLcdBrightness(out curLcd) == 0) {
                     string intPnp = SavedInternalPnpId ?? "Internal_Panel";
-                    string intModel = (friendlyNames != null && !string.IsNullOrEmpty(SavedInternalPnpId) && friendlyNames.ContainsKey(SavedInternalPnpId))
-                        ? friendlyNames[SavedInternalPnpId] : "Internal Display";
+                    string intModel = (SavedFriendlyNames != null && !string.IsNullOrEmpty(SavedInternalPnpId) && SavedFriendlyNames.ContainsKey(SavedInternalPnpId))
+                        ? SavedFriendlyNames[SavedInternalPnpId] : "Internal Display";
                     string intGdi = (activeGdiDevices.Count > 0 && activeGdiDevices[0].IndexOf("DISPLAY1", StringComparison.OrdinalIgnoreCase) >= 0)
                         ? activeGdiDevices[0] : "\\\\.\\DISPLAY1";
                     int winNum = activeGdiDevices.Contains(intGdi) ? (activeGdiDevices.IndexOf(intGdi) + 1) : 1;
@@ -950,6 +972,7 @@ public class MonitorController {
             boundList.Sort((a, b) => a.windowsDisplayNumber.CompareTo(b.windowsDisplayNumber));
 
             var initialDevList = new List<DisplayDeviceItem>();
+            bool allHaveEmpiricalCache = (boundList.Count > 0);
             for (int i = 0; i < boundList.Count; i++) {
                 var b = boundList[i];
                 var item = new DisplayDeviceItem();
@@ -961,25 +984,58 @@ public class MonitorController {
                 item.width = b.width;
                 item.height = b.height;
                 item.isInternal = b.isInternal;
-                item.brightness = b.initialBrightness;
-                item.contrast = b.isInternal ? internalContrast : 50;
-                item.gainR = b.isInternal ? internalGainR : 50;
-                item.gainG = b.isInternal ? internalGainG : 50;
-                item.gainB = b.isInternal ? internalGainB : 50;
-                item.volume = -1;
-                item.inputSource = 15;
-                item.colorPreset = 11;
-                item.powerMode = 1;
-                item.gamma = -1;
-                item.blackBoost = 50;
-                item.darkBoost = 0;
-                item.blackLevel = 50;
-                item.overdrive = 0;
-                item.strobing = 0;
-                item.mprt = 0;
-                item.freeSync = 0;
-                item.superSharpness = 0;
-                item.blueLight = 0;
+
+                DisplayDeviceItem cached = null;
+                lock (SyncLock) {
+                    if (!string.IsNullOrEmpty(b.id) && EmpiricalCache.ContainsKey(b.id)) cached = EmpiricalCache[b.id];
+                    else if (!string.IsNullOrEmpty(b.pnpId) && EmpiricalCache.ContainsKey(b.pnpId)) cached = EmpiricalCache[b.pnpId];
+                    else if (!string.IsNullOrEmpty(b.gdiDevice) && EmpiricalCache.ContainsKey(b.gdiDevice)) cached = EmpiricalCache[b.gdiDevice];
+                }
+
+                if (cached != null) {
+                    item.brightness = (b.initialBrightness >= 0) ? b.initialBrightness : cached.brightness;
+                    item.contrast = b.isInternal ? internalContrast : cached.contrast;
+                    item.gainR = b.isInternal ? internalGainR : cached.gainR;
+                    item.gainG = b.isInternal ? internalGainG : cached.gainG;
+                    item.gainB = b.isInternal ? internalGainB : cached.gainB;
+                    item.volume = cached.volume;
+                    item.inputSource = cached.inputSource;
+                    item.colorPreset = cached.colorPreset;
+                    item.powerMode = cached.powerMode;
+                    item.gamma = cached.gamma;
+                    item.blackBoost = cached.blackBoost;
+                    item.darkBoost = cached.darkBoost;
+                    item.blackLevel = cached.blackLevel;
+                    item.overdrive = cached.overdrive;
+                    item.strobing = cached.strobing;
+                    item.mprt = cached.mprt;
+                    item.freeSync = cached.freeSync;
+                    item.gameMode = cached.gameMode;
+                    item.superSharpness = cached.superSharpness;
+                    item.blueLight = cached.blueLight;
+                } else {
+                    allHaveEmpiricalCache = false;
+                    item.brightness = b.initialBrightness;
+                    item.contrast = b.isInternal ? internalContrast : 50;
+                    item.gainR = b.isInternal ? internalGainR : 50;
+                    item.gainG = b.isInternal ? internalGainG : 50;
+                    item.gainB = b.isInternal ? internalGainB : 50;
+                    item.volume = -1;
+                    item.inputSource = 15;
+                    item.colorPreset = 11;
+                    item.powerMode = 1;
+                    item.gamma = -1;
+                    item.blackBoost = 50;
+                    item.darkBoost = 0;
+                    item.blackLevel = 50;
+                    item.overdrive = 0;
+                    item.strobing = 0;
+                    item.mprt = 0;
+                    item.freeSync = 0;
+                    item.gameMode = 10;
+                    item.superSharpness = 0;
+                    item.blueLight = 0;
+                }
                 initialDevList.Add(item);
             }
 
@@ -1002,12 +1058,14 @@ public class MonitorController {
                         existing.gdiDevice = initItem.gdiDevice;
                         existing.name = initItem.name;
                         existing.isInternal = initItem.isInternal;
-                        existing.brightness = initItem.brightness;
                         if (initItem.isInternal) {
+                            existing.brightness = initItem.brightness;
                             existing.contrast = internalContrast;
                             existing.gainR = internalGainR;
                             existing.gainG = internalGainG;
                             existing.gainB = internalGainB;
+                        } else if (existing.brightness < 0) {
+                            existing.brightness = initItem.brightness;
                         }
                         mergedList.Add(existing);
                     } else {
@@ -1015,6 +1073,9 @@ public class MonitorController {
                     }
                 }
                 CurrentMonitors = mergedList;
+                if (allHaveEmpiricalCache) {
+                    HasProbed = true;
+                }
                 string intGdi = null;
                 for (int i = 0; i < boundList.Count; i++) {
                     if (boundList[i].isInternal && !string.IsNullOrEmpty(boundList[i].gdiDevice)) {
@@ -1025,21 +1086,17 @@ public class MonitorController {
                 if (!string.IsNullOrEmpty(intGdi)) {
                     UpdateInternalGpuRamp(intGdi);
                 }
-                if (boundList.Count == 0) {
-                    HasProbed = true;
-                }
             }
+            WakeSignal.Set();
         } catch {
             var destroyed = new HashSet<PHYSICAL_MONITOR[]>();
-            foreach (var b in boundList) {
-                try {
-                    if (b.monitors != null && b.count > 0 && !destroyed.Contains(b.monitors)) {
-                        destroyed.Add(b.monitors);
-                        DestroyPhysicalMonitors(b.count, b.monitors);
-                    }
-                } catch {}
-                b.monitors = null;
+            foreach (var set in allocatedSets) {
+                if (set != null && !destroyed.Contains(set)) {
+                    destroyed.Add(set);
+                    try { DestroyPhysicalMonitors((uint)set.Length, set); } catch {}
+                }
             }
+            throw;
         }
     }
 
@@ -1484,6 +1541,17 @@ public class MonitorController {
                 }
                 return ok;
 
+            case "gamemode":
+                ok = WriteVcpWithRetry(ref target, 0xF9, (uint)val);
+                if (ok && target != null) {
+                    lock (SyncLock) {
+                        for (int i = 0; i < CurrentMonitors.Count; i++) {
+                            if (CurrentMonitors[i].id == target.id) { CurrentMonitors[i].gameMode = val; break; }
+                        }
+                    }
+                }
+                return ok;
+
             case "supersharpness":
                 uint ssVal = (val > 0) ? 3u : 0u;
                 ok = WriteVcpWithRetry(ref target, 0xE4, ssVal);
@@ -1595,7 +1663,9 @@ public class MonitorController {
                 u.preset = (int)vCurReply;
             }
 
-            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x62, out pvctReply, out vCurReply, out vMaxReply)) u.vol = (int)vCurReply;
+            if (isAcer) {
+                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x62, out pvctReply, out vCurReply, out vMaxReply)) u.vol = (int)vCurReply;
+            }
             if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x60, out pvctReply, out vCurReply, out vMaxReply)) u.input = (int)vCurReply;
             if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xD6, out pvctReply, out vCurReply, out vMaxReply)) u.power = (int)vCurReply;
             if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x6C, out pvctReply, out vCurReply, out vMaxReply)) u.blackB = (int)vCurReply;
@@ -1621,6 +1691,7 @@ public class MonitorController {
                     u.strobing = (int)vCurReply;
                 }
                 if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xEA, out pvctReply, out vCurReply, out vMaxReply)) u.fs = (int)vCurReply;
+                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xF9, out pvctReply, out vCurReply, out vMaxReply)) u.gameMode = (int)vCurReply;
             }
         }
 
@@ -1656,6 +1727,7 @@ public class MonitorController {
                             if (u.strobing >= 0) CurrentMonitors[j].strobing = u.strobing;
                             if (u.mprt >= 0) CurrentMonitors[j].mprt = u.mprt;
                             if (u.fs >= 0) CurrentMonitors[j].freeSync = u.fs;
+                            if (u.gameMode >= 0) CurrentMonitors[j].gameMode = u.gameMode;
                             if (u.ss >= 0) CurrentMonitors[j].superSharpness = u.ss;
                             if (u.bl >= 0) CurrentMonitors[j].blueLight = u.bl;
                         }
@@ -1663,7 +1735,14 @@ public class MonitorController {
                     }
                 }
             }
+            for (int i = 0; i < CurrentMonitors.Count; i++) {
+                var m = CurrentMonitors[i];
+                if (!string.IsNullOrEmpty(m.id)) EmpiricalCache[m.id] = m;
+                if (!string.IsNullOrEmpty(m.pnpId)) EmpiricalCache[m.pnpId] = m;
+                if (!string.IsNullOrEmpty(m.gdiDevice)) EmpiricalCache[m.gdiDevice] = m;
+            }
             HasProbed = true;
+            SaveEmpiricalCache();
         }
         WakeSignal.Set();
     }
@@ -1695,22 +1774,26 @@ public class MonitorController {
                         targetProbeId = PendingProbeId;
                     }
                     try {
-                        lock (ProbeLock) {
-                            if (!IsRunning) break;
-                            if (rebindNow) {
+                        if (rebindNow) {
+                            lock (ProbeLock) {
+                                if (!IsRunning) break;
                                 BindPhysicalMonitors(friendlyNames ?? SavedFriendlyNames);
                             }
-                            if (!IsRunning) break;
-                            ReadTelemetryFeatures(friendlyNames ?? SavedFriendlyNames);
                         }
+                        if (!IsRunning) break;
+                        ReadTelemetryFeatures(friendlyNames ?? SavedFriendlyNames);
                     } catch {}
 
                     lock (SyncLock) {
-                        if (targetProbeId > CompletedProbeId) {
+                        int highestPending = PendingProbeId;
+                        if (highestPending > CompletedProbeId) {
+                            CompletedProbeId = highestPending;
+                        } else if (targetProbeId > CompletedProbeId) {
                             CompletedProbeId = targetProbeId;
                         }
                         HasProbed = true;
-                        if (!ProbePending || !IsRunning) {
+                        if (!ForceRebindPending || !IsRunning) {
+                            ProbePending = false;
                             IsProbing = false;
                             break;
                         }
@@ -1786,7 +1869,9 @@ public class MonitorController {
                         int val = ExtractJsonInt(json, "value", 0);
                         bool isInt = ExtractJsonBool(json, "isInternal", false);
                         if (!string.IsNullOrEmpty(control)) {
-                            ApplyControl(monId, control, val, pnpId, gdiDev, isInt);
+                            if (ApplyControl(monId, control, val, pnpId, gdiDev, isInt)) {
+                                SaveEmpiricalCache();
+                            }
                             WakeSignal.Set();
                         }
                     } else if (action == "set_brightness") {
@@ -1794,7 +1879,45 @@ public class MonitorController {
                         string pnpId = ExtractJsonString(json, "pnpId");
                         string gdiDev = ExtractJsonString(json, "gdiDevice");
                         int val = ExtractJsonInt(json, "value", 50);
-                        ApplyControl(monId, "brightness", val, pnpId, gdiDev);
+                        if (ApplyControl(monId, "brightness", val, pnpId, gdiDev)) {
+                            SaveEmpiricalCache();
+                        }
+                        WakeSignal.Set();
+                    } else if (action == "init_cached_monitors") {
+                        LoadEmpiricalCache(json);
+                        lock (SyncLock) {
+                            for (int i = 0; i < CurrentMonitors.Count; i++) {
+                                var m = CurrentMonitors[i];
+                                DisplayDeviceItem cached = null;
+                                if (!string.IsNullOrEmpty(m.id) && EmpiricalCache.ContainsKey(m.id)) cached = EmpiricalCache[m.id];
+                                else if (!string.IsNullOrEmpty(m.pnpId) && EmpiricalCache.ContainsKey(m.pnpId)) cached = EmpiricalCache[m.pnpId];
+                                else if (!string.IsNullOrEmpty(m.gdiDevice) && EmpiricalCache.ContainsKey(m.gdiDevice)) cached = EmpiricalCache[m.gdiDevice];
+                                if (cached != null) {
+                                    if (cached.contrast >= 0 && !m.isInternal) m.contrast = cached.contrast;
+                                    if (cached.gainR >= 0 && !m.isInternal) m.gainR = cached.gainR;
+                                    if (cached.gainG >= 0 && !m.isInternal) m.gainG = cached.gainG;
+                                    if (cached.gainB >= 0 && !m.isInternal) m.gainB = cached.gainB;
+                                    if (cached.volume >= 0 || cached.volume == -1) m.volume = cached.volume;
+                                    if (cached.inputSource >= 0) m.inputSource = cached.inputSource;
+                                    if (cached.colorPreset >= 0) m.colorPreset = cached.colorPreset;
+                                    if (cached.powerMode >= 0) m.powerMode = cached.powerMode;
+                                    if (cached.gamma >= 0) m.gamma = cached.gamma;
+                                    if (cached.blackBoost >= 0) m.blackBoost = cached.blackBoost;
+                                    if (cached.darkBoost >= 0) m.darkBoost = cached.darkBoost;
+                                    if (cached.blackLevel >= 0) m.blackLevel = cached.blackLevel;
+                                    if (cached.overdrive >= 0) m.overdrive = cached.overdrive;
+                                    if (cached.strobing >= 0) m.strobing = cached.strobing;
+                                    if (cached.mprt >= 0) m.mprt = cached.mprt;
+                                    if (cached.freeSync >= 0) m.freeSync = cached.freeSync;
+                                    if (cached.gameMode >= 0) m.gameMode = cached.gameMode;
+                                    if (cached.superSharpness >= 0) m.superSharpness = cached.superSharpness;
+                                    if (cached.blueLight >= 0) m.blueLight = cached.blueLight;
+                                }
+                            }
+                            if (CurrentMonitors.Count > 0) {
+                                HasProbed = true;
+                            }
+                        }
                         WakeSignal.Set();
                     } else if (action == "probe_monitors" || action == "refresh_monitors" || action == "fetch_empirical") {
                         int c = ExtractJsonInt(json, "contrast", -1);
@@ -1971,6 +2094,7 @@ public class MonitorController {
         sb.Append("\"isProbing\":").Append(IsProbing ? "true," : "false,");
         sb.Append("\"probeId\":").Append(CompletedProbeId).Append(',');
 
+
         int monBrightness = -1;
         if (!HasProbed) {
             sb.Append("\"monitors\":null,");
@@ -2006,6 +2130,7 @@ public class MonitorController {
                     sb.Append("\"strobing\":").Append(m.strobing).Append(',');
                     sb.Append("\"mprt\":").Append(m.mprt).Append(',');
                     sb.Append("\"freeSync\":").Append(m.freeSync).Append(',');
+                    sb.Append("\"gameMode\":").Append(m.gameMode).Append(',');
                     sb.Append("\"superSharpness\":").Append(m.superSharpness).Append(',');
                     sb.Append("\"blueLight\":").Append(m.blueLight);
                     sb.Append('}');
@@ -2043,6 +2168,8 @@ public class MonitorController {
             return $false
         }
     } catch {}
+
+    # Ephemeral runtime: persistent disk cache disabled
 
     [MonitorController]::StartWorker($friendlyNames)
     [MonitorController]::GetInstantCpuLoad() | Out-Null
@@ -2311,6 +2438,7 @@ public class MonitorController {
         $stdout.Write($lengthPrefix, 0, 4)
         $stdout.Write($jsonBytes, 0, $jsonBytes.Length)
         $stdout.Flush()
+
 
         $warmupTicks++
         # Adaptive Load Cadence: 200ms during initial warm-up, 800ms under gaming/load, 1800ms when idle on desktop

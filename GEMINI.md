@@ -4,9 +4,9 @@
 - Under no circumstances use any emojis or emoji-like unicode symbols in chat responses, artifacts, code files, comments, or plans.
 - Keep all communication, status updates, and code strictly text-based and professional.
 
-## 2. Read-Only Git Policy
-- Under no circumstances run git write commands (`git add`, `git commit`, `git push`, `git checkout -b`, `git branch -D`, etc.).
-- All git operations must be strictly read-only (`git status`, `git diff`, `git log`).
+## 2. Commit and Push Policy
+- After every single change, stage, commit, and push the changes to remote (`git push origin main`).
+- Use existing commit messages as a template following the conventional format (e.g. `fix: <scope>`, `feat: <scope>`).
 
 ## 3. Artifact Guidelines
 - After creating or updating an artifact, do not re-summarize its contents in the chat response.

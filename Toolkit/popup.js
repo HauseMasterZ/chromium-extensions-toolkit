@@ -58,6 +58,15 @@
 
       const initDarkMode = (async () => {
         try {
+          const lowerUrl = (tab?.url || '').toLowerCase();
+          const isExempt = lowerUrl.includes('v3-hub.atk.store') || lowerUrl.includes('atk.store') || lowerUrl.includes('mchose.com.cn');
+          if (isExempt) {
+            darkModeToggle.checked = false;
+            darkModeToggle.disabled = true;
+            darkModeToggle.closest('.toggle-row')?.classList.add('disabled');
+            darkModeToggle.closest('.toggle-row')?.setAttribute('title', 'Dark mode is disabled for web driver portals');
+            return;
+          }
           const results = await chrome.scripting.executeScript({
             target: { tabId: tab.id },
             func: () => !!(window.__DARK_MODE_INJECTED__ && window.__DARK_MODE_IS_ACTIVE__)
@@ -141,15 +150,50 @@
 
       // Pass 1: Explicit internal monitor matching
       const internalMon = telemetryMonitors.find(mon => mon.isInternal);
-      let internalDisplay = displays.find(d => d.isInternal);
-      if (!internalDisplay && internalMon) {
-        internalDisplay = displays.find(d => d.isPrimary) || displays[0];
-        if (internalDisplay) internalDisplay.isInternal = true;
-      }
-      if (internalDisplay && internalMon) {
-        internalDisplay.windowsDisplayNumber = internalMon.windowsDisplayNumber || 1;
-        usedMonitors.add(internalMon);
-        usedNumbers.add(internalDisplay.windowsDisplayNumber);
+      let internalDisplay = null;
+
+      if (internalMon) {
+        // 1A. High-confidence physical resolution match (exact or rotated)
+        if (internalMon.width && internalMon.height) {
+          internalDisplay = displays.find(d => d.bounds && (
+            (d.bounds.width === internalMon.width && d.bounds.height === internalMon.height) ||
+            (d.bounds.width === internalMon.height && d.bounds.height === internalMon.width)
+          ));
+        }
+
+        // 1B. PnP ID or GDI device match
+        if (!internalDisplay && internalMon.pnpId) {
+          internalDisplay = displays.find(d => d.id && (d.id.includes(internalMon.pnpId) || d.id === internalMon.pnpId));
+        }
+        if (!internalDisplay && internalMon.gdiDevice) {
+          internalDisplay = displays.find(d => d.id && d.id.includes(internalMon.gdiDevice));
+        }
+
+        // 1C. Match against existing isInternal if resolution is consistent
+        if (!internalDisplay) {
+          internalDisplay = displays.find(d => d.isInternal && d.bounds && (
+            !internalMon.width || !internalMon.height ||
+            (d.bounds.width === internalMon.width && d.bounds.height === internalMon.height) ||
+            (d.bounds.width === internalMon.height && d.bounds.height === internalMon.width)
+          ));
+        }
+
+        // 1D. Single display system fallback
+        if (!internalDisplay && displays.length === 1) {
+          internalDisplay = displays[0];
+        }
+
+        // Strip bogus isInternal flags from other displays
+        displays.forEach(d => {
+          if (d !== internalDisplay) d.isInternal = false;
+        });
+
+        if (internalDisplay) {
+          internalDisplay.isInternal = true;
+          internalDisplay.windowsDisplayNumber = internalMon.windowsDisplayNumber || 1;
+          usedMonitors.add(internalMon);
+          usedNumbers.add(internalDisplay.windowsDisplayNumber);
+        }
       }
 
       // Pass 2: High-confidence matching for remaining displays (resolution bounds, PNP ID, GDI device, or model name)
@@ -178,7 +222,7 @@
           usedMonitors.add(match);
           d.windowsDisplayNumber = match.windowsDisplayNumber;
           usedNumbers.add(d.windowsDisplayNumber);
-          if (match.isInternal) d.isInternal = true;
+          d.isInternal = Boolean(match.isInternal);
         } else {
           delete d.windowsDisplayNumber;
         }
@@ -189,7 +233,7 @@
         .filter(m => !usedMonitors.has(m) && !m.isInternal)
         .sort((a, b) => (a.windowsDisplayNumber || 0) - (b.windowsDisplayNumber || 0));
       const remainingDisplays = displays
-        .filter(d => d !== internalDisplay && (!d.windowsDisplayNumber || usedNumbers.has(d.windowsDisplayNumber) && displays.filter(x => x.windowsDisplayNumber === d.windowsDisplayNumber).length > 1))
+        .filter(d => d !== internalDisplay && (!d.windowsDisplayNumber || (usedNumbers.has(d.windowsDisplayNumber) && displays.filter(x => x.windowsDisplayNumber === d.windowsDisplayNumber).length > 1)))
         .sort((a, b) => (a.bounds?.left || 0) - (b.bounds?.left || 0) || (a.bounds?.top || 0) - (b.bounds?.top || 0));
 
       for (let i = 0; i < Math.min(remainingMonitors.length, remainingDisplays.length); i++) {
@@ -291,10 +335,10 @@
         let zoomVal = 'default';
         if (displaysZoomConfig && typeof displaysZoomConfig === 'object') {
           const keys = [
-            d.id,
             displayNum ? `#${displayNum}` : null,
             displayNum !== undefined ? displayNum : null,
             displayNum !== undefined ? String(displayNum) : null,
+            d.id,
             d.name
           ];
           for (const k of keys) {
@@ -379,8 +423,9 @@
       }
     }
 
-    if (sessionRes?.latest_telemetry?.monitors && currentDisplays.length > 0) {
-      annotateDisplays(currentDisplays, sessionRes.latest_telemetry.monitors);
+    const initialTelemetryMonitors = sessionRes?.latest_telemetry?.monitors;
+    if (initialTelemetryMonitors && currentDisplays.length > 0) {
+      annotateDisplays(currentDisplays, initialTelemetryMonitors);
     }
     renderDisplays(currentDisplays, currentZoomConfig, isZoomEnabled);
 
@@ -398,8 +443,9 @@
             return d;
           });
 
-          if (sessionRes?.latest_telemetry?.monitors) {
-            annotateDisplays(annotated, sessionRes.latest_telemetry.monitors);
+          const activeMonitors = sessionRes?.latest_telemetry?.monitors;
+          if (activeMonitors) {
+            annotateDisplays(annotated, activeMonitors);
           } else {
             try {
               const sessionData = chrome.storage?.session ? await chrome.storage.session.get('latest_telemetry').catch(() => ({})) : {};

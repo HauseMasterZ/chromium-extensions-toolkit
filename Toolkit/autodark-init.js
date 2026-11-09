@@ -2,6 +2,16 @@
 // Runs at document_idle for 100% peak page load speed while maintaining zero-flash pre-paint veil
 
 (function() {
+    const host = window.location.hostname.toLowerCase();
+    if (host === 'v3-hub.atk.store' || host.endsWith('.atk.store') || host === 'atk.store' || host.includes('mchose.com.cn')) {
+        if (typeof DarkReader !== 'undefined' && DarkReader.disable) {
+            DarkReader.disable();
+        }
+        document.documentElement.classList.add('darkreader--disabled');
+        document.documentElement.classList.remove('darkreader-ready');
+        return;
+    }
+
     if (window.__DARK_MODE_INJECTED__) {
         window.__DARK_MODE_TOGGLE__();
         return;
