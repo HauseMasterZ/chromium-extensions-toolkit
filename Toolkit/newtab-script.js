@@ -1494,7 +1494,6 @@ window.addEventListener('beforeunload', () => {
 let isMouseQuerying = false;
 let lastMouseQueryTime = 0;
 let pairedAtkDevice = null;
-let isMouseStatsExpanded = false;
 
 const mouseState = {
     name: 'ATK F1 Ultimate',
@@ -1915,37 +1914,6 @@ async function checkAndQueryAtkMouseOnDemand(force = false) {
     }
 }
 
-async function requestAtkDevicePairing() {
-    if (typeof navigator === 'undefined' || !navigator.hid) {
-        alert('WebHID is not supported in this browser.');
-        return;
-    }
-    try {
-        const selected = await navigator.hid.requestDevice({
-            filters: [
-                { vendorId: 0x373B, usagePage: 0xFF02, usage: 0x0002 }
-            ]
-        });
-        const matched = selected.find(isAtkCommDevice) || (selected.length > 0 ? selected[0] : null);
-        if (matched) {
-            pairedAtkDevice = matched;
-            await queryAtkMouseState(matched, true);
-        }
-    } catch (e) {
-        console.warn('[CToolkit] WebHID pairing cancelled or failed:', e);
-    }
-}
-
-async function switchAtkConfig(targetConfig) {
-    mouseState.config = targetConfig;
-    updatePeripheralDockUI();
-}
-
-function switchKeyboardConfig(targetConfig) {
-    keyboardState.config = targetConfig;
-    updatePeripheralDockUI();
-}
-
 function renderPeripheralDockHtml() {
     const kbBatText = keyboardState.battery !== null ? `${keyboardState.battery}%` : '--%';
     const msBatText = mouseState.battery !== null ? `${mouseState.battery}%` : '--%';
@@ -2031,7 +1999,11 @@ function renderPeripheralDockHtml() {
 }
 
 function updatePeripheralDockUI(container = document) {
-    const dockEl = (container && container.querySelector) ? container.querySelector('#peripheral-dock') : document.querySelector('#peripheral-dock');
+    const dockEl = (container && container.id === 'peripheral-dock')
+        ? container
+        : ((container && container.querySelector && container.querySelector('#peripheral-dock'))
+        || (container && container.closest && container.closest('#peripheral-dock'))
+        || document.querySelector('#peripheral-dock'));
     if (!dockEl) return;
 
     // Update Keyboard pill & popover
@@ -2120,7 +2092,11 @@ function updatePeripheralDockUI(container = document) {
 }
 
 function attachPeripheralDockListeners(container = document) {
-    const dockEl = (container && container.querySelector) ? container.querySelector('#peripheral-dock') : document.querySelector('#peripheral-dock');
+    const dockEl = (container && container.id === 'peripheral-dock')
+        ? container
+        : ((container && container.querySelector && container.querySelector('#peripheral-dock'))
+        || (container && container.closest && container.closest('#peripheral-dock'))
+        || document.querySelector('#peripheral-dock'));
     if (!dockEl) return;
 
     const btns = dockEl.querySelectorAll('.peripheral-config-btn');
