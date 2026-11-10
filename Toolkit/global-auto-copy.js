@@ -373,6 +373,32 @@ function isRichEditor(target) {
     return false;
 }
 
+let preSelectedText = '';
+let mouseDownX = 0;
+let mouseDownY = 0;
+
+function getSelectedText(target) {
+    if (target && target.tagName === 'INPUT' && target.type === 'password') return '';
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
+        try {
+            const start = target.selectionStart;
+            const end = target.selectionEnd;
+            if (typeof start === 'number' && typeof end === 'number' && start !== end) {
+                return target.value.substring(start, end).trim();
+            }
+        } catch {}
+    }
+    return window.getSelection()?.toString()?.trim() || '';
+}
+
+document.addEventListener('mousedown', e => {
+    if (e.button === 0) {
+        mouseDownX = e.clientX;
+        mouseDownY = e.clientY;
+        preSelectedText = getSelectedText(e.target);
+    }
+}, true);
+
 document.addEventListener('mouseup', e => {
     if (!isEnabled) return;
     if (e.altKey) return;
@@ -382,22 +408,23 @@ document.addEventListener('mouseup', e => {
     // Privacy protection: Never auto-copy from password inputs
     if (target && target.tagName === 'INPUT' && target.type === 'password') return;
 
-    let text = '';
-    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
-        const start = target.selectionStart;
-        const end = target.selectionEnd;
-        if (typeof start === 'number' && typeof end === 'number' && start !== end) {
-            text = target.value.substring(start, end).trim();
-        }
-    }
-    if (!text) {
-        text = window.getSelection()?.toString()?.trim() || '';
-    }
+    setTimeout(() => {
+        const text = getSelectedText(target);
+        if (!text) return;
 
-    if (text) {
-        document.execCommand('copy');
+        if (e.detail === 1 && preSelectedText && text === preSelectedText) {
+            if (Math.hypot(e.clientX - mouseDownX, e.clientY - mouseDownY) < 4) {
+                return;
+            }
+        }
+
+        try {
+            document.execCommand('copy');
+        } catch {}
+        navigator.clipboard?.writeText?.(text)?.catch?.(() => {});
+
         showAndroidClipboardOverlay(text, e.clientX, e.clientY);
-    }
+    }, 0);
 });
 
 // ==========================================
