@@ -79,4 +79,13 @@
 - Under no circumstances execute, initialize, or poll WebHID (`navigator.hid`, `queryAtkMouseState`, `checkAndQueryAtkMouseOnDemand`, `device.open`) on page load or outside State 3 (`infoState === 3`).
 - All WebHID access in `Toolkit/newtab-script.js` must be strictly gated behind `if (infoState !== 3) return;` to prevent Chromium from surfacing the taskbar/tray HID notification icon on new tab creation.
 
+## 16. Zero Parameter Invention, Specification Grounding & Scope Confinement
+- Strict Ban on Fabricated Values: Under no circumstances invent, introduce, or hardcode arbitrary timeouts, cooldowns, poll intervals, debounce windows, thresholds, or buffer sizes as magic numbers.
+- Specification Grounding: All operational numbers, intervals, and thresholds must trace directly to:
+  1. An explicit user instruction in the conversation, or
+  2. An existing, named project constant (e.g. `ATK_MOUSE_QUERY_COOLDOWN_MS`).
+- Mandatory Clarification Gate: If an operational threshold or timer is required but has not been specified by the user or established by codebase constants, the agent is hard-blocked from guessing or fabricating a value. The agent must prompt the user directly for clarification before writing or modifying code.
+- Zero Unprompted Behavioral Overrides: Never introduce unasked side-effects, cache-bypassing force flags (`force = true`), unsolicited background re-queries, or fabricated fallback intervals on UI state transitions without explicit user directives.
+- Pre-Commit Scope & Diff Audit: Prior to staging and committing any changes, the agent must inspect `git diff` to mechanically verify that every modified numeric literal, timer, and conditional flag strictly reflects an authorized user requirement, with zero unprompted behavioral drift.
+
 

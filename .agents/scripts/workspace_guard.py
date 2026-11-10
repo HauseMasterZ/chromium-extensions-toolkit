@@ -69,6 +69,19 @@ def main():
                 }))
                 return
 
+            # General timing hygiene gate: disallow raw numeric cooldown literals (>= 1000ms) in extension code
+            if tool_name in ("write_file", "edit_file"):
+                norm_target = normalize_path(target_path)
+                if "\\toolkit\\" in norm_target and norm_target.endswith((".js", ".ts")):
+                    payload = args.get("Content") or args.get("Replacement") or ""
+                    timing_match = re.search(r"(?:Date\.now\(\)|now)\s*-\s*[a-zA-Z0-9_.]+\s*(?:>|>=|<|<=)\s*[1-9]\d{3,}\b", payload)
+                    if timing_match:
+                        print(json.dumps({
+                            "decision": "deny",
+                            "reason": f"MECHANICAL HARD-GATE: Raw timing literal detected in cooldown comparison: '{timing_match.group(0)}'. Operational timing intervals >= 1000ms must be declared as a named constant (e.g. UPPERCASE_CONSTANT) and grounded in user specification."
+                        }))
+                        return
+
         # 2. Inspect shell commands
         if tool_name == "run_command":
             cmd = args.get("CommandLine", "")
