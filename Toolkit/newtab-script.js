@@ -1437,6 +1437,7 @@ function setInfoState(state) {
         }
         renderMouseControls();
         checkAndQueryAtkMouseOnDemand(false);
+        checkAndQueryKeyboardOnDemand(false);
 
         isStatsSynchronized = false;
         hasMonitorProbeCompleted = false;
@@ -1496,6 +1497,15 @@ let lastMouseQueryTime = 0;
 const ATK_MOUSE_QUERY_COOLDOWN_MS = 10000;
 let pairedAtkDevice = null;
 let pendingTargetConfig = null;
+
+let isKeyboardQuerying = false;
+let lastKeyboardQueryTime = 0;
+const KEYBOARD_QUERY_COOLDOWN_MS = 10000;
+let pairedKeyboardDevice = null;
+const MCHOSE_KEYBOARD_VID = 0x41E4;
+const MCHOSE_KEYBOARD_NAMES = {
+    0x2101: 'MCHOSE Ace 60'
+};
 
 const mouseState = {
     name: null,
@@ -1811,6 +1821,33 @@ async function getPairedAtkCommDevice() {
     }
 }
 
+function isMchoseKeyboardDevice(device) {
+    if (!device || device.vendorId !== MCHOSE_KEYBOARD_VID) return false;
+    if (Array.isArray(device.collections)) {
+        for (const col of device.collections) {
+            if (col.usagePage === 0x0001 && col.usage === 0x0000) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+async function getPairedKeyboardDevice() {
+    if (infoState !== 3 || typeof navigator === 'undefined' || !navigator.hid) return null;
+    try {
+        const devices = await navigator.hid.getDevices();
+        for (const dev of devices) {
+            if (isMchoseKeyboardDevice(dev)) {
+                return dev;
+            }
+        }
+        return null;
+    } catch {
+        return null;
+    }
+}
+
 async function queryAtkMouseState(device, force = false) {
     if (!device || isMouseQuerying || (infoState !== 3 && pendingTargetConfig === null)) return;
     const now = Date.now();
@@ -1969,6 +2006,67 @@ async function requestAtkDevicePairing() {
     }
 }
 
+async function queryKeyboardState(device, force = false) {
+    if (infoState !== 3 || typeof navigator === 'undefined' || !navigator.hid || !device || isKeyboardQuerying) return;
+    const now = Date.now();
+
+    if (!force && (now - lastKeyboardQueryTime < KEYBOARD_QUERY_COOLDOWN_MS) && keyboardState.isPaired) {
+        updatePeripheralDockUI();
+        return;
+    }
+
+    isKeyboardQuerying = true;
+    try {
+        keyboardState.name = MCHOSE_KEYBOARD_NAMES[device.productId] || device.productName || 'MCHOSE Keyboard';
+        keyboardState.layout = '60% ANSI (61 Keys)';
+        keyboardState.connection = 'USB Wired';
+        keyboardState.battery = 'Wired';
+        keyboardState.voltage = null;
+        keyboardState.isPaired = true;
+        lastKeyboardQueryTime = Date.now();
+    } finally {
+        isKeyboardQuerying = false;
+        updatePeripheralDockUI();
+    }
+}
+
+async function checkAndQueryKeyboardOnDemand(force = false) {
+    if (infoState !== 3 || typeof navigator === 'undefined' || !navigator.hid) return;
+    try {
+        if (!pairedKeyboardDevice) {
+            pairedKeyboardDevice = await getPairedKeyboardDevice();
+        }
+        if (pairedKeyboardDevice && (!lastKeyboardQueryTime || force || Date.now() - lastKeyboardQueryTime > KEYBOARD_QUERY_COOLDOWN_MS)) {
+            await queryKeyboardState(pairedKeyboardDevice, force);
+        } else {
+            updatePeripheralDockUI();
+        }
+    } catch {
+        updatePeripheralDockUI();
+    }
+}
+
+async function requestKeyboardDevicePairing() {
+    if (infoState !== 3 || typeof navigator === 'undefined' || !navigator.hid) {
+        return;
+    }
+    try {
+        const selected = await navigator.hid.requestDevice({
+            filters: [
+                { vendorId: MCHOSE_KEYBOARD_VID, usagePage: 0x0001, usage: 0x0000 },
+                { vendorId: MCHOSE_KEYBOARD_VID }
+            ]
+        });
+        const matched = selected.find(isMchoseKeyboardDevice) || (selected.length > 0 ? selected[0] : null);
+        if (matched) {
+            pairedKeyboardDevice = matched;
+            await queryKeyboardState(matched, true);
+        }
+    } catch (e) {
+        console.warn('[CToolkit] Keyboard WebHID pairing cancelled or failed:', e);
+    }
+}
+
 async function switchAtkConfig(targetConfig) {
     if (typeof targetConfig !== 'number' || isNaN(targetConfig) || targetConfig < 0 || targetConfig > 3) return;
 
@@ -2093,7 +2191,12 @@ function switchKeyboardConfig(targetConfig) {
 }
 
 function renderPeripheralDockHtml() {
-    const kbBatText = keyboardState.battery !== null ? `${keyboardState.battery}%` : '--%';
+    let kbBatText = '--%';
+    if (keyboardState.battery === 'Wired') {
+        kbBatText = 'Wired';
+    } else if (keyboardState.battery !== null) {
+        kbBatText = `${keyboardState.battery}%`;
+    }
     const msBatText = mouseState.battery !== null ? `${mouseState.battery}%` : '--%';
 
     const kbConfigsHtml = [0, 1, 2, 3].map(cfgId => {
@@ -2106,9 +2209,12 @@ function renderPeripheralDockHtml() {
         return `<button type="button" class="peripheral-config-btn${isActive ? ' active' : ''}" data-device="mouse" data-config-id="${cfgId}">Cfg ${cfgId + 1}</button>`;
     }).join('');
 
-    const kbBattDisplay = keyboardState.battery !== null
-        ? `${keyboardState.battery}%${keyboardState.voltage ? ` (${keyboardState.voltage}V)` : ''}`
-        : '--';
+    let kbBattDisplay = '--';
+    if (keyboardState.battery === 'Wired') {
+        kbBattDisplay = 'Wired (USB)';
+    } else if (keyboardState.battery !== null) {
+        kbBattDisplay = `${keyboardState.battery}%${keyboardState.voltage ? ` (${keyboardState.voltage}V)` : ''}`;
+    }
 
     const msBattDisplay = mouseState.battery !== null
         ? `${mouseState.battery}%${mouseState.voltage ? ` (${mouseState.voltage}V)` : ''}`
@@ -2187,7 +2293,11 @@ function updatePeripheralDockUI(container = document) {
     // Update Keyboard pill & popover
     const kbPillBatt = dockEl.querySelector('#kb-pill-batt');
     if (kbPillBatt) {
-        kbPillBatt.textContent = keyboardState.battery !== null ? `${keyboardState.battery}%` : '--%';
+        if (keyboardState.battery === 'Wired') {
+            kbPillBatt.textContent = 'Wired';
+        } else {
+            kbPillBatt.textContent = keyboardState.battery !== null ? `${keyboardState.battery}%` : '--%';
+        }
     }
     const kbNameEl = dockEl.querySelector('#kb-popover-name');
     if (kbNameEl) kbNameEl.textContent = keyboardState.name || 'Keyboard';
@@ -2210,9 +2320,13 @@ function updatePeripheralDockUI(container = document) {
     if (kbStatRate) kbStatRate.textContent = keyboardState.pollingRate || '--';
     const kbStatBatt = dockEl.querySelector('#kb-stat-batt');
     if (kbStatBatt) {
-        kbStatBatt.textContent = keyboardState.battery !== null
-            ? `${keyboardState.battery}%${keyboardState.voltage ? ` (${keyboardState.voltage}V)` : ''}`
-            : '--';
+        if (keyboardState.battery === 'Wired') {
+            kbStatBatt.textContent = 'Wired (USB)';
+        } else {
+            kbStatBatt.textContent = keyboardState.battery !== null
+                ? `${keyboardState.battery}%${keyboardState.voltage ? ` (${keyboardState.voltage}V)` : ''}`
+                : '--';
+        }
     }
     const kbStatLatency = dockEl.querySelector('#kb-stat-latency');
     if (kbStatLatency) kbStatLatency.textContent = keyboardState.latency || '--';
@@ -2294,6 +2408,41 @@ function attachPeripheralDockListeners(container = document) {
         };
     });
 
+    const kbWrap = dockEl.querySelector('.peripheral-pill-wrap[data-device="keyboard"]');
+    if (kbWrap) {
+        kbWrap.onmouseenter = () => {
+            if (Date.now() - lastKeyboardQueryTime >= KEYBOARD_QUERY_COOLDOWN_MS) {
+                checkAndQueryKeyboardOnDemand(false);
+            }
+        };
+    }
+
+    const pillKeyboard = dockEl.querySelector('#pill-keyboard');
+    if (pillKeyboard) {
+        pillKeyboard.onclick = (e) => {
+            e.preventDefault();
+            if (!pairedKeyboardDevice || !keyboardState.isPaired) {
+                requestKeyboardDevicePairing();
+            } else {
+                checkAndQueryKeyboardOnDemand(true);
+            }
+        };
+    }
+
+    const badgeKeyboard = dockEl.querySelector('#kb-popover-badge');
+    if (badgeKeyboard) {
+        badgeKeyboard.style.cursor = 'pointer';
+        badgeKeyboard.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!pairedKeyboardDevice || !keyboardState.isPaired) {
+                requestKeyboardDevicePairing();
+            } else {
+                checkAndQueryKeyboardOnDemand(true);
+            }
+        };
+    }
+
     const mouseWrap = dockEl.querySelector('.peripheral-pill-wrap[data-device="mouse"]');
     if (mouseWrap) {
         mouseWrap.onmouseenter = () => {
@@ -2352,12 +2501,33 @@ async function initAtkWebHid() {
     }
 }
 
+async function initKeyboardWebHid() {
+    if (infoState !== 3 || typeof navigator === 'undefined' || !navigator.hid) return;
+    try {
+        pairedKeyboardDevice = await getPairedKeyboardDevice();
+        if (pairedKeyboardDevice) {
+            await queryKeyboardState(pairedKeyboardDevice, true);
+        } else {
+            updatePeripheralDockUI();
+        }
+    } catch {
+        updatePeripheralDockUI();
+    }
+}
+
 if (typeof navigator !== 'undefined' && navigator.hid) {
     navigator.hid.addEventListener('connect', async (event) => {
         if (isAtkCommDevice(event.device)) {
             pairedAtkDevice = event.device;
             if (infoState === 3) {
                 checkAndQueryAtkMouseOnDemand(true);
+            } else {
+                updatePeripheralDockUI();
+            }
+        } else if (isMchoseKeyboardDevice(event.device)) {
+            pairedKeyboardDevice = event.device;
+            if (infoState === 3) {
+                checkAndQueryKeyboardOnDemand(true);
             } else {
                 updatePeripheralDockUI();
             }
@@ -2368,11 +2538,16 @@ if (typeof navigator !== 'undefined' && navigator.hid) {
             pairedAtkDevice = null;
             mouseState.isPaired = false;
             updatePeripheralDockUI();
+        } else if (pairedKeyboardDevice && event.device === pairedKeyboardDevice) {
+            pairedKeyboardDevice = null;
+            keyboardState.isPaired = false;
+            updatePeripheralDockUI();
         }
     });
 }
 
 initAtkWebHid();
+initKeyboardWebHid();
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.action === 'read_clipboard') {
