@@ -1498,18 +1498,18 @@ let pairedAtkDevice = null;
 let pendingTargetConfig = null;
 
 const mouseState = {
-    name: 'ATK F1 Ultimate',
-    sensor: 'PAW3950 Ultra',
+    name: null,
+    sensor: null,
     config: 0,
-    battery: 88,
-    voltage: '3.98',
-    pollingRate: '1000Hz',
-    dpi: '800 DPI',
-    stage: 'Stage 2 / 5',
-    debounce: '1ms',
-    motionSync: true,
-    firmware: 'v1.12',
-    connection: '2.4G 8K Dongle',
+    battery: null,
+    voltage: null,
+    pollingRate: null,
+    dpi: null,
+    stage: null,
+    debounce: null,
+    motionSync: null,
+    firmware: null,
+    connection: null,
     isPaired: false,
     configs: [
         { id: 0, label: 'Config 1' },
@@ -1520,17 +1520,17 @@ const mouseState = {
 };
 
 const keyboardState = {
-    name: 'Mchose K99',
-    layout: '98% ANSI (99 Keys)',
+    name: 'Keyboard',
+    layout: null,
     config: 0,
-    battery: 94,
-    voltage: '4.12',
-    pollingRate: '1000Hz',
-    latency: '2ms',
-    debounce: '2ms',
-    rgbMode: 'Off',
-    firmware: 'v2.04',
-    connection: '2.4G Wireless',
+    battery: null,
+    voltage: null,
+    pollingRate: null,
+    latency: null,
+    debounce: null,
+    rgbMode: null,
+    firmware: null,
+    connection: null,
     isPaired: false,
     configs: [
         { id: 0, label: 'Config 1' },
@@ -1910,6 +1910,16 @@ async function queryAtkMouseState(device, force = false) {
             }
         } catch {}
 
+        if (!mouseState.connection) {
+            if (device.productName && (device.productName.includes('Dongle') || device.productName.includes('Receiver'))) {
+                mouseState.connection = '2.4G Wireless';
+            } else if (device.productName && device.productName.includes('Wireless')) {
+                mouseState.connection = '2.4G Wireless';
+            } else {
+                mouseState.connection = 'USB / 2.4G';
+            }
+        }
+
         mouseState.isPaired = true;
         lastMouseQueryTime = Date.now();
     } catch (e) {
@@ -2115,21 +2125,21 @@ function renderPeripheralDockHtml() {
                 </button>
                 <div class="peripheral-popover" id="keyboard-popover" role="dialog" aria-label="Keyboard Quick Configuration">
                     <div class="peripheral-popover-header">
-                        <span class="peripheral-popover-title" id="kb-popover-name">${keyboardState.name || 'Mchose K99'}</span>
-                        <span class="peripheral-popover-badge" id="kb-popover-badge">${keyboardState.isPaired ? 'Paired' : '2.4G'}</span>
+                        <span class="peripheral-popover-title" id="kb-popover-name">${keyboardState.name || 'Keyboard'}</span>
+                        <span class="peripheral-popover-badge" id="kb-popover-badge">${keyboardState.isPaired ? 'Paired' : 'Unpaired'}</span>
                     </div>
                     <div class="peripheral-popover-configs" id="kb-popover-configs">
                         ${kbConfigsHtml}
                     </div>
                     <div class="peripheral-popover-stats">
-                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Layout</span><span class="peripheral-stat-val" id="kb-stat-layout">${keyboardState.layout || '98% ANSI'}</span></div>
-                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Rate</span><span class="peripheral-stat-val" id="kb-stat-rate">${keyboardState.pollingRate || '1000Hz'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Layout</span><span class="peripheral-stat-val" id="kb-stat-layout">${keyboardState.layout || '--'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Rate</span><span class="peripheral-stat-val" id="kb-stat-rate">${keyboardState.pollingRate || '--'}</span></div>
                         <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Battery</span><span class="peripheral-stat-val" id="kb-stat-batt">${kbBattDisplay}</span></div>
-                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Latency</span><span class="peripheral-stat-val" id="kb-stat-latency">${keyboardState.latency || '2ms'}</span></div>
-                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Debounce</span><span class="peripheral-stat-val" id="kb-stat-debounce">${keyboardState.debounce || '2ms'}</span></div>
-                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Firmware</span><span class="peripheral-stat-val" id="kb-stat-firmware">${keyboardState.firmware || 'v2.04'}</span></div>
-                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Link</span><span class="peripheral-stat-val" id="kb-stat-link">${keyboardState.connection || '2.4G Wireless'}</span></div>
-                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">RGB</span><span class="peripheral-stat-val" id="kb-stat-rgb">${keyboardState.rgbMode || 'Off'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Latency</span><span class="peripheral-stat-val" id="kb-stat-latency">${keyboardState.latency || '--'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Debounce</span><span class="peripheral-stat-val" id="kb-stat-debounce">${keyboardState.debounce || '--'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Firmware</span><span class="peripheral-stat-val" id="kb-stat-firmware">${keyboardState.firmware || '--'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Link</span><span class="peripheral-stat-val" id="kb-stat-link">${keyboardState.connection || '--'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">RGB</span><span class="peripheral-stat-val" id="kb-stat-rgb">${keyboardState.rgbMode || '--'}</span></div>
                     </div>
                 </div>
             </div>
@@ -2143,22 +2153,22 @@ function renderPeripheralDockHtml() {
                 </button>
                 <div class="peripheral-popover" id="mouse-popover" role="dialog" aria-label="Mouse Quick Configuration">
                     <div class="peripheral-popover-header">
-                        <span class="peripheral-popover-title" id="mouse-popover-name">${mouseState.name || 'ATK F1 Ultimate'}</span>
-                        <span class="peripheral-popover-badge" id="mouse-popover-badge">${mouseState.isPaired ? 'Paired' : '2.4G 8K'}</span>
+                        <span class="peripheral-popover-title" id="mouse-popover-name">${mouseState.name || (mouseState.isPaired ? 'ATK Mouse' : 'Mouse')}</span>
+                        <span class="peripheral-popover-badge" id="mouse-popover-badge">${mouseState.isPaired ? 'Paired' : 'Unpaired'}</span>
                     </div>
                     <div class="peripheral-popover-configs" id="mouse-popover-configs">
                         ${msConfigsHtml}
                     </div>
                     <div class="peripheral-popover-stats">
-                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">DPI</span><span class="peripheral-stat-val" id="mouse-stat-dpi">${mouseState.dpi || '800 DPI'}</span></div>
-                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Rate</span><span class="peripheral-stat-val" id="mouse-stat-rate">${mouseState.pollingRate || '1000Hz'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">DPI</span><span class="peripheral-stat-val" id="mouse-stat-dpi">${mouseState.dpi || '--'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Rate</span><span class="peripheral-stat-val" id="mouse-stat-rate">${mouseState.pollingRate || '--'}</span></div>
                         <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Battery</span><span class="peripheral-stat-val" id="mouse-stat-batt">${msBattDisplay}</span></div>
-                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Sensor</span><span class="peripheral-stat-val" id="mouse-stat-sensor">${mouseState.sensor || 'PAW3950 Ultra'}</span></div>
-                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Stage</span><span class="peripheral-stat-val" id="mouse-stat-stage">${mouseState.stage || 'Stage 2 / 5'}</span></div>
-                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Debounce</span><span class="peripheral-stat-val" id="mouse-stat-debounce">${mouseState.debounce || '1ms'}</span></div>
-                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">MotionSync</span><span class="peripheral-stat-val" id="mouse-stat-motionsync">${mouseState.motionSync !== null ? (mouseState.motionSync ? 'On' : 'Off') : 'On'}</span></div>
-                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Firmware</span><span class="peripheral-stat-val" id="mouse-stat-firmware">${mouseState.firmware || 'v1.12'}</span></div>
-                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Link</span><span class="peripheral-stat-val" id="mouse-stat-link">${mouseState.connection || '2.4G 8K Dongle'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Sensor</span><span class="peripheral-stat-val" id="mouse-stat-sensor">${mouseState.sensor || '--'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Stage</span><span class="peripheral-stat-val" id="mouse-stat-stage">${mouseState.stage || '--'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Debounce</span><span class="peripheral-stat-val" id="mouse-stat-debounce">${mouseState.debounce || '--'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">MotionSync</span><span class="peripheral-stat-val" id="mouse-stat-motionsync">${mouseState.motionSync !== null ? (mouseState.motionSync ? 'On' : 'Off') : '--'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Firmware</span><span class="peripheral-stat-val" id="mouse-stat-firmware">${mouseState.firmware || '--'}</span></div>
+                        <div class="peripheral-stat-item"><span class="peripheral-stat-lbl">Link</span><span class="peripheral-stat-val" id="mouse-stat-link">${mouseState.connection || '--'}</span></div>
                     </div>
                 </div>
             </div>
@@ -2180,9 +2190,9 @@ function updatePeripheralDockUI(container = document) {
         kbPillBatt.textContent = keyboardState.battery !== null ? `${keyboardState.battery}%` : '--%';
     }
     const kbNameEl = dockEl.querySelector('#kb-popover-name');
-    if (kbNameEl) kbNameEl.textContent = keyboardState.name || 'Mchose K99';
+    if (kbNameEl) kbNameEl.textContent = keyboardState.name || 'Keyboard';
     const kbBadgeEl = dockEl.querySelector('#kb-popover-badge');
-    if (kbBadgeEl) kbBadgeEl.textContent = keyboardState.isPaired ? 'Paired' : '2.4G';
+    if (kbBadgeEl) kbBadgeEl.textContent = keyboardState.isPaired ? 'Paired' : 'Unpaired';
 
     const kbBtns = dockEl.querySelectorAll('#kb-popover-configs .peripheral-config-btn');
     kbBtns.forEach(btn => {
@@ -2195,9 +2205,9 @@ function updatePeripheralDockUI(container = document) {
     });
 
     const kbStatLayout = dockEl.querySelector('#kb-stat-layout');
-    if (kbStatLayout) kbStatLayout.textContent = keyboardState.layout || '98% ANSI';
+    if (kbStatLayout) kbStatLayout.textContent = keyboardState.layout || '--';
     const kbStatRate = dockEl.querySelector('#kb-stat-rate');
-    if (kbStatRate) kbStatRate.textContent = keyboardState.pollingRate || '1000Hz';
+    if (kbStatRate) kbStatRate.textContent = keyboardState.pollingRate || '--';
     const kbStatBatt = dockEl.querySelector('#kb-stat-batt');
     if (kbStatBatt) {
         kbStatBatt.textContent = keyboardState.battery !== null
@@ -2205,15 +2215,15 @@ function updatePeripheralDockUI(container = document) {
             : '--';
     }
     const kbStatLatency = dockEl.querySelector('#kb-stat-latency');
-    if (kbStatLatency) kbStatLatency.textContent = keyboardState.latency || '2ms';
+    if (kbStatLatency) kbStatLatency.textContent = keyboardState.latency || '--';
     const kbStatDebounce = dockEl.querySelector('#kb-stat-debounce');
-    if (kbStatDebounce) kbStatDebounce.textContent = keyboardState.debounce || '2ms';
+    if (kbStatDebounce) kbStatDebounce.textContent = keyboardState.debounce || '--';
     const kbStatFirmware = dockEl.querySelector('#kb-stat-firmware');
-    if (kbStatFirmware) kbStatFirmware.textContent = keyboardState.firmware || 'v2.04';
+    if (kbStatFirmware) kbStatFirmware.textContent = keyboardState.firmware || '--';
     const kbStatLink = dockEl.querySelector('#kb-stat-link');
-    if (kbStatLink) kbStatLink.textContent = keyboardState.connection || '2.4G Wireless';
+    if (kbStatLink) kbStatLink.textContent = keyboardState.connection || '--';
     const kbStatRgb = dockEl.querySelector('#kb-stat-rgb');
-    if (kbStatRgb) kbStatRgb.textContent = keyboardState.rgbMode || 'Off';
+    if (kbStatRgb) kbStatRgb.textContent = keyboardState.rgbMode || '--';
 
     // Update Mouse pill & popover
     const mousePillBatt = dockEl.querySelector('#mouse-pill-batt');
@@ -2221,9 +2231,9 @@ function updatePeripheralDockUI(container = document) {
         mousePillBatt.textContent = mouseState.battery !== null ? `${mouseState.battery}%` : '--%';
     }
     const mouseNameEl = dockEl.querySelector('#mouse-popover-name');
-    if (mouseNameEl) mouseNameEl.textContent = mouseState.name || 'ATK F1 Ultimate';
+    if (mouseNameEl) mouseNameEl.textContent = mouseState.name || (mouseState.isPaired ? 'ATK Mouse' : 'Mouse');
     const mouseBadgeEl = dockEl.querySelector('#mouse-popover-badge');
-    if (mouseBadgeEl) mouseBadgeEl.textContent = mouseState.isPaired ? 'Paired' : '2.4G 8K';
+    if (mouseBadgeEl) mouseBadgeEl.textContent = mouseState.isPaired ? 'Paired' : 'Unpaired';
 
     const mouseBtns = dockEl.querySelectorAll('#mouse-popover-configs .peripheral-config-btn');
     mouseBtns.forEach(btn => {
@@ -2236,9 +2246,9 @@ function updatePeripheralDockUI(container = document) {
     });
 
     const mouseStatDpi = dockEl.querySelector('#mouse-stat-dpi');
-    if (mouseStatDpi) mouseStatDpi.textContent = mouseState.dpi || '800 DPI';
+    if (mouseStatDpi) mouseStatDpi.textContent = mouseState.dpi || '--';
     const mouseStatRate = dockEl.querySelector('#mouse-stat-rate');
-    if (mouseStatRate) mouseStatRate.textContent = mouseState.pollingRate || '1000Hz';
+    if (mouseStatRate) mouseStatRate.textContent = mouseState.pollingRate || '--';
     const mouseStatBatt = dockEl.querySelector('#mouse-stat-batt');
     if (mouseStatBatt) {
         mouseStatBatt.textContent = mouseState.battery !== null
@@ -2246,17 +2256,17 @@ function updatePeripheralDockUI(container = document) {
             : '--';
     }
     const mouseStatSensor = dockEl.querySelector('#mouse-stat-sensor');
-    if (mouseStatSensor) mouseStatSensor.textContent = mouseState.sensor || 'PAW3950 Ultra';
+    if (mouseStatSensor) mouseStatSensor.textContent = mouseState.sensor || '--';
     const mouseStatStage = dockEl.querySelector('#mouse-stat-stage');
-    if (mouseStatStage) mouseStatStage.textContent = mouseState.stage || 'Stage 2 / 5';
+    if (mouseStatStage) mouseStatStage.textContent = mouseState.stage || '--';
     const mouseStatDebounce = dockEl.querySelector('#mouse-stat-debounce');
-    if (mouseStatDebounce) mouseStatDebounce.textContent = mouseState.debounce || '1ms';
+    if (mouseStatDebounce) mouseStatDebounce.textContent = mouseState.debounce || '--';
     const mouseStatMotionSync = dockEl.querySelector('#mouse-stat-motionsync');
-    if (mouseStatMotionSync) mouseStatMotionSync.textContent = mouseState.motionSync !== null ? (mouseState.motionSync ? 'On' : 'Off') : 'On';
+    if (mouseStatMotionSync) mouseStatMotionSync.textContent = mouseState.motionSync !== null ? (mouseState.motionSync ? 'On' : 'Off') : '--';
     const mouseStatFirmware = dockEl.querySelector('#mouse-stat-firmware');
-    if (mouseStatFirmware) mouseStatFirmware.textContent = mouseState.firmware || 'v1.12';
+    if (mouseStatFirmware) mouseStatFirmware.textContent = mouseState.firmware || '--';
     const mouseStatLink = dockEl.querySelector('#mouse-stat-link');
-    if (mouseStatLink) mouseStatLink.textContent = mouseState.connection || '2.4G 8K Dongle';
+    if (mouseStatLink) mouseStatLink.textContent = mouseState.connection || '--';
 }
 
 function attachPeripheralDockListeners(container = document) {
