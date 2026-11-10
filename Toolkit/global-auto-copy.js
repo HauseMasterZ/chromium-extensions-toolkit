@@ -387,6 +387,7 @@ function getSelectedText(target) {
                 return target.value.substring(start, end).trim();
             }
         } catch {}
+        return '';
     }
     return window.getSelection()?.toString()?.trim() || '';
 }
