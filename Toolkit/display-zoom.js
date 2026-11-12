@@ -680,9 +680,19 @@
       return;
     }
 
-    // Fast-path: check in-memory cache to prevent redundant setZoom IPC calls
+    // If not forced and applied zoom is cached, verify ground truth zoom to prevent false-negative stalls
     if (!options.force && appliedTabZoomCache.get(tabId) === targetZoom) {
-      return;
+      try {
+        const [currentZoom, currentSettings] = await Promise.all([
+          chrome.tabs.getZoom(tabId),
+          chrome.tabs.getZoomSettings(tabId)
+        ]);
+        if (Math.abs(currentZoom - targetZoom) <= 0.005 && currentSettings.scope === 'per-tab') {
+          return;
+        }
+      } catch {
+        return;
+      }
     }
 
     try {
@@ -893,6 +903,18 @@
         return;
       }
 
+      // If zoomSettings.scope !== 'per-tab', this is an automated Chromium navigation or origin reset.
+      // In Chromium, users cannot set scope to 'per-origin' through the UI. Document navigation and origin resets
+      // always reset scope to 'per-origin'. This is NEVER a manual user zoom.
+      if (zoomSettings.scope !== 'per-tab') {
+        tabUserManualZoom.delete(tabId);
+        if (!isInitialized) pendingPurgedTabs.add(tabId);
+        persistTabUserManualZoom();
+        appliedTabZoomCache.delete(tabId);
+        applyDisplayZoom(tabId, tab.windowId, effectiveUrl, { force: true });
+        return;
+      }
+
       // If tab already has this exact manual zoom recorded
       if (tabUserManualZoom.has(tabId) && Math.abs(newZoomFactor - tabUserManualZoom.get(tabId)) <= 0.005 && zoomSettings.scope === 'per-tab') {
         return;
@@ -919,26 +941,13 @@
       }
 
       // Manual user zoom on active completed tab:
-      // Cancel pending automated retries and record user-selected zoom for this session
+      // Scope is strictly 'per-tab' and user altered zoom via Ctrl+Plus/Minus or Ctrl+Wheel
       appliedTabZoomCache.delete(tabId);
       pendingPurgedTabs.delete(tabId);
       tabUserManualZoom.set(tabId, newZoomFactor);
       persistTabUserManualZoom();
       if (effectiveUrl) {
         tabLastUrl.set(tabId, getUrlWithoutHash(effectiveUrl));
-      }
-
-      // Ensure per-tab scope so manual zoom does not leak across tabs of the same origin
-      if (zoomSettings.scope !== 'per-tab') {
-        markProgrammaticZoomStart(tabId);
-        try {
-          await chrome.tabs.setZoomSettings(tabId, {
-            mode: 'automatic',
-            scope: 'per-tab'
-          });
-        } catch {} finally {
-          markProgrammaticZoomEnd(tabId);
-        }
       }
     } catch {}
   });
@@ -1043,6 +1052,9 @@
         if (!isDefaultZoomEnabled && wasEnabled) {
           await resetAllTabsToNative();
         } else if (isDefaultZoomEnabled && !wasEnabled) {
+          tabUserManualZoom.clear();
+          appliedTabZoomCache.clear();
+          persistTabUserManualZoom();
           reapply = true;
         }
       }
@@ -1050,34 +1062,19 @@
         const oldCfg = displaysZoomConfig || {};
         displaysZoomConfig = changes.displaysZoomConfig.newValue || {};
 
-        // If any display transitioned from an overridden zoom level to default, reset its tabs to native
-        if (allDisplays && allDisplays.length > 0) {
-          for (const d of allDisplays) {
-            const oldVal = getZoomValFromConfig(oldCfg, d);
-            const newVal = getZoomValFromConfig(displaysZoomConfig, d);
-            if (oldVal !== newVal) {
-              if (oldVal !== null && newVal === null) {
-                await resetTabsOnDisplayToNative(d);
-              } else {
-                try {
-                  const windows = await chrome.windows.getAll();
-                  for (const win of windows) {
-                    if (win.state === 'minimized' || (typeof win.left === 'number' && win.left < -10000)) continue;
-                    const disp = getDisplayForWindow(win);
-                    if (disp && (disp.id === d.id || (disp.windowsDisplayNumber && disp.windowsDisplayNumber === d.windowsDisplayNumber))) {
-                      const tabs = await chrome.tabs.query({ windowId: win.id });
-                      for (const t of tabs) {
-                        tabUserManualZoom.delete(t.id);
-                        appliedTabZoomCache.delete(t.id);
-                      }
-                      persistTabUserManualZoom();
-                    }
-                  }
-                } catch {}
-              }
+        // Invalidate manual overrides and cached zoom for all tabs across open windows so new settings apply immediately
+        try {
+          const windows = await chrome.windows.getAll();
+          for (const win of windows) {
+            if (win.state === 'minimized' || (typeof win.left === 'number' && win.left < -10000)) continue;
+            const tabs = await chrome.tabs.query({ windowId: win.id });
+            for (const t of tabs) {
+              tabUserManualZoom.delete(t.id);
+              appliedTabZoomCache.delete(t.id);
             }
           }
-        }
+          persistTabUserManualZoom();
+        } catch {}
         reapply = true;
       }
       if ('cachedDisplays' in changes) {
@@ -1088,6 +1085,12 @@
 
       if (reapply && isDefaultZoomEnabled) {
         await syncAllActiveTabs();
+        try {
+          const windows = await chrome.windows.getAll();
+          for (const win of windows) {
+            if (win.id) await syncWindowAllTabs(win.id);
+          }
+        } catch {}
       }
     } else if (area === 'session') {
       if ('latest_telemetry' in changes && changes.latest_telemetry.newValue) {
@@ -1110,6 +1113,31 @@
           }
         }
       }
+    }
+  });
+
+  // Runtime message listener for instant user gesture synchronization
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg?.action === 'syncDisplayZoom') {
+      (async () => {
+        try {
+          await ensureInitialized();
+          tabUserManualZoom.clear();
+          appliedTabZoomCache.clear();
+          persistTabUserManualZoom();
+          if (isDefaultZoomEnabled) {
+            await syncAllActiveTabs();
+            const windows = await chrome.windows.getAll().catch(() => []);
+            for (const win of windows) {
+              if (win.id) await syncWindowAllTabs(win.id);
+            }
+          }
+        } catch {}
+      })();
+      if (sendResponse) {
+        sendResponse({ ok: true });
+      }
+      return false;
     }
   });
 })();
