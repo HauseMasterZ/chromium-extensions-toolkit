@@ -288,7 +288,11 @@
             cfg[`#${displayNum}`] = storedVal;
             cfg[displayNum] = storedVal;
           }
-          chrome.storage.local.set({ displaysZoomConfig: cfg });
+          chrome.storage.local.set({ displaysZoomConfig: cfg }, () => {
+            chrome.runtime.sendMessage({ action: 'syncDisplayZoom' }, () => {
+              if (chrome.runtime.lastError) return;
+            });
+          });
         });
       });
 
@@ -509,7 +513,11 @@
       toggleDefaultZoom.checked = isZoomEnabled;
       toggleDefaultZoom.addEventListener('change', (e) => {
         const enabled = e.target.checked;
-        chrome.storage.local.set({ featureDefaultZoom: enabled });
+        chrome.storage.local.set({ featureDefaultZoom: enabled }, () => {
+          chrome.runtime.sendMessage({ action: 'syncDisplayZoom' }, () => {
+            if (chrome.runtime.lastError) return;
+          });
+        });
         if (displaysContainer) {
           displaysContainer.style.opacity = enabled ? '1' : '0.4';
           const selects = displaysContainer.querySelectorAll('.display-zoom-select');
