@@ -1636,9 +1636,6 @@ const ATK_RATE_MAP = {
     8: '125Hz'
 };
 
-const ATK_HID_COMMAND_TIMEOUT_MS = 3000;
-const ATK_HID_MAX_RETRIES = 3;
-
 function calculateAtkChecksum(reportId, data15) {
     let sum = reportId;
     for (let i = 0; i < 15; i++) {
@@ -1663,62 +1660,52 @@ function buildAtkPacket(commandId, address = 0, dataLen = 0, payloadBytes = null
     return pkt;
 }
 
-async function sendAtkHidCommand(device, commandId, address = 0, dataLen = 0, payloadBytes = null, timeoutMs = ATK_HID_COMMAND_TIMEOUT_MS) {
-    if (!device || !device.opened) {
-        throw new Error('Device not open');
-    }
-
-    const packet = buildAtkPacket(commandId, address, dataLen, payloadBytes);
-    let lastError = null;
-
-    for (let attempt = 0; attempt <= ATK_HID_MAX_RETRIES; attempt++) {
-        try {
-            return await new Promise((resolve, reject) => {
-                let isSettled = false;
-                const timer = setTimeout(() => {
-                    cleanup();
-                    if (!isSettled) {
-                        isSettled = true;
-                        reject(new Error(`Command ${commandId} timeout (${timeoutMs}ms)`));
-                    }
-                }, timeoutMs);
-
-                function onReport(event) {
-                    if (event.reportId !== 8 && event.reportId !== 0 && event.reportId !== undefined) return;
-                    const data = event.data;
-                    if (!data || data.byteLength < 6) return;
-                    if (data.getUint8(0) === commandId) {
-                        cleanup();
-                        if (!isSettled) {
-                            isSettled = true;
-                            resolve(data);
-                        }
-                    }
-                }
-
-                function cleanup() {
-                    clearTimeout(timer);
-                    try {
-                        device.removeEventListener('inputreport', onReport);
-                    } catch {}
-                }
-
-                device.addEventListener('inputreport', onReport);
-
-                device.sendReport(8, packet).catch(err => {
-                    cleanup();
-                    if (!isSettled) {
-                        isSettled = true;
-                        reject(err);
-                    }
-                });
-            });
-        } catch (err) {
-            lastError = err;
+function sendAtkHidCommand(device, commandId, address = 0, dataLen = 0, payloadBytes = null, timeoutMs = 800) {
+    return new Promise((resolve, reject) => {
+        if (!device || !device.opened) {
+            return reject(new Error('Device not open'));
         }
-    }
 
-    throw lastError || new Error(`Command ${commandId} failed after ${ATK_HID_MAX_RETRIES} retries`);
+        let isSettled = false;
+        const timer = setTimeout(() => {
+            cleanup();
+            if (!isSettled) {
+                isSettled = true;
+                reject(new Error(`Command ${commandId} timeout (${timeoutMs}ms)`));
+            }
+        }, timeoutMs);
+
+        function onReport(event) {
+            if (event.reportId !== 8) return;
+            const data = event.data;
+            if (!data || data.byteLength < 6) return;
+            if (data.getUint8(0) === commandId) {
+                cleanup();
+                if (!isSettled) {
+                    isSettled = true;
+                    resolve(data);
+                }
+            }
+        }
+
+        function cleanup() {
+            clearTimeout(timer);
+            try {
+                device.removeEventListener('inputreport', onReport);
+            } catch {}
+        }
+
+        device.addEventListener('inputreport', onReport);
+
+        const packet = buildAtkPacket(commandId, address, dataLen, payloadBytes);
+        device.sendReport(8, packet).catch(err => {
+            cleanup();
+            if (!isSettled) {
+                isSettled = true;
+                reject(err);
+            }
+        });
+    });
 }
 
 function decodeAtkDpi(xDpi, yDpi, dpiEx, sensor = 'PAW3955') {
@@ -1768,7 +1755,7 @@ async function fetchAtkDpi(device, activeStage, sensor) {
     if (isPaw3955) {
         try {
             const dpiAddr = 6912 + activeStage * 6;
-            const dpiResp = await sendAtkHidCommand(device, 8, dpiAddr, 6, null);
+            const dpiResp = await sendAtkHidCommand(device, 8, dpiAddr, 6, null, 150);
             if (dpiResp && dpiResp.byteLength >= 11) {
                 const t = dpiResp.getUint8(5);
                 const a = dpiResp.getUint8(6);
@@ -1794,7 +1781,7 @@ async function fetchAtkDpi(device, activeStage, sensor) {
     // Standard/Classic EEPROM address: 12 + Math.floor(activeStage / 2) * 8
     try {
         const dpiEepromAddr = 12 + Math.floor(activeStage / 2) * 8;
-        const dpiResp = await sendAtkHidCommand(device, 8, dpiEepromAddr, 8, null);
+        const dpiResp = await sendAtkHidCommand(device, 8, dpiEepromAddr, 8, null, 150);
         if (dpiResp && dpiResp.byteLength >= 13) {
             const stageOffset = (activeStage % 2) * 4;
             const xDpi = dpiResp.getUint8(5 + stageOffset);
@@ -1883,37 +1870,20 @@ async function queryAtkMouseState(device, force = false) {
             await device.open();
         }
 
-        // 0. Wireless Link Status Check (cmd: 3)
-        try {
-            const onlineResp = await sendAtkHidCommand(device, 3, 0, 0, null);
-            if (onlineResp && onlineResp.byteLength >= 6) {
-                const isOnline = onlineResp.getUint8(5) === 1;
-                if (!isOnline) {
-                    mouseState.connection = '2.4G Wireless (Sleeping)';
-                } else {
-                    mouseState.connection = '2.4G Wireless';
-                }
-            }
-        } catch (e) {
-            console.debug('[CToolkit] Online check skipped or timed out:', e);
-        }
-
         // 1. Active Config (cmd: 14)
         try {
-            const cfgResp = await sendAtkHidCommand(device, 14, 0, 0, null);
+            const cfgResp = await sendAtkHidCommand(device, 14, 0, 0, null, 150);
             if (cfgResp && cfgResp.byteLength >= 6) {
                 if (pendingTargetConfig === null) {
                     mouseState.config = cfgResp.getUint8(5);
                     try { localStorage.setItem('atkMouseConfig', String(mouseState.config)); } catch {}
                 }
             }
-        } catch (e) {
-            console.warn('[CToolkit] Mouse config query failed:', e);
-        }
+        } catch {}
 
         // 2. Model & Sensor via CID/MID (cmd: 16)
         try {
-            const cidResp = await sendAtkHidCommand(device, 16, 0, 0, null);
+            const cidResp = await sendAtkHidCommand(device, 16, 0, 0, null, 150);
             if (cidResp && cidResp.byteLength >= 7) {
                 const cid = cidResp.getUint8(5);
                 const mid = cidResp.getUint8(6);
@@ -1921,9 +1891,7 @@ async function queryAtkMouseState(device, force = false) {
                 mouseState.name = ATK_MOUSE_NAMES[key] || device.productName || 'ATK Wireless Mouse';
                 mouseState.sensor = ATK_SENSOR_MAP[key] || 'PAW3955';
             }
-        } catch (e) {
-            console.warn('[CToolkit] Mouse CID/MID query failed:', e);
-        }
+        } catch {}
 
         if (!mouseState.name) {
             mouseState.name = device.productName || 'ATK Wireless Mouse';
@@ -1934,7 +1902,7 @@ async function queryAtkMouseState(device, force = false) {
 
         // 3. Battery Level & Voltage (cmd: 4)
         try {
-            const batResp = await sendAtkHidCommand(device, 4, 0, 0, null);
+            const batResp = await sendAtkHidCommand(device, 4, 0, 0, null, 150);
             if (batResp && batResp.byteLength >= 6) {
                 mouseState.battery = batResp.getUint8(5);
                 if (batResp.byteLength >= 9) {
@@ -1944,26 +1912,22 @@ async function queryAtkMouseState(device, force = false) {
                     }
                 }
             }
-        } catch (e) {
-            console.warn('[CToolkit] Mouse battery query failed:', e);
-        }
+        } catch {}
 
         // 4. Firmware Version (cmd: 18)
         try {
-            const verResp = await sendAtkHidCommand(device, 18, 0, 0, null);
+            const verResp = await sendAtkHidCommand(device, 18, 0, 0, null, 150);
             if (verResp && verResp.byteLength >= 7) {
                 const major = verResp.getUint8(5);
                 const minor = verResp.getUint8(6);
                 mouseState.firmware = `v${major}.${minor.toString(16).padStart(2, '0')}`;
             }
-        } catch (e) {
-            console.warn('[CToolkit] Mouse version query failed:', e);
-        }
+        } catch {}
 
         // 5. Polling Rate & Active DPI Stage from EEPROM addr 0 (cmd: 8)
         let activeStage = 0;
         try {
-            const rateResp = await sendAtkHidCommand(device, 8, 0, 10, null);
+            const rateResp = await sendAtkHidCommand(device, 8, 0, 10, null, 150);
             if (rateResp && rateResp.byteLength >= 10) {
                 const rateCode = rateResp.getUint8(5);
                 mouseState.pollingRate = ATK_RATE_MAP[rateCode] || `${rateCode}Hz`;
@@ -1971,20 +1935,16 @@ async function queryAtkMouseState(device, force = false) {
                 const maxDpi = rateResp.getUint8(7);
                 mouseState.stage = `Stage ${activeStage + 1} / ${maxDpi}`;
             }
-        } catch (e) {
-            console.warn('[CToolkit] Mouse rate query failed:', e);
-        }
+        } catch {}
 
         // 6. Debounce & MotionSync from EEPROM addr 169 (cmd: 8)
         try {
-            const debResp = await sendAtkHidCommand(device, 8, 169, 10, null);
+            const debResp = await sendAtkHidCommand(device, 8, 169, 10, null, 150);
             if (debResp && debResp.byteLength >= 8) {
                 mouseState.debounce = `${debResp.getUint8(5)}ms`;
                 mouseState.motionSync = debResp.getUint8(7) === 1;
             }
-        } catch (e) {
-            console.warn('[CToolkit] Mouse debounce query failed:', e);
-        }
+        } catch {}
 
         // 7. Exact DPI for active stage from EEPROM (cmd: 8)
         try {
@@ -1992,9 +1952,7 @@ async function queryAtkMouseState(device, force = false) {
             if (dpiStr) {
                 mouseState.dpi = dpiStr;
             }
-        } catch (e) {
-            console.warn('[CToolkit] Mouse DPI query failed:', e);
-        }
+        } catch {}
 
         if (!mouseState.connection) {
             if (device.productName && (device.productName.includes('Dongle') || device.productName.includes('Receiver'))) {
@@ -2191,7 +2149,7 @@ async function switchAtkConfig(targetConfig) {
         // Refresh polling rate, stage & DPI for the newly switched profile (cmd: 8)
         let activeStage = 0;
         try {
-            const rateResp = await sendAtkHidCommand(pairedAtkDevice, 8, 0, 10, null);
+            const rateResp = await sendAtkHidCommand(pairedAtkDevice, 8, 0, 10, null, 200);
             if (rateResp && rateResp.byteLength >= 10) {
                 const rateCode = rateResp.getUint8(5);
                 mouseState.pollingRate = ATK_RATE_MAP[rateCode] || `${rateCode}Hz`;
@@ -2208,7 +2166,7 @@ async function switchAtkConfig(targetConfig) {
 
         // Debounce & MotionSync from EEPROM addr 169 (cmd: 8)
         try {
-            const debResp = await sendAtkHidCommand(pairedAtkDevice, 8, 169, 10, null);
+            const debResp = await sendAtkHidCommand(pairedAtkDevice, 8, 169, 10, null, 150);
             if (debResp && debResp.byteLength >= 8) {
                 mouseState.debounce = `${debResp.getUint8(5)}ms`;
                 mouseState.motionSync = debResp.getUint8(7) === 1;
