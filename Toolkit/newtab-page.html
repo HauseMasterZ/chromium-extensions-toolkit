@@ -302,6 +302,24 @@
         #mouse-controls, .mouse-controls {
             display: none !important;
         }
+        .blackout-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            width: 100vw;
+            height: 100vh;
+            background: #000;
+            z-index: 999999;
+            display: none;
+            cursor: default;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .blackout-overlay.active {
+            display: block;
+        }
     </style>
 </head>
 <body>
@@ -329,6 +347,7 @@
             <div id="panel-controls" style="display: none; font-size: 13px; font-weight: 400; color: #ccc;"></div>
         </div>
     </div>
+    <div id="blackout-overlay" class="blackout-overlay" aria-hidden="true"></div>
     <script src="newtab-script.js"></script>
 </body>
 </html>

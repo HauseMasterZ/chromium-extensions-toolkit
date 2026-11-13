@@ -1462,13 +1462,97 @@ function setInfoState(state) {
     }
 }
 
+// Pitch Black Overlay & Telemetry Disable on Logo Right-Click
+let isBlackoutActive = false;
+let telemetryWasActiveBeforeBlackout = false;
+const blackoutOverlayEl = document.getElementById('blackout-overlay');
+
+function triggerBlackout() {
+    if (isBlackoutActive) return;
+    isBlackoutActive = true;
+    telemetryWasActiveBeforeBlackout = (infoState === 3);
+    if (telemetryWasActiveBeforeBlackout) {
+        setInfoState(2);
+    }
+    if (blackoutOverlayEl) {
+        blackoutOverlayEl.classList.add('active');
+    }
+    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+        document.activeElement.blur();
+    }
+}
+
+function undoBlackout() {
+    if (!isBlackoutActive) return;
+    isBlackoutActive = false;
+    if (blackoutOverlayEl) {
+        blackoutOverlayEl.classList.remove('active');
+    }
+    if (telemetryWasActiveBeforeBlackout) {
+        setInfoState(3);
+    }
+    telemetryWasActiveBeforeBlackout = false;
+}
+
+if (blackoutOverlayEl) {
+    blackoutOverlayEl.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        undoBlackout();
+    });
+    blackoutOverlayEl.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        undoBlackout();
+    });
+}
+
 const logoEl = document.querySelector('.logo');
 if (logoEl) {
     logoEl.addEventListener('click', () => {
+        if (isBlackoutActive) return;
         const nextState = (infoState % 3) + 1;
         setInfoState(nextState);
     });
 }
+
+document.addEventListener('contextmenu', (e) => {
+    if (isBlackoutActive) {
+        e.preventDefault();
+        e.stopPropagation();
+        undoBlackout();
+        return;
+    }
+    if (logoEl) {
+        const rect = logoEl.getBoundingClientRect();
+        const isInsideLogo = (e.target === logoEl) || (
+            e.clientX >= rect.left &&
+            e.clientX <= rect.right &&
+            e.clientY >= rect.top &&
+            e.clientY <= rect.bottom
+        );
+        if (isInsideLogo) {
+            e.preventDefault();
+            e.stopPropagation();
+            triggerBlackout();
+        }
+    }
+}, true);
+
+document.addEventListener('click', (e) => {
+    if (isBlackoutActive) {
+        e.preventDefault();
+        e.stopPropagation();
+        undoBlackout();
+    }
+}, true);
+
+document.addEventListener('keydown', (e) => {
+    if (isBlackoutActive && e.key === 'Escape') {
+        e.preventDefault();
+        undoBlackout();
+    }
+});
 
 // Pause/disconnect telemetry when tab is hidden or minimized; resume when visible
 document.addEventListener('visibilitychange', () => {
