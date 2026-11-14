@@ -1140,77 +1140,27 @@ function updateTelemetryCells(response) {
     setCell(telemetryCells.o4, `Page: ${response.pageUsed || 'N/A'}`);
 }
 
-function applyTelemetryData(response) {
-    if (!response || response.error) return;
-
-    if (response.cpuLoad !== undefined) {
-        latestTelemetry = response;
-    } else if (response.monitors) {
-        if (latestTelemetry) {
-            latestTelemetry = { ...latestTelemetry, ...response };
-        } else {
-            latestTelemetry = response;
-        }
-    }
-
-    if (response.hasProbed === true) {
-        hasMonitorProbeCompleted = true;
-        if (Array.isArray(response.monitors) && response.monitors.length > 0) {
-            latestMonitors = response.monitors.map(m => ({
-                ...m,
-                id: m.pnpId || m.id
-            }));
-        } else if (Array.isArray(response.monitors) && response.monitors.length === 0) {
-            latestMonitors = [];
-        }
-    } else if (Array.isArray(response.monitors) && response.monitors.length > 0) {
-        latestMonitors = response.monitors.map(m => ({
-            ...m,
-            id: m.pnpId || m.id
-        }));
-    }
-
-    ensureTelemetryTable();
-    if (latestTelemetry && latestTelemetry.cpuLoad !== undefined) {
-        updateTelemetryCells(latestTelemetry);
-    }
-    if (latestMonitors && latestMonitors.length > 0 && panelControlsEl) {
-        renderPanelControls(latestMonitors);
-    }
-
-    if (infoState === 3) {
-        checkAndSynchronizeStatsDisplay();
-    }
-}
-
-ensureTelemetryTable();
-
-// Instant hydration of empirical telemetry and monitor specs from session storage
-try {
-    if (chrome.storage?.session) {
-        chrome.storage.session.get('latest_telemetry', (res) => {
-            if (chrome.runtime.lastError) return;
-            if (res?.latest_telemetry) {
-                applyTelemetryData(res.latest_telemetry);
-            }
-        });
-        chrome.storage.onChanged.addListener((changes, area) => {
-            if (area === 'session' && changes.latest_telemetry?.newValue) {
-                applyTelemetryData(changes.latest_telemetry.newValue);
-            }
-        });
-    }
-} catch (e) {}
-
 function checkAndSynchronizeStatsDisplay() {
     if (isStatsSynchronized || infoState !== 3) return;
     const isHwReady = Boolean(latestTelemetry && latestTelemetry.cpuLoad !== undefined && latestTelemetry.cpuClock !== undefined);
     const isPanelReady = Boolean(hasMonitorProbeCompleted || (latestMonitors && latestMonitors.length > 0));
 
-    ensureTelemetryTable();
+    if (!isHwReady || !isPanelReady) {
+        if (hardwareEl && !hardwareEl.querySelector('table')) {
+            hardwareEl.textContent = 'Loading data...';
+            hardwareEl.style.display = 'block';
+        }
+        if (panelControlsEl) {
+            panelControlsEl.style.display = 'none';
+        }
+        return;
+    }
+
+    isStatsSynchronized = true;
 
     if (hardwareEl) {
-        if (isHwReady && latestTelemetry) {
+        ensureTelemetryTable();
+        if (latestTelemetry) {
             updateTelemetryCells(latestTelemetry);
         }
         hardwareEl.style.display = 'block';
@@ -1219,9 +1169,7 @@ function checkAndSynchronizeStatsDisplay() {
     if (panelControlsEl) {
         if (latestMonitors && latestMonitors.length > 0) {
             renderPanelControls(latestMonitors);
-            panelControlsEl.style.opacity = '1';
-            panelControlsEl.style.display = 'block';
-        } else if (hasMonitorProbeCompleted) {
+        } else {
             currentPanelTopologySignature = null;
             panelElementsMap.clear();
             panelGainRows = [];
@@ -1229,25 +1177,19 @@ function checkAndSynchronizeStatsDisplay() {
             lastUserModeKey = '';
             panelControlsEl.style.marginTop = '6px';
             panelControlsEl.textContent = 'No DDC/CI compatible monitors detected';
-            panelControlsEl.style.opacity = '1';
-            panelControlsEl.style.display = 'block';
-        } else {
-            panelControlsEl.style.display = 'none';
         }
+        panelControlsEl.style.opacity = '1';
+        panelControlsEl.style.display = 'block';
     }
 
     renderMouseControls();
-
-    if (isHwReady && isPanelReady) {
-        isStatsSynchronized = true;
-    }
 }
 
 function renderTelemetry(response) {
     if (!response || response.error) {
         if (infoState === 3) {
             const msg = (response && response.message) ? response.message : 'Host Offline';
-            if (hardwareEl && !hardwareEl.querySelector('table')) {
+            if (hardwareEl) {
                 hardwareEl.textContent = `Host Offline (${msg})`;
                 telemetryCells = null;
             }
@@ -1270,6 +1212,8 @@ function renderTelemetry(response) {
             latestTelemetry = response;
         }
     }
+
+    if (infoState !== 3) return;
 
     if (waitingForProbeId > 0) {
         const respProbeId = Number(response.probeId || 0);
@@ -1298,8 +1242,6 @@ function renderTelemetry(response) {
             id: m.pnpId || m.id
         }));
     }
-
-    if (infoState !== 3) return;
 
     if (!isStatsSynchronized) {
         checkAndSynchronizeStatsDisplay();
@@ -1371,9 +1313,16 @@ function startTelemetryStream() {
     }
     if (telemetryPort || document.hidden || infoState !== 3) return;
 
-    ensureTelemetryTable();
-    if (hardwareEl) {
-        hardwareEl.style.display = 'block';
+    if (!isStatsSynchronized) {
+        if (hardwareEl) {
+            hardwareEl.style.display = 'block';
+            hardwareEl.textContent = 'Loading data...';
+            telemetryCells = null;
+        }
+        if (panelControlsEl) {
+            panelControlsEl.style.display = 'none';
+            panelControlsEl.innerHTML = '';
+        }
     }
 
     try {
@@ -1383,12 +1332,21 @@ function startTelemetryStream() {
             renderTelemetry(data);
         });
 
-        if (infoState === 3 && !hasMonitorProbeCompleted) {
+        if (infoState === 3) {
             requestEmpiricalMonitorProbe();
         }
 
         telemetryPort.onDisconnect.addListener(() => {
             telemetryPort = null;
+            isStatsSynchronized = false;
+            hasMonitorProbeCompleted = false;
+            latestTelemetry = null;
+            latestMonitors = [];
+            currentPanelTopologySignature = null;
+            panelElementsMap.clear();
+            panelGainRows = [];
+            panelGainCells = [];
+            lastUserModeKey = '';
             if (infoState === 3 && !document.hidden) {
                 if (telemetryReconnectTimer) clearTimeout(telemetryReconnectTimer);
                 telemetryReconnectTimer = setTimeout(() => {
@@ -1402,12 +1360,8 @@ function startTelemetryStream() {
     } catch (e) {
         telemetryPort = null;
         if (infoState === 3) {
-            if (hardwareEl && !hardwareEl.querySelector('table')) {
-                hardwareEl.textContent = 'Connection Error';
-            }
-            if (panelControlsEl && (!latestMonitors || latestMonitors.length === 0)) {
-                panelControlsEl.style.display = 'none';
-            }
+            if (hardwareEl) hardwareEl.textContent = 'Connection Error';
+            if (panelControlsEl) panelControlsEl.style.display = 'none';
         }
     }
 }
@@ -1427,6 +1381,16 @@ function stopTelemetryStream() {
         } catch (e) {}
         telemetryPort = null;
     }
+    isStatsSynchronized = false;
+    hasMonitorProbeCompleted = false;
+    waitingForProbeId = 0;
+    latestTelemetry = null;
+    latestMonitors = [];
+    currentPanelTopologySignature = null;
+    panelElementsMap.clear();
+    panelGainRows = [];
+    panelGainCells = [];
+    lastUserModeKey = '';
 }
 
 function setInfoState(state) {
@@ -1475,35 +1439,24 @@ function setInfoState(state) {
         checkAndQueryAtkMouseOnDemand(false);
         checkAndQueryKeyboardOnDemand(false);
 
-        // Immediate 0ms rendering of cached empirical telemetry and monitor spec
-        ensureTelemetryTable();
+        isStatsSynchronized = false;
+        hasMonitorProbeCompleted = false;
+        latestTelemetry = null;
+        latestMonitors = [];
+
         if (hardwareEl) {
-            if (latestTelemetry && latestTelemetry.cpuLoad !== undefined) {
-                updateTelemetryCells(latestTelemetry);
-            }
             hardwareEl.style.display = 'block';
+            hardwareEl.textContent = 'Loading data...';
+            telemetryCells = null;
         }
-
         if (panelControlsEl) {
-            if (latestMonitors && latestMonitors.length > 0) {
-                renderPanelControls(latestMonitors);
-                panelControlsEl.style.opacity = '1';
-                panelControlsEl.style.display = 'block';
-            } else if (hasMonitorProbeCompleted) {
-                panelControlsEl.style.marginTop = '6px';
-                panelControlsEl.textContent = 'No DDC/CI compatible monitors detected';
-                panelControlsEl.style.opacity = '1';
-                panelControlsEl.style.display = 'block';
-            }
+            panelControlsEl.style.display = 'none';
+            panelControlsEl.innerHTML = '';
         }
-
-        const isHwReady = Boolean(latestTelemetry && latestTelemetry.cpuLoad !== undefined && latestTelemetry.cpuClock !== undefined);
-        const isPanelReady = Boolean(hasMonitorProbeCompleted || (latestMonitors && latestMonitors.length > 0));
-        isStatsSynchronized = (isHwReady && isPanelReady);
 
         if (!telemetryPort) {
             startTelemetryStream();
-        } else if (!hasMonitorProbeCompleted) {
+        } else {
             requestEmpiricalMonitorProbe();
         }
     }
