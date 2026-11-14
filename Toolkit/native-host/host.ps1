@@ -2149,28 +2149,7 @@ public class MonitorController {
 }
 "@
         if (-not ([System.Management.Automation.PSTypeName]'MonitorController').Type) {
-            $dllPath = Join-Path $PSScriptRoot "MonitorController.dll"
-            $loaded = $false
-            if (Test-Path $dllPath) {
-                try {
-                    $hostFile = if ($PSCommandPath) { $PSCommandPath } else { $MyInvocation.MyCommand.Path }
-                    $hostTime = if ($hostFile -and (Test-Path $hostFile)) { (Get-Item $hostFile).LastWriteTimeUtc } else { [DateTime]::MinValue }
-                    $dllTime = (Get-Item $dllPath).LastWriteTimeUtc
-                    if ($dllTime -ge $hostTime) {
-                        [System.Reflection.Assembly]::LoadFrom($dllPath) | Out-Null
-                        $loaded = ([System.Management.Automation.PSTypeName]'MonitorController').Type -ne $null
-                    }
-                } catch {
-                    $loaded = $false
-                }
-            }
-            if (-not $loaded) {
-                try {
-                    Add-Type -TypeDefinition $csharpDef -OutputAssembly $dllPath -ErrorAction Stop
-                } catch {
-                    Add-Type -TypeDefinition $csharpDef -ErrorAction SilentlyContinue
-                }
-            }
+            Add-Type -TypeDefinition $csharpDef -ErrorAction SilentlyContinue
         }
     }
 
