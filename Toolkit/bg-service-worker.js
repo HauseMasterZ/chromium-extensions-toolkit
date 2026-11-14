@@ -1846,36 +1846,21 @@ chrome.runtime.onConnect.addListener((clientPort) => {
   telemetryClients.add(clientPort);
 
   // Send latest live empirical telemetry frame immediately if available
-  const dispatchLatest = (data) => {
-    if (data && !data.error && (data.cpuLoad !== undefined || (Array.isArray(data.monitors) && data.monitors.length > 0))) {
-      try {
-        clientPort.postMessage(data);
-      } catch (e) {}
-    }
-  };
-
   if (lastTelemetryData && lastTelemetryData.monitors && lastTelemetryData.cpuLoad !== undefined) {
-    dispatchLatest(lastTelemetryData);
-  } else if (chrome.storage?.session) {
+    try {
+      clientPort.postMessage(lastTelemetryData);
+    } catch (e) {}
+  } else if (!lastTelemetryData && chrome.storage?.session) {
     chrome.storage.session.get('latest_telemetry', (res) => {
-      if (chrome.runtime.lastError) return;
-      if (res?.latest_telemetry) {
-        if (!lastTelemetryData) {
-          lastTelemetryData = res.latest_telemetry;
-        } else {
-          lastTelemetryData = {
-            ...res.latest_telemetry,
-            ...lastTelemetryData,
-            monitors: (lastTelemetryData.monitors && Array.isArray(lastTelemetryData.monitors))
-              ? lastTelemetryData.monitors
-              : res.latest_telemetry.monitors
-          };
-        }
+      if (res?.latest_telemetry && !lastTelemetryData) {
+        lastTelemetryData = res.latest_telemetry;
       }
-      dispatchLatest(lastTelemetryData);
+      if (lastTelemetryData && lastTelemetryData.monitors && lastTelemetryData.cpuLoad !== undefined) {
+        try {
+          clientPort.postMessage(lastTelemetryData);
+        } catch (e) {}
+      }
     });
-  } else if (lastTelemetryData) {
-    dispatchLatest(lastTelemetryData);
   }
 
   // Start single native host instance if not already running
@@ -1956,10 +1941,8 @@ function startNativeTelemetry() {
         }
       }
 
-      if (frameToSend && (frameToSend.cpuLoad !== undefined || (frameToSend.monitors && Array.isArray(frameToSend.monitors)))) {
-        const currentSig = (frameToSend.monitors && Array.isArray(frameToSend.monitors))
-          ? frameToSend.monitors.map(m => `${m.id || ''}:${m.windowsDisplayNumber || ''}:${m.width}x${m.height}`).join('|')
-          : '';
+      if (frameToSend && frameToSend.monitors && Array.isArray(frameToSend.monitors)) {
+        const currentSig = frameToSend.monitors.map(m => `${m.id || ''}:${m.windowsDisplayNumber || ''}:${m.width}x${m.height}`).join('|');
         const sigChanged = (lastMonitorConfigSig === null || currentSig !== lastMonitorConfigSig);
         const now = Date.now();
         const elapsed = now - lastTelemetrySessionWriteTime;
@@ -1981,7 +1964,7 @@ function startNativeTelemetry() {
               try {
                 chrome.storage.session.set({ latest_telemetry: lastTelemetryData }).catch(() => {});
                 lastTelemetrySessionWriteTime = Date.now();
-                if (lastTelemetryData.monitors && Array.isArray(lastTelemetryData.monitors)) {
+                if (lastTelemetryData.monitors) {
                   lastMonitorConfigSig = lastTelemetryData.monitors.map(m => `${m.id || ''}:${m.windowsDisplayNumber || ''}:${m.width}x${m.height}`).join('|');
                 }
               } catch (e) {}
