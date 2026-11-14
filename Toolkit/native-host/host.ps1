@@ -1933,6 +1933,7 @@ public class MonitorController {
                         int probeId = ExtractJsonInt(json, "probeId", 0);
                         bool isRefresh = (action == "refresh_monitors");
                         RequestEmpiricalProbe(probeId, isRefresh);
+                        WakeSignal.Set();
                     }
                 }
             } catch {}
@@ -2441,9 +2442,10 @@ public class MonitorController {
 
 
         $warmupTicks++
-        # Adaptive Load Cadence: 200ms during initial warm-up, 800ms under gaming/load, 1800ms when idle on desktop
+        # Adaptive Load Cadence: 200ms during initial warm-up or active empirical probe, 800ms under gaming/load, 1800ms when idle on desktop
         $isIdle = ($cpuPower -le 18.0) -and ($gpuLoad -eq 0) -and ($rawGpuTemp -lt 52.0)
-        $sleepInterval = if ($warmupTicks -le 2) { 200 } elseif ($isIdle) { 1800 } else { 800 }
+        $isProbingActive = [MonitorController]::IsProbing -or ([MonitorController]::PendingProbeId -gt [MonitorController]::CompletedProbeId)
+        $sleepInterval = if ($isProbingActive) { 200 } elseif ($warmupTicks -le 2) { 200 } elseif ($isIdle) { 1800 } else { 800 }
         [MonitorController]::WakeSignal.WaitOne($sleepInterval) | Out-Null
     }
 }
