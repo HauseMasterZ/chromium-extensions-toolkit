@@ -1845,11 +1845,22 @@ chrome.runtime.onConnect.addListener((clientPort) => {
   cancelHostTeardown();
   telemetryClients.add(clientPort);
 
-  // Send latest live empirical telemetry frame immediately if available and native host active
-  if (nativeTelemetryPort && lastTelemetryData && lastTelemetryData.monitors && lastTelemetryData.cpuLoad !== undefined) {
+  // Send latest live empirical telemetry frame immediately if available
+  if (lastTelemetryData && lastTelemetryData.monitors && lastTelemetryData.cpuLoad !== undefined) {
     try {
       clientPort.postMessage(lastTelemetryData);
     } catch (e) {}
+  } else if (!lastTelemetryData && chrome.storage?.session) {
+    chrome.storage.session.get('latest_telemetry', (res) => {
+      if (res?.latest_telemetry && !lastTelemetryData) {
+        lastTelemetryData = res.latest_telemetry;
+      }
+      if (lastTelemetryData && lastTelemetryData.monitors && lastTelemetryData.cpuLoad !== undefined) {
+        try {
+          clientPort.postMessage(lastTelemetryData);
+        } catch (e) {}
+      }
+    });
   }
 
   // Start single native host instance if not already running
@@ -1880,9 +1891,7 @@ chrome.runtime.onConnect.addListener((clientPort) => {
         Array.isArray(lastTelemetryData.monitors) &&
         lastTelemetryData.cpuLoad !== undefined
       );
-      if (!isDataReady) {
-        stopNativeTelemetry();
-      } else {
+      if (isDataReady) {
         scheduleHostTeardown();
       }
     }
@@ -1971,9 +1980,7 @@ function startNativeTelemetry() {
           Array.isArray(lastTelemetryData.monitors) &&
           lastTelemetryData.cpuLoad !== undefined
         );
-        if (!isDataReady) {
-          stopNativeTelemetry();
-        } else {
+        if (isDataReady) {
           scheduleHostTeardown();
         }
       }
@@ -1982,7 +1989,6 @@ function startNativeTelemetry() {
     nativeTelemetryPort.onDisconnect.addListener(() => {
       const err = chrome.runtime.lastError ? chrome.runtime.lastError.message : 'Host Disconnected';
       nativeTelemetryPort = null;
-      lastTelemetryData = null;
       if (telemetrySessionTimer) {
         clearTimeout(telemetrySessionTimer);
         telemetrySessionTimer = null;
@@ -2026,13 +2032,15 @@ function stopNativeTelemetry() {
     } catch (e) {}
     nativeTelemetryPort = null;
   }
-  lastTelemetryData = null;
 }
 
 // Ensure latest_telemetry is hydrated on service worker startup
 (async () => {
   try {
     const sessionData = await chrome.storage?.session?.get('latest_telemetry').catch(() => ({}));
+    if (sessionData?.latest_telemetry) {
+      lastTelemetryData = sessionData.latest_telemetry;
+    }
     if (!sessionData?.latest_telemetry?.monitors && !nativeTelemetryPort) {
       startNativeTelemetry();
     }
