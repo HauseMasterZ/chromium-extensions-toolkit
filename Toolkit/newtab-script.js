@@ -1322,12 +1322,13 @@ function startTelemetryStream() {
     if (!isStatsSynchronized) {
         if (hardwareEl) {
             hardwareEl.style.display = 'block';
-            hardwareEl.textContent = 'Loading data...';
-            telemetryCells = null;
+            if (!hardwareEl.querySelector('table')) {
+                hardwareEl.textContent = 'Loading data...';
+                telemetryCells = null;
+            }
         }
         if (panelControlsEl) {
             panelControlsEl.style.display = 'none';
-            panelControlsEl.innerHTML = '';
         }
     }
 
@@ -1449,12 +1450,13 @@ function setInfoState(state) {
 
         if (hardwareEl) {
             hardwareEl.style.display = 'block';
-            hardwareEl.textContent = 'Loading data...';
-            telemetryCells = null;
+            if (!hardwareEl.querySelector('table')) {
+                hardwareEl.textContent = 'Loading data...';
+                telemetryCells = null;
+            }
         }
         if (panelControlsEl) {
             panelControlsEl.style.display = 'none';
-            panelControlsEl.innerHTML = '';
         }
 
         // Leading-edge immediate stream connection (0ms latency dispatch)
