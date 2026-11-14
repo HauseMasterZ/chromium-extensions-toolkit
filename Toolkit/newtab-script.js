@@ -1144,7 +1144,11 @@ function applyTelemetryData(response) {
     if (!response || response.error) return;
 
     if (response.cpuLoad !== undefined) {
-        latestTelemetry = response;
+        if (latestTelemetry && latestTelemetry.monitors && !response.monitors) {
+            latestTelemetry = { ...latestTelemetry, ...response, monitors: latestTelemetry.monitors };
+        } else {
+            latestTelemetry = response;
+        }
     } else if (response.monitors) {
         if (latestTelemetry) {
             latestTelemetry = { ...latestTelemetry, ...response };
@@ -1262,7 +1266,11 @@ function renderTelemetry(response) {
     }
 
     if (response.cpuLoad !== undefined) {
-        latestTelemetry = response;
+        if (latestTelemetry && latestTelemetry.monitors && !response.monitors) {
+            latestTelemetry = { ...latestTelemetry, ...response, monitors: latestTelemetry.monitors };
+        } else {
+            latestTelemetry = response;
+        }
     } else if (response.monitors) {
         if (latestTelemetry) {
             latestTelemetry = { ...latestTelemetry, ...response };
@@ -1303,7 +1311,6 @@ function renderTelemetry(response) {
 
     if (!isStatsSynchronized) {
         checkAndSynchronizeStatsDisplay();
-        return;
     }
 
     if (latestMonitors && latestMonitors.length > 0) {
@@ -1471,7 +1478,6 @@ function setInfoState(state) {
             mouseControlsEl.style.display = 'none';
             mouseControlsEl.innerHTML = '';
         }
-        renderMouseControls();
         checkAndQueryAtkMouseOnDemand(false);
         checkAndQueryKeyboardOnDemand(false);
 
@@ -1496,6 +1502,8 @@ function setInfoState(state) {
                 panelControlsEl.style.display = 'block';
             }
         }
+
+        renderMouseControls();
 
         const isHwReady = Boolean(latestTelemetry && latestTelemetry.cpuLoad !== undefined && latestTelemetry.cpuClock !== undefined);
         const isPanelReady = Boolean(hasMonitorProbeCompleted || (latestMonitors && latestMonitors.length > 0));
@@ -1609,7 +1617,7 @@ document.addEventListener('visibilitychange', () => {
         updateTime();
         if (infoState === 3 && !telemetryPort) {
             startTelemetryStream();
-        } else if (infoState === 3) {
+        } else if (infoState === 3 && !hasMonitorProbeCompleted) {
             requestEmpiricalMonitorProbe();
         }
     }
@@ -1938,7 +1946,7 @@ function isAtkCommDevice(d) {
 }
 
 async function getPairedAtkCommDevice() {
-    if (typeof navigator === 'undefined' || !navigator.hid) return null;
+    if (infoState !== 3 || typeof navigator === 'undefined' || !navigator.hid) return null;
     try {
         const devices = await navigator.hid.getDevices();
         for (const dev of devices) {
