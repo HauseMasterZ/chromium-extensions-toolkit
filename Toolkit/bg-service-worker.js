@@ -1843,7 +1843,7 @@ chrome.runtime.onConnect.addListener((clientPort) => {
   telemetryClients.add(clientPort);
 
   // Push live empirical telemetry frame immediately if available and native host active
-  if (nativeTelemetryPort && lastTelemetryData && lastTelemetryData.monitors && lastTelemetryData.hasProbed && lastTelemetryData.cpuLoad !== undefined) {
+  if (nativeTelemetryPort && lastTelemetryData && lastTelemetryData.cpuLoad !== undefined) {
     try {
       clientPort.postMessage(lastTelemetryData);
     } catch (e) {}
@@ -1871,17 +1871,7 @@ chrome.runtime.onConnect.addListener((clientPort) => {
   clientPort.onDisconnect.addListener(() => {
     telemetryClients.delete(clientPort);
     if (telemetryClients.size === 0) {
-      const isDataReady = Boolean(
-        lastTelemetryData &&
-        lastTelemetryData.hasProbed &&
-        Array.isArray(lastTelemetryData.monitors) &&
-        lastTelemetryData.cpuLoad !== undefined
-      );
-      if (!isDataReady) {
-        stopNativeTelemetry();
-      } else {
-        scheduleHostTeardown();
-      }
+      scheduleHostTeardown();
     }
   });
 });
@@ -1919,17 +1909,7 @@ function startNativeTelemetry() {
       }
 
       if (telemetryClients.size === 0) {
-        const isDataReady = Boolean(
-          lastTelemetryData &&
-          lastTelemetryData.hasProbed &&
-          Array.isArray(lastTelemetryData.monitors) &&
-          lastTelemetryData.cpuLoad !== undefined
-        );
-        if (!isDataReady) {
-          stopNativeTelemetry();
-        } else {
-          scheduleHostTeardown();
-        }
+        scheduleHostTeardown();
       }
     });
 

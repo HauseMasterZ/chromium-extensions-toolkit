@@ -1147,11 +1147,20 @@ function checkAndSynchronizeStatsDisplay() {
     const isHwReady = Boolean(latestTelemetry && latestTelemetry.cpuLoad !== undefined && latestTelemetry.cpuClock !== undefined);
     const isPanelReady = Boolean(hasMonitorProbeCompleted || (latestMonitors && latestMonitors.length > 0));
 
-    if (!isHwReady || !isPanelReady) {
-        if (hardwareEl && !hardwareEl.querySelector('table')) {
+    if (hardwareEl) {
+        if (isHwReady) {
+            ensureTelemetryTable();
+            if (latestTelemetry) {
+                updateTelemetryCells(latestTelemetry);
+            }
+            hardwareEl.style.display = 'block';
+        } else if (!hardwareEl.querySelector('table')) {
             hardwareEl.textContent = 'Loading data...';
             hardwareEl.style.display = 'block';
         }
+    }
+
+    if (!isPanelReady) {
         if (panelControlsEl) {
             panelControlsEl.style.display = 'none';
         }
@@ -1160,18 +1169,12 @@ function checkAndSynchronizeStatsDisplay() {
 
     isStatsSynchronized = true;
 
-    if (hardwareEl) {
-        ensureTelemetryTable();
-        if (latestTelemetry) {
-            updateTelemetryCells(latestTelemetry);
-        }
-        hardwareEl.style.display = 'block';
-    }
-
     if (panelControlsEl) {
         if (latestMonitors && latestMonitors.length > 0) {
             renderPanelControls(latestMonitors);
-        } else {
+            panelControlsEl.style.opacity = '1';
+            panelControlsEl.style.display = 'block';
+        } else if (hasMonitorProbeCompleted && latestMonitors.length === 0) {
             currentPanelTopologySignature = null;
             panelElementsMap.clear();
             panelGainRows = [];
@@ -1179,9 +1182,11 @@ function checkAndSynchronizeStatsDisplay() {
             lastUserModeKey = '';
             panelControlsEl.style.marginTop = '6px';
             panelControlsEl.textContent = 'No DDC/CI compatible monitors detected';
+            panelControlsEl.style.opacity = '1';
+            panelControlsEl.style.display = 'block';
+        } else {
+            panelControlsEl.style.display = 'none';
         }
-        panelControlsEl.style.opacity = '1';
-        panelControlsEl.style.display = 'block';
     }
 
     renderMouseControls();
@@ -1238,33 +1243,37 @@ function renderTelemetry(response) {
         } else if (Array.isArray(response.monitors) && response.monitors.length === 0) {
             latestMonitors = [];
         }
+    } else if (Array.isArray(response.monitors) && response.monitors.length > 0) {
+        latestMonitors = response.monitors.map(m => ({
+            ...m,
+            id: m.pnpId || m.id
+        }));
+    }
+
+    if (hardwareEl && response.cpuLoad !== undefined && response.cpuClock !== undefined) {
+        ensureTelemetryTable();
+        updateTelemetryCells(response);
+        hardwareEl.style.display = 'block';
     }
 
     if (!isStatsSynchronized) {
         checkAndSynchronizeStatsDisplay();
-        return;
-    }
-
-    if (latestMonitors && latestMonitors.length > 0) {
-        panelControlsEl.style.display = 'block';
-        renderPanelControls(latestMonitors);
-    } else if (hasMonitorProbeCompleted && latestMonitors.length === 0) {
-        currentPanelTopologySignature = null;
-        panelElementsMap.clear();
-        panelGainRows = [];
-        panelGainCells = [];
-        lastUserModeKey = '';
-        panelControlsEl.style.marginTop = '6px';
-        panelControlsEl.style.display = 'block';
-        panelControlsEl.textContent = 'No DDC/CI compatible monitors detected';
-    }
-
-    if (!hardwareEl) return;
-    ensureTelemetryTable();
-    if (!telemetryCells) return;
-
-    if (response.cpuLoad !== undefined && response.cpuClock !== undefined) {
-        updateTelemetryCells(response);
+    } else if (panelControlsEl) {
+        if (latestMonitors && latestMonitors.length > 0) {
+            panelControlsEl.style.display = 'block';
+            renderPanelControls(latestMonitors);
+        } else if ((response.hasProbed === true || hasMonitorProbeCompleted) && latestMonitors.length === 0) {
+            currentPanelTopologySignature = null;
+            panelElementsMap.clear();
+            panelGainRows = [];
+            panelGainCells = [];
+            lastUserModeKey = '';
+            panelControlsEl.style.marginTop = '6px';
+            panelControlsEl.style.display = 'block';
+            panelControlsEl.textContent = 'No DDC/CI compatible monitors detected';
+        } else {
+            panelControlsEl.style.display = 'none';
+        }
     }
 }
 
