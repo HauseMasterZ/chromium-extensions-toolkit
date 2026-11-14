@@ -1731,9 +1731,6 @@ let nativeTelemetryPort = null;
 const telemetryClients = new Set();
 let lastTelemetryData = null;
 let hostTeardownTimer = null;
-let lastTelemetrySessionWriteTime = 0;
-let lastMonitorConfigSig = null;
-let telemetrySessionTimer = null;
 
 function cancelHostTeardown() {
   if (hostTeardownTimer) {
@@ -1845,13 +1842,6 @@ chrome.runtime.onConnect.addListener((clientPort) => {
   cancelHostTeardown();
   telemetryClients.add(clientPort);
 
-  // Send latest live empirical telemetry frame immediately if available and native host active
-  if (nativeTelemetryPort && lastTelemetryData && lastTelemetryData.monitors && lastTelemetryData.cpuLoad !== undefined) {
-    try {
-      clientPort.postMessage(lastTelemetryData);
-    } catch (e) {}
-  }
-
   // Start single native host instance if not already running
   if (!nativeTelemetryPort) {
     startNativeTelemetry();
@@ -1909,58 +1899,15 @@ function startNativeTelemetry() {
 
     nativeTelemetryPort.onMessage.addListener((data) => {
       if (data && !data.error) {
-        if (data.monitors && data.hasProbed) {
-          lastTelemetryData = data;
-        } else if (lastTelemetryData) {
-          lastTelemetryData = {
-            ...data,
-            hasProbed: lastTelemetryData.hasProbed,
-            monitors: lastTelemetryData.monitors
-          };
-        } else {
-          lastTelemetryData = data;
-        }
+        lastTelemetryData = data;
       }
 
       // Live dispatches remain immediate at 0ms latency
-      const frameToSend = (lastTelemetryData && lastTelemetryData.monitors) ? lastTelemetryData : data;
       for (const client of telemetryClients) {
         try {
-          client.postMessage(frameToSend);
+          client.postMessage(data);
         } catch (e) {
           telemetryClients.delete(client);
-        }
-      }
-
-      if (frameToSend && frameToSend.monitors && Array.isArray(frameToSend.monitors)) {
-        const currentSig = frameToSend.monitors.map(m => `${m.id || ''}:${m.windowsDisplayNumber || ''}:${m.width}x${m.height}`).join('|');
-        const sigChanged = (lastMonitorConfigSig === null || currentSig !== lastMonitorConfigSig);
-        const now = Date.now();
-        const elapsed = now - lastTelemetrySessionWriteTime;
-
-        if (sigChanged || elapsed >= 2000) {
-          if (telemetrySessionTimer) {
-            clearTimeout(telemetrySessionTimer);
-            telemetrySessionTimer = null;
-          }
-          lastTelemetrySessionWriteTime = now;
-          lastMonitorConfigSig = currentSig;
-          try {
-            chrome.storage?.session?.set({ latest_telemetry: frameToSend }).catch(() => {});
-          } catch (e) {}
-        } else if (!telemetrySessionTimer) {
-          telemetrySessionTimer = setTimeout(() => {
-            telemetrySessionTimer = null;
-            if (lastTelemetryData && chrome.storage?.session) {
-              try {
-                chrome.storage.session.set({ latest_telemetry: lastTelemetryData }).catch(() => {});
-                lastTelemetrySessionWriteTime = Date.now();
-                if (lastTelemetryData.monitors) {
-                  lastMonitorConfigSig = lastTelemetryData.monitors.map(m => `${m.id || ''}:${m.windowsDisplayNumber || ''}:${m.width}x${m.height}`).join('|');
-                }
-              } catch (e) {}
-            }
-          }, 2000 - elapsed);
         }
       }
 
@@ -1983,10 +1930,6 @@ function startNativeTelemetry() {
       const err = chrome.runtime.lastError ? chrome.runtime.lastError.message : 'Host Disconnected';
       nativeTelemetryPort = null;
       lastTelemetryData = null;
-      if (telemetrySessionTimer) {
-        clearTimeout(telemetrySessionTimer);
-        telemetrySessionTimer = null;
-      }
       for (const client of telemetryClients) {
         try {
           client.postMessage({ error: true, message: err });
@@ -2002,10 +1945,6 @@ function startNativeTelemetry() {
   } catch (e) {
     nativeTelemetryPort = null;
     lastTelemetryData = null;
-    if (telemetrySessionTimer) {
-      clearTimeout(telemetrySessionTimer);
-      telemetrySessionTimer = null;
-    }
     for (const client of telemetryClients) {
       try {
         client.postMessage({ error: true, message: e.message || 'Host Launch Failed' });
@@ -2016,10 +1955,6 @@ function startNativeTelemetry() {
 
 function stopNativeTelemetry() {
   cancelHostTeardown();
-  if (telemetrySessionTimer) {
-    clearTimeout(telemetrySessionTimer);
-    telemetrySessionTimer = null;
-  }
   if (nativeTelemetryPort) {
     try {
       nativeTelemetryPort.disconnect();
@@ -2029,12 +1964,7 @@ function stopNativeTelemetry() {
   lastTelemetryData = null;
 }
 
-// Ensure latest_telemetry is hydrated on service worker startup
-(async () => {
-  try {
-    const sessionData = await chrome.storage?.session?.get('latest_telemetry').catch(() => ({}));
-    if (!sessionData?.latest_telemetry?.monitors && !nativeTelemetryPort) {
-      startNativeTelemetry();
-    }
-  } catch {}
-})();
+// Ensure ephemeral telemetry state: clear any residual session storage cache
+try {
+  chrome.storage?.session?.remove('latest_telemetry').catch(() => {});
+} catch {}

@@ -325,8 +325,10 @@ try {
     localStorage.removeItem('atk_mouse_state');
     localStorage.removeItem('mouse_config');
     sessionStorage.removeItem('cached_hardware_telemetry');
+    sessionStorage.removeItem('latest_telemetry');
     sessionStorage.removeItem('atk_mouse_state');
     chrome.storage?.local?.remove(['cached_empirical_monitors', 'cached_monitors', 'atk_mouse_state', 'mouse_config']);
+    chrome.storage?.session?.remove(['latest_telemetry', 'cached_hardware_telemetry']);
 } catch (e) {}
 
 // Explicit In-Flight Lease Manager to eliminate telemetry race conditions & rubber-banding
@@ -1143,7 +1145,7 @@ function updateTelemetryCells(response) {
 function checkAndSynchronizeStatsDisplay() {
     if (isStatsSynchronized || infoState !== 3) return;
     const isHwReady = Boolean(latestTelemetry && latestTelemetry.cpuLoad !== undefined && latestTelemetry.cpuClock !== undefined);
-    const isPanelReady = Boolean(hasMonitorProbeCompleted || (latestMonitors && latestMonitors.length > 0));
+    const isPanelReady = (waitingForProbeId === 0) && Boolean(hasMonitorProbeCompleted || (latestMonitors && latestMonitors.length > 0));
 
     if (!isHwReady || !isPanelReady) {
         if (hardwareEl && !hardwareEl.querySelector('table')) {
@@ -1226,7 +1228,7 @@ function renderTelemetry(response) {
         }
     }
 
-    if (response.hasProbed === true) {
+    if (response.hasProbed === true && (!response.isProbing || waitingForProbeId === 0)) {
         hasMonitorProbeCompleted = true;
         if (Array.isArray(response.monitors) && response.monitors.length > 0) {
             latestMonitors = response.monitors.map(m => ({
@@ -1236,11 +1238,6 @@ function renderTelemetry(response) {
         } else if (Array.isArray(response.monitors) && response.monitors.length === 0) {
             latestMonitors = [];
         }
-    } else if (Array.isArray(response.monitors) && response.monitors.length > 0) {
-        latestMonitors = response.monitors.map(m => ({
-            ...m,
-            id: m.pnpId || m.id
-        }));
     }
 
     if (!isStatsSynchronized) {
@@ -1301,7 +1298,7 @@ function requestEmpiricalMonitorProbe() {
     }
     try {
         chrome.runtime.sendMessage(probeMsg, () => {
-            if (chrome.runtime.lastError) {}
+            if (chrome.runtime.lastError) return;
         });
     } catch (e) {}
 }
@@ -1435,9 +1432,6 @@ function setInfoState(state) {
             mouseControlsEl.style.display = 'none';
             mouseControlsEl.innerHTML = '';
         }
-        renderMouseControls();
-        checkAndQueryAtkMouseOnDemand(false);
-        checkAndQueryKeyboardOnDemand(false);
 
         isStatsSynchronized = false;
         hasMonitorProbeCompleted = false;
@@ -1454,11 +1448,16 @@ function setInfoState(state) {
             panelControlsEl.innerHTML = '';
         }
 
+        // Leading-edge immediate probe request (0ms latency dispatch)
         if (!telemetryPort) {
             startTelemetryStream();
         } else {
             requestEmpiricalMonitorProbe();
         }
+
+        renderMouseControls();
+        checkAndQueryAtkMouseOnDemand(false);
+        checkAndQueryKeyboardOnDemand(false);
     }
 }
 
