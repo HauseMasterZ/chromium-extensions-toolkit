@@ -1627,40 +1627,43 @@ public class MonitorController {
                 }
             }
 
-            // 3. Empirical RGB White Balance Gains
-            uint rMin, rCur, rMax;
-            if (GetMonitorRedGreenOrBlueGain(hPhys, 0, out rMin, out rCur, out rMax)) {
-                u.rGain = (int)rCur;
-            } else {
-                uint pvct, vCur, vMax;
-                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x16, out pvct, out vCur, out vMax)) {
-                    u.rGain = (int)vCur;
-                }
-            }
-
-            uint gMin, gCur, gMax;
-            if (GetMonitorRedGreenOrBlueGain(hPhys, 1, out gMin, out gCur, out gMax)) {
-                u.gGain = (int)gCur;
-            } else {
-                uint pvct, vCur, vMax;
-                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x18, out pvct, out vCur, out vMax)) {
-                    u.gGain = (int)vCur;
-                }
-            }
-
-            uint blMin, blCur, blMax;
-            if (GetMonitorRedGreenOrBlueGain(hPhys, 2, out blMin, out blCur, out blMax)) {
-                u.bGain = (int)blCur;
-            } else {
-                uint pvct, vCur, vMax;
-                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x1A, out pvct, out vCur, out vMax)) {
-                    u.bGain = (int)vCur;
-                }
-            }
-
             uint pvctReply, vCurReply, vMaxReply;
             if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x14, out pvctReply, out vCurReply, out vMaxReply)) {
                 u.preset = (int)vCurReply;
+            }
+
+            // 3. Empirical RGB White Balance Gains (queried when in user mode or if preset query unavailable)
+            bool isUserMode = (u.preset == 11 || u.preset == 12 || u.preset < 0);
+            if (isUserMode) {
+                uint rMin, rCur, rMax;
+                if (GetMonitorRedGreenOrBlueGain(hPhys, 0, out rMin, out rCur, out rMax)) {
+                    u.rGain = (int)rCur;
+                } else {
+                    uint pvct, vCur, vMax;
+                    if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x16, out pvct, out vCur, out vMax)) {
+                        u.rGain = (int)vCur;
+                    }
+                }
+
+                uint gMin, gCur, gMax;
+                if (GetMonitorRedGreenOrBlueGain(hPhys, 1, out gMin, out gCur, out gMax)) {
+                    u.gGain = (int)gCur;
+                } else {
+                    uint pvct, vCur, vMax;
+                    if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x18, out pvct, out vCur, out vMax)) {
+                        u.gGain = (int)vCur;
+                    }
+                }
+
+                uint blMin, blCur, blMax;
+                if (GetMonitorRedGreenOrBlueGain(hPhys, 2, out blMin, out blCur, out blMax)) {
+                    u.bGain = (int)blCur;
+                } else {
+                    uint pvct, vCur, vMax;
+                    if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x1A, out pvct, out vCur, out vMax)) {
+                        u.bGain = (int)vCur;
+                    }
+                }
             }
 
             if (isAcer) {

@@ -1842,6 +1842,13 @@ chrome.runtime.onConnect.addListener((clientPort) => {
   cancelHostTeardown();
   telemetryClients.add(clientPort);
 
+  // Push live empirical telemetry frame immediately if available and native host active
+  if (nativeTelemetryPort && lastTelemetryData && lastTelemetryData.monitors && lastTelemetryData.hasProbed && lastTelemetryData.cpuLoad !== undefined) {
+    try {
+      clientPort.postMessage(lastTelemetryData);
+    } catch (e) {}
+  }
+
   // Start single native host instance if not already running
   if (!nativeTelemetryPort) {
     startNativeTelemetry();
