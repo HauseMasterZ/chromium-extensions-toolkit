@@ -1587,6 +1587,7 @@ public class MonitorController {
 
         var updates = new TelemetryUpdateItem[snapshot.Count];
 
+        // --- STAGE 1: Fast Empirical Primary Controls (Brightness, Contrast, Preset, Gains) ---
         for (int i = 0; i < snapshot.Count; i++) {
             var bound = snapshot[i];
             var u = new TelemetryUpdateItem();
@@ -1603,7 +1604,6 @@ public class MonitorController {
             }
 
             IntPtr hPhys = bound.hPhys;
-            bool isAcer = bound.isAcer;
 
             // 1. Empirical Brightness
             uint bMin, bCur, bMax;
@@ -1627,12 +1627,13 @@ public class MonitorController {
                 }
             }
 
+            // 3. Empirical Preset
             uint pvctReply, vCurReply, vMaxReply;
             if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x14, out pvctReply, out vCurReply, out vMaxReply)) {
                 u.preset = (int)vCurReply;
             }
 
-            // 3. Empirical RGB White Balance Gains (queried when in user mode or if preset query unavailable)
+            // 4. Empirical RGB White Balance Gains (queried when in user mode or if preset query unavailable)
             bool isUserMode = (u.preset == 11 || u.preset == 12 || u.preset < 0);
             if (isUserMode) {
                 uint rMin, rCur, rMax;
@@ -1665,6 +1666,50 @@ public class MonitorController {
                     }
                 }
             }
+        }
+
+        // Emit Stage 1 primary empirical values immediately
+        lock (SyncLock) {
+            for (int i = 0; i < updates.Length; i++) {
+                var u = updates[i];
+                if (u == null || u.id == null) continue;
+                for (int j = 0; j < CurrentMonitors.Count; j++) {
+                    if (CurrentMonitors[j].id == u.id || (u.isInternal && CurrentMonitors[j].isInternal)) {
+                        if (u.isInternal) {
+                            CurrentMonitors[j].brightness = u.curLcd;
+                            CurrentMonitors[j].contrast = internalContrast;
+                            CurrentMonitors[j].gainR = internalGainR;
+                            CurrentMonitors[j].gainG = internalGainG;
+                            CurrentMonitors[j].gainB = internalGainB;
+                        } else {
+                            if (u.brightVal >= 0) CurrentMonitors[j].brightness = u.brightVal;
+                            if (u.contrastVal >= 0) CurrentMonitors[j].contrast = u.contrastVal;
+                            if (u.rGain >= 0) CurrentMonitors[j].gainR = u.rGain;
+                            if (u.gGain >= 0) CurrentMonitors[j].gainG = u.gGain;
+                            if (u.bGain >= 0) CurrentMonitors[j].gainB = u.bGain;
+                            if (u.preset >= 0) CurrentMonitors[j].colorPreset = u.preset;
+                        }
+                        break;
+                    }
+                }
+            }
+            if (PendingProbeId > CompletedProbeId) {
+                CompletedProbeId = PendingProbeId;
+            }
+            HasProbed = true;
+        }
+        WakeSignal.Set();
+
+        // --- STAGE 2: Secondary Controls in Background ---
+        for (int i = 0; i < snapshot.Count; i++) {
+            var bound = snapshot[i];
+            if (bound.isInternal) continue;
+            var u = updates[i];
+            if (u == null) continue;
+
+            IntPtr hPhys = bound.hPhys;
+            bool isAcer = bound.isAcer;
+            uint pvctReply, vCurReply, vMaxReply;
 
             if (isAcer) {
                 if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x62, out pvctReply, out vCurReply, out vMaxReply)) u.vol = (int)vCurReply;
@@ -1701,48 +1746,28 @@ public class MonitorController {
         lock (SyncLock) {
             for (int i = 0; i < updates.Length; i++) {
                 var u = updates[i];
-                if (u == null || u.id == null) continue;
+                if (u == null || u.id == null || u.isInternal) continue;
                 for (int j = 0; j < CurrentMonitors.Count; j++) {
-                    if (CurrentMonitors[j].id == u.id || (u.isInternal && CurrentMonitors[j].isInternal)) {
-                        if (u.isInternal) {
-                            CurrentMonitors[j].brightness = u.curLcd;
-                            CurrentMonitors[j].contrast = internalContrast;
-                            CurrentMonitors[j].gainR = internalGainR;
-                            CurrentMonitors[j].gainG = internalGainG;
-                            CurrentMonitors[j].gainB = internalGainB;
-                        } else {
-                            if (u.brightVal >= 0) CurrentMonitors[j].brightness = u.brightVal;
-                            if (u.contrastVal >= 0) CurrentMonitors[j].contrast = u.contrastVal;
-                            if (u.rGain >= 0) CurrentMonitors[j].gainR = u.rGain;
-                            if (u.gGain >= 0) CurrentMonitors[j].gainG = u.gGain;
-                            if (u.bGain >= 0) CurrentMonitors[j].gainB = u.bGain;
-                            if (u.preset >= 0) CurrentMonitors[j].colorPreset = u.preset;
-                            CurrentMonitors[j].volume = u.vol;
-                            if (u.input >= 0) CurrentMonitors[j].inputSource = u.input;
-                            if (u.power >= 0) CurrentMonitors[j].powerMode = u.power;
-                            if (u.blackB >= 0) {
-                                CurrentMonitors[j].blackBoost = u.blackB;
-                                CurrentMonitors[j].blackLevel = u.blackB;
-                            }
-                            if (u.gamma >= 0) CurrentMonitors[j].gamma = u.gamma;
-                            if (u.darkB >= 0) CurrentMonitors[j].darkBoost = u.darkB;
-                            if (u.od >= 0) CurrentMonitors[j].overdrive = u.od;
-                            if (u.strobing >= 0) CurrentMonitors[j].strobing = u.strobing;
-                            if (u.mprt >= 0) CurrentMonitors[j].mprt = u.mprt;
-                            if (u.fs >= 0) CurrentMonitors[j].freeSync = u.fs;
-                            if (u.gameMode >= 0) CurrentMonitors[j].gameMode = u.gameMode;
-                            if (u.ss >= 0) CurrentMonitors[j].superSharpness = u.ss;
-                            if (u.bl >= 0) CurrentMonitors[j].blueLight = u.bl;
+                    if (CurrentMonitors[j].id == u.id) {
+                        CurrentMonitors[j].volume = u.vol;
+                        if (u.input >= 0) CurrentMonitors[j].inputSource = u.input;
+                        if (u.power >= 0) CurrentMonitors[j].powerMode = u.power;
+                        if (u.blackB >= 0) {
+                            CurrentMonitors[j].blackBoost = u.blackB;
+                            CurrentMonitors[j].blackLevel = u.blackB;
                         }
+                        if (u.gamma >= 0) CurrentMonitors[j].gamma = u.gamma;
+                        if (u.darkB >= 0) CurrentMonitors[j].darkBoost = u.darkB;
+                        if (u.od >= 0) CurrentMonitors[j].overdrive = u.od;
+                        if (u.strobing >= 0) CurrentMonitors[j].strobing = u.strobing;
+                        if (u.mprt >= 0) CurrentMonitors[j].mprt = u.mprt;
+                        if (u.fs >= 0) CurrentMonitors[j].freeSync = u.fs;
+                        if (u.gameMode >= 0) CurrentMonitors[j].gameMode = u.gameMode;
+                        if (u.ss >= 0) CurrentMonitors[j].superSharpness = u.ss;
+                        if (u.bl >= 0) CurrentMonitors[j].blueLight = u.bl;
                         break;
                     }
                 }
-            }
-            for (int i = 0; i < CurrentMonitors.Count; i++) {
-                var m = CurrentMonitors[i];
-                if (!string.IsNullOrEmpty(m.id)) EmpiricalCache[m.id] = m;
-                if (!string.IsNullOrEmpty(m.pnpId)) EmpiricalCache[m.pnpId] = m;
-                if (!string.IsNullOrEmpty(m.gdiDevice)) EmpiricalCache[m.gdiDevice] = m;
             }
             HasProbed = true;
             SaveEmpiricalCache();
