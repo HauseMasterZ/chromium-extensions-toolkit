@@ -1145,7 +1145,7 @@ function updateTelemetryCells(response) {
 function checkAndSynchronizeStatsDisplay() {
     if (isStatsSynchronized || infoState !== 3) return;
     const isHwReady = Boolean(latestTelemetry && latestTelemetry.cpuLoad !== undefined && latestTelemetry.cpuClock !== undefined);
-    const isPanelReady = (waitingForProbeId === 0) && Boolean(hasMonitorProbeCompleted || (latestMonitors && latestMonitors.length > 0));
+    const isPanelReady = Boolean(hasMonitorProbeCompleted || (latestMonitors && latestMonitors.length > 0));
 
     if (!isHwReady || !isPanelReady) {
         if (hardwareEl && !hardwareEl.querySelector('table')) {
@@ -1228,7 +1228,7 @@ function renderTelemetry(response) {
         }
     }
 
-    if (response.hasProbed === true && (!response.isProbing || waitingForProbeId === 0)) {
+    if (response.hasProbed === true) {
         hasMonitorProbeCompleted = true;
         if (Array.isArray(response.monitors) && response.monitors.length > 0) {
             latestMonitors = response.monitors.map(m => ({
@@ -1329,7 +1329,7 @@ function startTelemetryStream() {
             renderTelemetry(data);
         });
 
-        if (infoState === 3) {
+        if (infoState === 3 && !hasMonitorProbeCompleted) {
             requestEmpiricalMonitorProbe();
         }
 
@@ -1448,10 +1448,10 @@ function setInfoState(state) {
             panelControlsEl.innerHTML = '';
         }
 
-        // Leading-edge immediate probe request (0ms latency dispatch)
+        // Leading-edge immediate stream connection (0ms latency dispatch)
         if (!telemetryPort) {
             startTelemetryStream();
-        } else {
+        } else if (!hasMonitorProbeCompleted) {
             requestEmpiricalMonitorProbe();
         }
 
