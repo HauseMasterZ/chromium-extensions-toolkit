@@ -138,6 +138,7 @@ public class MonitorController {
     public delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdcMonitor, IntPtr lprcMonitor, IntPtr dwData);
 
     [DllImport("user32.dll")] public static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MonitorEnumProc lpfnEnum, IntPtr dwData);
+    [DllImport("user32.dll")] public static extern int GetSystemMetrics(int nIndex);
     [DllImport("dxva2.dll", SetLastError = true)] public static extern bool GetNumberOfPhysicalMonitorsFromHMONITOR(IntPtr hMonitor, out uint count);
     [DllImport("dxva2.dll", SetLastError = true)] public static extern bool GetPhysicalMonitorsFromHMONITOR(IntPtr hMonitor, uint size, [In, Out] PHYSICAL_MONITOR[] arr);
     [DllImport("dxva2.dll", SetLastError = true)] public static extern bool DestroyPhysicalMonitors(uint size, [In] PHYSICAL_MONITOR[] arr);
@@ -699,7 +700,6 @@ public class MonitorController {
         public int windowsDisplayNumber;
         public int width;
         public int height;
-        public bool isAcer;
         public bool isInternal;
         public bool isSoftwareBrightnessActive;
         public int softwareBrightnessVal = 100;
@@ -861,7 +861,6 @@ public class MonitorController {
                     bound.windowsDisplayNumber = winNum;
                     bound.width = mWidth;
                     bound.height = mHeight;
-                    bound.isAcer = false;
                     bound.isInternal = true;
                     bound.isSoftwareBrightnessActive = false;
                     bound.initialBrightness = (int)curLcd;
@@ -891,9 +890,6 @@ public class MonitorController {
                                 modelName = "Monitor " + winNum;
                             }
 
-                            bool isAcer = (!string.IsNullOrEmpty(pnpId) && pnpId.StartsWith("ACR", StringComparison.OrdinalIgnoreCase)) ||
-                                          (!string.IsNullOrEmpty(modelName) && modelName.IndexOf("Acer", StringComparison.OrdinalIgnoreCase) >= 0);
-
                             string canonicalId = !string.IsNullOrEmpty(pnpId) ? pnpId : (!string.IsNullOrEmpty(gdiDev) ? gdiDev : ("mon_" + ddcIndex));
 
                             int initBright = -1;
@@ -921,7 +917,6 @@ public class MonitorController {
                             bound.windowsDisplayNumber = winNum;
                             bound.width = mWidth;
                             bound.height = mHeight;
-                            bound.isAcer = isAcer;
                             bound.isInternal = false;
                             bound.isSoftwareBrightnessActive = false;
                             bound.initialBrightness = initBright;
@@ -961,7 +956,6 @@ public class MonitorController {
                     bound.windowsDisplayNumber = winNum;
                     bound.width = intWidth;
                     bound.height = intHeight;
-                    bound.isAcer = false;
                     bound.isInternal = true;
                     bound.isSoftwareBrightnessActive = false;
                     bound.initialBrightness = (int)curLcd;
@@ -1108,7 +1102,7 @@ public class MonitorController {
         }
     }
 
-    public static BoundPhysicalMonitor FindBoundMonitor(string monitorId, string pnpId = null, string gdiDevice = null, bool? isAcer = null, bool? isInternal = null) {
+    public static BoundPhysicalMonitor FindBoundMonitor(string monitorId, string pnpId = null, string gdiDevice = null, bool? isInternal = null) {
         lock (SyncLock) {
             if (isInternal.HasValue && isInternal.Value) {
                 for (int i = 0; i < BoundMonitors.Count; i++) {
@@ -1139,19 +1133,9 @@ public class MonitorController {
             if (!string.IsNullOrEmpty(monitorId)) {
                 bool wantInternal = monitorId.IndexOf("internal", StringComparison.OrdinalIgnoreCase) >= 0 ||
                                     (!string.IsNullOrEmpty(SavedInternalPnpId) && monitorId.IndexOf(SavedInternalPnpId, StringComparison.OrdinalIgnoreCase) >= 0);
-                bool wantAcer = monitorId.IndexOf("acer", StringComparison.OrdinalIgnoreCase) >= 0 || monitorId.IndexOf("acr", StringComparison.OrdinalIgnoreCase) >= 0;
-                bool wantLenovo = monitorId.IndexOf("lenovo", StringComparison.OrdinalIgnoreCase) >= 0 || monitorId.IndexOf("len", StringComparison.OrdinalIgnoreCase) >= 0;
 
                 for (int i = 0; i < BoundMonitors.Count; i++) {
                     if (wantInternal && BoundMonitors[i].isInternal) return BoundMonitors[i];
-                    if (wantAcer && BoundMonitors[i].isAcer) return BoundMonitors[i];
-                    if (wantLenovo && !BoundMonitors[i].isAcer && !BoundMonitors[i].isInternal) return BoundMonitors[i];
-                }
-            }
-
-            if (isAcer.HasValue) {
-                for (int i = 0; i < BoundMonitors.Count; i++) {
-                    if (BoundMonitors[i].isAcer == isAcer.Value) return BoundMonitors[i];
                 }
             }
 
@@ -1181,7 +1165,7 @@ public class MonitorController {
         bool ok = SetVCPFeature(target.hPhys, vcpCode, val);
         if (!ok) {
             ReProbePhysicalMonitors();
-            target = FindBoundMonitor(target.id, target.pnpId, target.gdiDevice, target.isAcer, target.isInternal);
+            target = FindBoundMonitor(target.id, target.pnpId, target.gdiDevice, target.isInternal);
             if (target != null) {
                 ok = SetVCPFeature(target.hPhys, vcpCode, val);
             }
@@ -1190,10 +1174,10 @@ public class MonitorController {
     }
 
     public static bool ApplyControl(string monitorId, string control, int val, string pnpId = null, string gdiDevice = null, bool? isInternal = null) {
-        BoundPhysicalMonitor target = FindBoundMonitor(monitorId, pnpId, gdiDevice, null, isInternal);
+        BoundPhysicalMonitor target = FindBoundMonitor(monitorId, pnpId, gdiDevice, isInternal);
         if (target == null) {
             ReProbePhysicalMonitors();
-            target = FindBoundMonitor(monitorId, pnpId, gdiDevice, null, isInternal);
+            target = FindBoundMonitor(monitorId, pnpId, gdiDevice, isInternal);
         }
         if (target == null && isInternal.HasValue && isInternal.Value) {
             lock (SyncLock) {
@@ -1300,14 +1284,13 @@ public class MonitorController {
         }
 
         IntPtr hPhys = target.hPhys;
-        bool isAcer = target.isAcer;
 
         switch (control.ToLowerInvariant()) {
             case "brightness":
                 ok = SetMonitorBrightness(hPhys, (uint)clamped0to100) || SetVCPFeature(hPhys, 0x10, (uint)clamped0to100);
                 if (!ok) {
                     ReProbePhysicalMonitors();
-                    target = FindBoundMonitor(targetId, target.pnpId, gdi, isAcer);
+                    target = FindBoundMonitor(targetId, target.pnpId, gdi);
                     if (target != null) {
                         hPhys = target.hPhys;
                         targetId = target.id;
@@ -1335,7 +1318,7 @@ public class MonitorController {
                 ok = SetMonitorContrast(hPhys, (uint)clamped0to100) || SetVCPFeature(hPhys, 0x12, (uint)clamped0to100);
                 if (!ok) {
                     ReProbePhysicalMonitors();
-                    target = FindBoundMonitor(targetId, target.pnpId, gdi, isAcer);
+                    target = FindBoundMonitor(targetId, target.pnpId, gdi);
                     if (target != null) {
                         hPhys = target.hPhys;
                         targetId = target.id;
@@ -1356,7 +1339,7 @@ public class MonitorController {
                 ok = SetMonitorRedGreenOrBlueGain(hPhys, 0, (uint)clamped0to100);
                 if (!ok) {
                     ReProbePhysicalMonitors();
-                    target = FindBoundMonitor(targetId, target.pnpId, gdi, isAcer);
+                    target = FindBoundMonitor(targetId, target.pnpId, gdi);
                     if (target != null) {
                         hPhys = target.hPhys;
                         targetId = target.id;
@@ -1377,7 +1360,7 @@ public class MonitorController {
                 ok = SetMonitorRedGreenOrBlueGain(hPhys, 1, (uint)clamped0to100);
                 if (!ok) {
                     ReProbePhysicalMonitors();
-                    target = FindBoundMonitor(targetId, target.pnpId, gdi, isAcer);
+                    target = FindBoundMonitor(targetId, target.pnpId, gdi);
                     if (target != null) {
                         hPhys = target.hPhys;
                         targetId = target.id;
@@ -1398,7 +1381,7 @@ public class MonitorController {
                 ok = SetMonitorRedGreenOrBlueGain(hPhys, 2, (uint)clamped0to100);
                 if (!ok) {
                     ReProbePhysicalMonitors();
-                    target = FindBoundMonitor(targetId, target.pnpId, gdi, isAcer);
+                    target = FindBoundMonitor(targetId, target.pnpId, gdi);
                     if (target != null) {
                         hPhys = target.hPhys;
                         targetId = target.id;
@@ -1500,8 +1483,10 @@ public class MonitorController {
                 return ok;
 
             case "overdrive":
-                byte odCode = isAcer ? (byte)0xE8 : (byte)0xE0;
-                ok = WriteVcpWithRetry(ref target, odCode, (uint)val);
+                ok = WriteVcpWithRetry(ref target, 0xE8, (uint)val);
+                if (!ok) {
+                    ok = WriteVcpWithRetry(ref target, 0xE0, (uint)val);
+                }
                 if (ok && target != null) {
                     lock (SyncLock) {
                         for (int i = 0; i < CurrentMonitors.Count; i++) {
@@ -1514,8 +1499,10 @@ public class MonitorController {
             case "strobing":
             case "vrb":
             case "mprt":
-                byte stCode = isAcer ? (byte)0xE5 : (byte)0xEF;
-                ok = WriteVcpWithRetry(ref target, stCode, (uint)val);
+                ok = WriteVcpWithRetry(ref target, 0xE5, (uint)val);
+                if (!ok) {
+                    ok = WriteVcpWithRetry(ref target, 0xEF, (uint)val);
+                }
                 if (ok && target != null) {
                     lock (SyncLock) {
                         for (int i = 0; i < CurrentMonitors.Count; i++) {
@@ -1530,8 +1517,10 @@ public class MonitorController {
                 return ok;
 
             case "freesync":
-                byte fsCode = isAcer ? (byte)0xE0 : (byte)0xEA;
-                ok = WriteVcpWithRetry(ref target, fsCode, (uint)val);
+                ok = WriteVcpWithRetry(ref target, 0xEA, (uint)val);
+                if (!ok) {
+                    ok = WriteVcpWithRetry(ref target, 0xE0, (uint)val);
+                }
                 if (ok && target != null) {
                     lock (SyncLock) {
                         for (int i = 0; i < CurrentMonitors.Count; i++) {
@@ -1708,38 +1697,43 @@ public class MonitorController {
             if (u == null) continue;
 
             IntPtr hPhys = bound.hPhys;
-            bool isAcer = bound.isAcer;
             uint pvctReply, vCurReply, vMaxReply;
 
-            if (isAcer) {
-                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x62, out pvctReply, out vCurReply, out vMaxReply)) u.vol = (int)vCurReply;
-            }
+            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x62, out pvctReply, out vCurReply, out vMaxReply)) u.vol = (int)vCurReply;
             if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x60, out pvctReply, out vCurReply, out vMaxReply)) u.input = (int)vCurReply;
             if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xD6, out pvctReply, out vCurReply, out vMaxReply)) u.power = (int)vCurReply;
             if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x6C, out pvctReply, out vCurReply, out vMaxReply)) u.blackB = (int)vCurReply;
+            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xF6, out pvctReply, out vCurReply, out vMaxReply)) u.darkB = (int)vCurReply;
+            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x72, out pvctReply, out vCurReply, out vMaxReply)) u.gamma = (int)vCurReply;
 
-            if (isAcer) {
-                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xE8, out pvctReply, out vCurReply, out vMaxReply)) u.od = (int)vCurReply;
-                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xE5, out pvctReply, out vCurReply, out vMaxReply)) u.strobing = (int)vCurReply;
-                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xE0, out pvctReply, out vCurReply, out vMaxReply)) {
-                    u.fs = ((vCurReply == 255 || vCurReply > 0) ? 1 : 0);
-                }
-                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xE4, out pvctReply, out vCurReply, out vMaxReply)) {
-                    u.ss = (vCurReply > 0 ? 1 : 0);
-                }
-                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xE7, out pvctReply, out vCurReply, out vMaxReply)) {
-                    u.bl = (vCurReply == 255 ? 0 : (int)vCurReply);
-                }
-            } else {
-                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x72, out pvctReply, out vCurReply, out vMaxReply)) u.gamma = (int)vCurReply;
-                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xF6, out pvctReply, out vCurReply, out vMaxReply)) u.darkB = (int)vCurReply;
-                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xE0, out pvctReply, out vCurReply, out vMaxReply)) u.od = (int)vCurReply;
-                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xEF, out pvctReply, out vCurReply, out vMaxReply)) {
-                    u.mprt = (int)vCurReply;
-                    u.strobing = (int)vCurReply;
-                }
-                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xEA, out pvctReply, out vCurReply, out vMaxReply)) u.fs = (int)vCurReply;
-                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xF9, out pvctReply, out vCurReply, out vMaxReply)) u.gameMode = (int)vCurReply;
+            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xE8, out pvctReply, out vCurReply, out vMaxReply)) {
+                u.od = (int)vCurReply;
+            } else if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xE0, out pvctReply, out vCurReply, out vMaxReply)) {
+                u.od = (int)vCurReply;
+            }
+
+            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xE5, out pvctReply, out vCurReply, out vMaxReply)) {
+                u.strobing = (int)vCurReply;
+                u.mprt = (int)vCurReply;
+            } else if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xEF, out pvctReply, out vCurReply, out vMaxReply)) {
+                u.strobing = (int)vCurReply;
+                u.mprt = (int)vCurReply;
+            }
+
+            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xEA, out pvctReply, out vCurReply, out vMaxReply)) {
+                u.fs = (int)vCurReply;
+            } else if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xE0, out pvctReply, out vCurReply, out vMaxReply)) {
+                u.fs = ((vCurReply == 255 || vCurReply > 0) ? 1 : 0);
+            }
+
+            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xE4, out pvctReply, out vCurReply, out vMaxReply)) {
+                u.ss = (vCurReply > 0 ? 1 : 0);
+            }
+            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xE7, out pvctReply, out vCurReply, out vMaxReply)) {
+                u.bl = (vCurReply == 255 ? 0 : (int)vCurReply);
+            }
+            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xF9, out pvctReply, out vCurReply, out vMaxReply)) {
+                u.gameMode = (int)vCurReply;
             }
         }
 

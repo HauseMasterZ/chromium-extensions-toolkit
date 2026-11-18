@@ -1,10 +1,13 @@
 # Local native messaging host manifest containing local file paths
 Toolkit/native-host/com.gpu.telemetry.json
 
+# Project guidance and agent configurations
+GEMINI.md
+.agents/
+
 # Local scratch and debug files
 scratch/
 .system_generated/
-.agents/teamwork/
 test_*.ps1
 verify_*.ps1
 

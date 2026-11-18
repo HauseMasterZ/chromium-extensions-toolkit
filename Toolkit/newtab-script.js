@@ -110,152 +110,38 @@ const mouseControlsEl = document.getElementById('mouse-controls');
 // Comment out or remove any feature object below to hide it for that monitor.
 // =============================================================================
 
-const MONITOR_CONFIG_PROFILES = {
-    // -------------------------------------------------------------------------
-    // Profile: Primary Display (Acer)
-    // -------------------------------------------------------------------------
-    'ACER': {
-        name: 'Primary Display',
-        features: [
-            { key: 'brightness', label: 'Brightness', type: 'number', min: 0, max: 100 },
-            { key: 'contrast', label: 'Contrast', type: 'number', min: 0, max: 100 },
-            { key: 'blackBoost', label: 'Black Boost', type: 'number', min: 0, max: 100 },
-            { key: 'colorPreset', label: 'Color Preset', type: 'select', options: [
-                { value: 5, text: '6500K (Standard)' },
-                { value: 6, text: '7500K' },
-                { value: 8, text: '9300K (Cool)' },
-                { value: 11, text: 'User / Custom' }
-            ]},
-            { key: 'gainR', label: 'Red Gain', type: 'number', min: 0, max: 100, requiresUserMode: true },
-            { key: 'gainG', label: 'Green Gain', type: 'number', min: 0, max: 100, requiresUserMode: true },
-            { key: 'gainB', label: 'Blue Gain', type: 'number', min: 0, max: 100, requiresUserMode: true },
-            { key: 'overdrive', label: 'Overdrive', type: 'select', options: [
-                { value: 0, text: 'Off' },
-                { value: 1, text: 'Normal' },
-                { value: 2, text: 'Extreme' }
-            ]},
-            { key: 'strobing', label: 'VRB (Strobing)', type: 'select', options: [
-                { value: 0, text: 'Off' },
-                { value: 1, text: 'Normal' },
-                { value: 2, text: 'Extreme' }
-            ]},
-            { key: 'freeSync', label: 'FreeSync / VRR', type: 'select', options: [
-                { value: 0, text: 'Off' },
-                { value: 1, text: 'On' }
-            ]},
-            { key: 'superSharpness', label: 'Super Sharpness', type: 'select', options: [
-                { value: 0, text: 'Off' },
-                { value: 1, text: 'On' }
-            ]},
-            { key: 'blueLight', label: 'BlueLight Shield', type: 'select', options: [
-                { value: 0, text: 'Off' },
-                { value: 1, text: 'Level 1 (50%)' },
-                { value: 2, text: 'Level 2 (60%)' },
-                { value: 3, text: 'Level 3 (70%)' },
-                { value: 4, text: 'Level 4 (80%)' }
-            ]},
-            { key: 'volume', label: 'Volume', type: 'volume', min: 0, max: 100 },
-            { key: 'inputSource', label: 'Input Source', type: 'select', options: [
-                { value: 15, text: 'DisplayPort 1' },
-                { value: 17, text: 'HDMI 1' },
-                { value: 18, text: 'HDMI 2' }
-            ]},
-            { key: 'powerMode', label: 'Power Mode', type: 'select', options: [
-                { value: 1, text: 'On' },
-                { value: 4, text: 'Standby' },
-                { value: 5, text: 'Power Off' }
-            ]}
-        ]
-    },
-
-    // -------------------------------------------------------------------------
-    // Profile: Monitor #3 (Secondary Display)
-    // -------------------------------------------------------------------------
-    'LENOVO': {
-        name: 'Secondary Display',
-        features: [
-            { key: 'brightness', label: 'Brightness', type: 'number', min: 0, max: 100 },
-            { key: 'contrast', label: 'Contrast', type: 'number', min: 0, max: 100 },
-            { key: 'gamma', label: 'Gamma', type: 'select', options: [
-                { value: 20480, text: '1.8' },
-                { value: 25600, text: '2.0' },
-                { value: 30720, text: '2.2 (Standard)' },
-                { value: 35840, text: '2.4' },
-                { value: 40960, text: '2.6' }
-            ]},
-            { key: 'darkBoost', label: 'Dark Boost', type: 'select', options: [
-                { value: 0, text: 'Off' },
-                { value: 1, text: 'Level 1' },
-                { value: 2, text: 'Level 2' },
-                { value: 3, text: 'Level 3' },
-                { value: 4, text: 'Level 4' },
-                { value: 5, text: 'Level 5' },
-                { value: 6, text: 'Level 6' },
-                { value: 7, text: 'Level 7' }
-            ]},
-            { key: 'colorPreset', label: 'Color Preset', type: 'select', options: [
-                { value: 1, text: 'sRGB' },
-                { value: 5, text: '6500K (Standard)' },
-                { value: 6, text: '7500K' },
-                { value: 8, text: '9300K (Cool)' },
-                { value: 11, text: 'User / Custom' }
-            ]},
-            { key: 'gainR', label: 'Red Gain', type: 'number', min: 0, max: 100, requiresUserMode: true },
-            { key: 'gainG', label: 'Green Gain', type: 'number', min: 0, max: 100, requiresUserMode: true },
-            { key: 'gainB', label: 'Blue Gain', type: 'number', min: 0, max: 100, requiresUserMode: true },
-            { key: 'overdrive', label: 'Over Drive', type: 'select', options: [
-                { value: 0, text: 'Off' },
-                { value: 3, text: 'Level 1' },
-                { value: 4, text: 'Level 2' },
-                { value: 5, text: 'Level 3' },
-                { value: 6, text: 'Level 4 (Extreme)' }
-            ]},
-            { key: 'strobing', label: 'MPRT (Strobing)', type: 'select', options: [
-                { value: 0, text: 'Off' },
-                { value: 1, text: 'On' }
-            ]},
-            { key: 'freeSync', label: 'Adaptive-Sync', type: 'select', options: [
-                { value: 0, text: 'Off' },
-                { value: 1, text: 'On' }
-            ]},
-            { key: 'gameMode', label: 'Game Mode', type: 'select', options: [
-                { value: 10, text: 'Standard' },
-                { value: 1, text: 'FPS 1' },
-                { value: 2, text: 'FPS 2' },
-                { value: 3, text: 'Racing' },
-                { value: 4, text: 'RTS' },
-                { value: 5, text: 'Game 1' },
-                { value: 6, text: 'Game 2' }
-            ]},
-            { key: 'inputSource', label: 'Input Source', type: 'select', options: [
-                { value: 15, text: 'DisplayPort 1' },
-                { value: 17, text: 'HDMI 1' },
-                { value: 18, text: 'HDMI 2' }
-            ]},
-            { key: 'powerMode', label: 'Power Mode', type: 'select', options: [
-                { value: 1, text: 'On' },
-                { value: 4, text: 'Standby' },
-                { value: 5, text: 'Power Off' }
-            ]}
-        ]
-    }
-};
-
-// Fallback profile for any additional display connected
-const DEFAULT_MONITOR_FEATURES = [
+const EXTERNAL_MONITOR_FEATURES = [
     { key: 'brightness', label: 'Brightness', type: 'number', min: 0, max: 100 },
     { key: 'contrast', label: 'Contrast', type: 'number', min: 0, max: 100 },
+    { key: 'colorPreset', label: 'Color Preset', type: 'select', options: [
+        { value: 1, text: 'sRGB' },
+        { value: 5, text: '6500K (Standard)' },
+        { value: 6, text: '7500K' },
+        { value: 8, text: '9300K (Cool)' },
+        { value: 11, text: 'User / Custom' }
+    ]},
+    { key: 'gainR', label: 'Red Gain', type: 'number', min: 0, max: 100, requiresUserMode: true },
+    { key: 'gainG', label: 'Green Gain', type: 'number', min: 0, max: 100, requiresUserMode: true },
+    { key: 'gainB', label: 'Blue Gain', type: 'number', min: 0, max: 100, requiresUserMode: true },
+    { key: 'overdrive', label: 'Overdrive', type: 'select', options: [
+        { value: 0, text: 'Off' },
+        { value: 1, text: 'Normal / Level 1' },
+        { value: 2, text: 'Extreme / Level 2' }
+    ]},
+    { key: 'strobing', label: 'VRB / Strobing', type: 'select', options: [
+        { value: 0, text: 'Off' },
+        { value: 1, text: 'Normal / On' },
+        { value: 2, text: 'Extreme' }
+    ]},
+    { key: 'freeSync', label: 'FreeSync / VRR', type: 'select', options: [
+        { value: 0, text: 'Off' },
+        { value: 1, text: 'On' }
+    ]},
     { key: 'volume', label: 'Volume', type: 'volume', min: 0, max: 100 },
     { key: 'inputSource', label: 'Input Source', type: 'select', options: [
         { value: 15, text: 'DisplayPort 1' },
         { value: 17, text: 'HDMI 1' },
         { value: 18, text: 'HDMI 2' }
-    ]},
-    { key: 'colorPreset', label: 'Color Preset', type: 'select', options: [
-        { value: 5, text: '6500K (Standard)' },
-        { value: 6, text: '7500K' },
-        { value: 8, text: '9300K (Cool)' },
-        { value: 11, text: 'User / Custom' }
     ]},
     { key: 'powerMode', label: 'Power Mode', type: 'select', options: [
         { value: 1, text: 'On' },
@@ -273,7 +159,7 @@ const INTERNAL_MONITOR_FEATURES = [
 ];
 
 function getFeaturesForMonitor(m) {
-    if (!m) return DEFAULT_MONITOR_FEATURES;
+    if (!m) return EXTERNAL_MONITOR_FEATURES;
     if (m.isInternal) {
         return INTERNAL_MONITOR_FEATURES;
     }
@@ -282,16 +168,7 @@ function getFeaturesForMonitor(m) {
     if (name.includes('INTERNAL') || pnp.includes('INTERNAL')) {
         return INTERNAL_MONITOR_FEATURES;
     }
-    if (name.includes('ACER') || pnp.startsWith('ACR')) {
-        return MONITOR_CONFIG_PROFILES['ACER'].features;
-    }
-    if (name.includes('LENOVO') || pnp.startsWith('LEN')) {
-        return MONITOR_CONFIG_PROFILES['LENOVO'].features;
-    }
-    if (m.id && MONITOR_CONFIG_PROFILES[m.id]) {
-        return MONITOR_CONFIG_PROFILES[m.id].features;
-    }
-    return DEFAULT_MONITOR_FEATURES;
+    return EXTERNAL_MONITOR_FEATURES;
 }
 
 const ColorPresetAdapter = {
@@ -1586,9 +1463,6 @@ let lastKeyboardQueryTime = 0;
 const KEYBOARD_QUERY_COOLDOWN_MS = 10000;
 let pairedKeyboardDevice = null;
 const MCHOSE_KEYBOARD_VID = 0x41E4;
-const MCHOSE_KEYBOARD_NAMES = {
-    0x2101: 'USB Keyboard'
-};
 
 const mouseState = {
     name: null,
@@ -1653,33 +1527,6 @@ try {
     }
 } catch {}
 
-const ATK_MOUSE_NAMES = {
-    '1,62': 'ATK F1 V3 ULTIMATE +',
-    '1,63': 'ATK F1 V3 ULTIMATE +',
-    '1,64': 'ATK F1 V3 ULTIMATE +',
-    '1,12': 'ATK F1 Ultra Max 2.0',
-    '1,33': 'ATK F1 Ultra Max 2.0',
-    '2,36': 'ATK F1 PRO',
-    '2,37': 'ATK F1 PRO MAX',
-    '2,42': 'ATK F1 Ultimate',
-    '2,45': 'ATK F1 Ultra',
-    '2,50': 'ATK F1 EXTREME',
-    '2,48': 'ATK Dragonfly F1 PRO MAX Elden',
-    '2,52': 'ATK Dragonfly F1 PRO MAX JOJO',
-    '2,104': 'ATK Dragonfly F1 PRO',
-    '2,105': 'ATK Dragonfly F1 PRO MAX',
-    '2,5': 'ATK Dragonfly F1 MOBA',
-    '2,6': 'ATK Dragonfly F1 MOBA',
-    '2,33': 'ATK Dragonfly F1 MOBA',
-    '2,106': 'ATK Dragonfly F1 MOBA',
-    '2,95': 'DRAGONFLY F1 V2 SE NK',
-    '2,93': 'DRAGONFLY F1 V2 Plus NK',
-    '2,94': 'DRAGONFLY F1 V2 NK',
-    '1,6': 'ATK A9 Ultra Max 2.0',
-    '1,15': 'ATK A9 Ultra Max 2.0 Tri-Mode',
-    '1,27': 'ATK A9 Mini',
-    '1,28': 'ATK A9 Mini'
-};
 
 const ATK_SENSOR_MAP = {
     '1,62': 'PAW3955',
@@ -1971,16 +1818,16 @@ async function queryAtkMouseState(device, force = false) {
                 const cid = cidResp.getUint8(5);
                 const mid = cidResp.getUint8(6);
                 const key = `${cid},${mid}`;
-                mouseState.name = ATK_MOUSE_NAMES[key] || device.productName || 'ATK Wireless Mouse';
-                mouseState.sensor = ATK_SENSOR_MAP[key] || 'PAW3955';
+                mouseState.name = device.productName || 'Wireless Mouse';
+                mouseState.sensor = ATK_SENSOR_MAP[key] || 'Optical Sensor';
             }
         } catch {}
 
         if (!mouseState.name) {
-            mouseState.name = device.productName || 'ATK Wireless Mouse';
+            mouseState.name = device.productName || 'Wireless Mouse';
         }
         if (!mouseState.sensor) {
-            mouseState.sensor = 'PAW3955';
+            mouseState.sensor = 'Optical Sensor';
         }
 
         // 3. Battery Level & Voltage (cmd: 4)
@@ -2107,7 +1954,7 @@ async function queryKeyboardState(device, force = false) {
 
     isKeyboardQuerying = true;
     try {
-        keyboardState.name = MCHOSE_KEYBOARD_NAMES[device.productId] || device.productName || 'MCHOSE Keyboard';
+        keyboardState.name = device.productName || 'USB Keyboard';
         keyboardState.layout = '60% ANSI (61 Keys)';
         keyboardState.connection = 'USB Wired';
         keyboardState.battery = 'Wired';
