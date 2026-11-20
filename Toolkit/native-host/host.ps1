@@ -1941,6 +1941,8 @@ public class MonitorController {
                             }
                         }
                         WakeSignal.Set();
+                    } else if (action == "wake" || action == "poll_now") {
+                        WakeSignal.Set();
                     } else if (action == "probe_monitors" || action == "refresh_monitors" || action == "fetch_empirical") {
                         int c = ExtractJsonInt(json, "contrast", -1);
                         int r = ExtractJsonInt(json, "gainR", -1);

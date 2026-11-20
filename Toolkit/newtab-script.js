@@ -1115,6 +1115,8 @@ function renderTelemetry(response) {
         } else if (Array.isArray(response.monitors) && response.monitors.length === 0) {
             latestMonitors = [];
         }
+    } else if (response.hasProbed === false && !response.isProbing && !hasMonitorProbeCompleted && waitingForProbeId === 0) {
+        requestEmpiricalMonitorProbe();
     }
 
     if (!isStatsSynchronized) {
@@ -1205,10 +1207,6 @@ function startTelemetryStream() {
         telemetryPort.onMessage.addListener((data) => {
             renderTelemetry(data);
         });
-
-        if (infoState === 3 && !hasMonitorProbeCompleted) {
-            requestEmpiricalMonitorProbe();
-        }
 
         telemetryPort.onDisconnect.addListener(() => {
             telemetryPort = null;
@@ -1328,8 +1326,13 @@ function setInfoState(state) {
         // Leading-edge immediate stream connection (0ms latency dispatch)
         if (!telemetryPort) {
             startTelemetryStream();
-        } else if (!hasMonitorProbeCompleted) {
-            requestEmpiricalMonitorProbe();
+        } else {
+            try {
+                telemetryPort.postMessage({ action: 'wake' });
+            } catch (e) {
+                telemetryPort = null;
+                startTelemetryStream();
+            }
         }
 
         renderMouseControls();
@@ -1436,10 +1439,17 @@ document.addEventListener('visibilitychange', () => {
         stopTelemetryStream();
     } else {
         updateTime();
-        if (infoState === 3 && !telemetryPort) {
-            startTelemetryStream();
-        } else if (infoState === 3) {
-            requestEmpiricalMonitorProbe();
+        if (infoState === 3) {
+            if (!telemetryPort) {
+                startTelemetryStream();
+            } else {
+                try {
+                    telemetryPort.postMessage({ action: 'wake' });
+                } catch (e) {
+                    telemetryPort = null;
+                    startTelemetryStream();
+                }
+            }
         }
     }
 });
