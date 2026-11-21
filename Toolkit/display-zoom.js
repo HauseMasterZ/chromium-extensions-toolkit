@@ -505,6 +505,21 @@
     return getZoomValFromConfig(displaysZoomConfig, display);
   }
 
+  function normalizeZoomPercent(val) {
+    if (val === 'default' || val === '' || val === false || val === null || val === undefined) return null;
+    let num = Number(val);
+    if (isNaN(num)) return null;
+    if (num >= 0.25 && num <= 5.0 && String(val).includes('.')) {
+      num = Math.round(num * 100);
+    } else if (num < 0 && num >= -75) {
+      num = 100 + num;
+    }
+    if (num >= 25 && num <= 500) {
+      return num;
+    }
+    return null;
+  }
+
   function getZoomValFromConfig(cfg, display) {
     if (!cfg || typeof cfg !== 'object' || !display) return null;
     const keys = [
@@ -516,10 +531,8 @@
     ];
     for (const key of keys) {
       if (key !== null && key !== undefined && cfg[key] !== undefined) {
-        const val = cfg[key];
-        if (val === 'default' || val === '' || val === false || val === null) return null;
-        const num = Number(val);
-        if (!isNaN(num) && num >= 100 && num <= 200) return num / 100;
+        const pct = normalizeZoomPercent(cfg[key]);
+        if (pct !== null) return pct / 100;
       }
     }
     return null;

@@ -1,9 +1,4 @@
 (() => {
-  const BASE_ZOOM_OPTIONS = ['default'];
-  for (let z = 100; z <= 200; z += 5) {
-    BASE_ZOOM_OPTIONS.push(String(z));
-  }
-
   document.addEventListener('DOMContentLoaded', async () => {
     const slider = document.getElementById('volumeSlider');
     const display = document.getElementById('volumeValue');
@@ -266,23 +261,55 @@
     };
 
     if (displaysContainer) {
-      displaysContainer.addEventListener('change', (e) => {
-        const select = e.target.closest('.display-zoom-select');
-        if (!select) return;
-        const row = select.closest('.display-row');
-        const val = select.value;
-        const newIsDefault = (val === 'default');
+      const handleZoomInputChange = (input) => {
+        if (!input) return;
+        const row = input.closest('.display-row');
+        const box = input.closest('.display-zoom-box');
+        const raw = input.value.trim();
+
+        let storedVal = 'default';
+        let newIsDefault = true;
+
+        if (raw !== '' && raw !== 'default') {
+          let num = parseInt(raw, 10);
+          if (!isNaN(num)) {
+            // Support negative zoom offset (e.g. -20 -> 80%, -50 -> 50%)
+            if (num < 0 && num >= -75) {
+              num = 100 + num;
+            }
+            // Clamp to Chromium supported zoom range: 25% to 500%
+            if (num >= 25 && num <= 500) {
+              storedVal = num;
+              newIsDefault = false;
+              input.value = num;
+            } else if (num < 25) {
+              storedVal = 25;
+              newIsDefault = false;
+              input.value = 25;
+            } else if (num > 500) {
+              storedVal = 500;
+              newIsDefault = false;
+              input.value = 500;
+            }
+          }
+        }
+
+        if (newIsDefault) {
+          input.value = '';
+        }
+
         if (row) {
           row.classList.toggle('is-default', newIsDefault);
         }
-        select.classList.toggle('is-default', newIsDefault);
+        if (box) {
+          box.classList.toggle('is-default', newIsDefault);
+        }
 
-        const displayId = select.getAttribute('data-id');
-        const displayNum = select.getAttribute('data-display-num');
+        const displayId = input.getAttribute('data-id');
+        const displayNum = input.getAttribute('data-display-num');
 
         chrome.storage.local.get({ displaysZoomConfig: {} }, (res) => {
           const cfg = res.displaysZoomConfig || {};
-          const storedVal = newIsDefault ? 'default' : parseInt(val, 10);
           if (displayId) cfg[displayId] = storedVal;
           if (displayNum) {
             cfg[`#${displayNum}`] = storedVal;
@@ -294,11 +321,53 @@
             });
           });
         });
+      };
+
+      displaysContainer.addEventListener('change', (e) => {
+        const input = e.target.closest('.display-zoom-input');
+        if (input) {
+          handleZoomInputChange(input);
+        }
       });
 
+      displaysContainer.addEventListener('keydown', (e) => {
+        const input = e.target.closest('.display-zoom-input');
+        if (!input) return;
+        if (e.key === 'Enter') {
+          input.blur();
+        } else if (e.key === 'ArrowUp' && input.value === '') {
+          e.preventDefault();
+          input.value = 105;
+          handleZoomInputChange(input);
+        } else if (e.key === 'ArrowDown' && input.value === '') {
+          e.preventDefault();
+          input.value = 95;
+          handleZoomInputChange(input);
+        }
+      });
+
+      displaysContainer.addEventListener('wheel', (e) => {
+        const input = e.target.closest('.display-zoom-input');
+        if (!input || input.disabled) return;
+        e.preventDefault();
+        let cur = parseInt(input.value, 10);
+        if (isNaN(cur)) cur = 100;
+        const delta = e.deltaY < 0 ? 5 : -5;
+        let next = cur + delta;
+        if (next < 25) next = 25;
+        if (next > 500) next = 500;
+        input.value = next;
+        handleZoomInputChange(input);
+      }, { passive: false });
+
       displaysContainer.addEventListener('click', (e) => {
-        if (e.target.closest('.display-zoom-select')) {
+        const box = e.target.closest('.display-zoom-box');
+        if (box) {
           e.stopPropagation();
+          const input = box.querySelector('.display-zoom-input');
+          if (input && document.activeElement !== input) {
+            input.focus();
+          }
         }
       });
     }
@@ -354,9 +423,18 @@
         }
 
         if (zoomVal !== 'default' && zoomVal !== null && zoomVal !== undefined && zoomVal !== '') {
-          const parsed = Number(zoomVal);
-          if (!isNaN(parsed) && parsed >= 100 && parsed <= 200) {
-            zoomVal = String(parsed);
+          let parsed = Number(zoomVal);
+          if (!isNaN(parsed)) {
+            if (parsed >= 0.25 && parsed <= 5.0 && String(zoomVal).includes('.')) {
+              parsed = Math.round(parsed * 100);
+            } else if (parsed < 0 && parsed >= -75) {
+              parsed = 100 + parsed;
+            }
+            if (parsed >= 25 && parsed <= 500) {
+              zoomVal = String(parsed);
+            } else {
+              zoomVal = 'default';
+            }
           } else {
             zoomVal = 'default';
           }
@@ -369,21 +447,6 @@
           row.classList.add('is-default');
         }
 
-        let zoomOptions = BASE_ZOOM_OPTIONS;
-        if (!isDefault && !BASE_ZOOM_OPTIONS.includes(zoomVal)) {
-          zoomOptions = [...BASE_ZOOM_OPTIONS, zoomVal].sort((a, b) => {
-            if (a === 'default') return -1;
-            if (b === 'default') return 1;
-            return Number(a) - Number(b);
-          });
-        }
-
-        const optionsHtml = zoomOptions.map(opt => {
-          const isSelected = (opt === zoomVal) ? ' selected' : '';
-          const label = (opt === 'default') ? 'Default' : `${opt}%`;
-          return `<option value="${opt}"${isSelected}>${label}</option>`;
-        }).join('');
-
         const badgesHtml = `<span class="display-badge">${resolution}</span>`;
 
         row.innerHTML = `
@@ -391,9 +454,10 @@
             <div class="display-name" title="${hoverTitle}">${displayName}</div>
             <div class="display-badges">${badgesHtml}</div>
           </div>
-          <select class="display-zoom-select ${isDefault ? 'is-default' : ''}" data-id="${d.id}" data-display-num="${displayNum || ''}" title="Monitor zoom override" ${isEnabled ? '' : 'disabled'}>
-            ${optionsHtml}
-          </select>
+          <div class="display-zoom-box ${isDefault ? 'is-default' : ''}" title="Monitor zoom override (25% - 500%)">
+            <input type="number" class="display-zoom-input" data-id="${d.id}" data-display-num="${displayNum || ''}" placeholder="100" value="${isDefault ? '' : zoomVal}" min="-75" max="500" step="5" ${isEnabled ? '' : 'disabled'}>
+            <span class="zoom-unit">%</span>
+          </div>
         `;
 
         displaysContainer.appendChild(row);
@@ -462,7 +526,9 @@
 
           currentDisplays = annotated;
           chrome.storage.local.set({ cachedDisplays: annotated });
-          renderDisplays(currentDisplays, currentZoomConfig, toggleDefaultZoom ? toggleDefaultZoom.checked : isZoomEnabled);
+          if (!displaysContainer.contains(document.activeElement)) {
+            renderDisplays(currentDisplays, currentZoomConfig, toggleDefaultZoom ? toggleDefaultZoom.checked : isZoomEnabled);
+          }
         }
       } catch {}
     };
@@ -520,8 +586,10 @@
         });
         if (displaysContainer) {
           displaysContainer.style.opacity = enabled ? '1' : '0.4';
-          const selects = displaysContainer.querySelectorAll('.display-zoom-select');
-          selects.forEach(sel => sel.disabled = !enabled);
+          const inputs = displaysContainer.querySelectorAll('.display-zoom-input');
+          inputs.forEach(inp => inp.disabled = !enabled);
+          const boxes = displaysContainer.querySelectorAll('.display-zoom-box');
+          boxes.forEach(box => box.classList.toggle('disabled', !enabled));
         }
       });
     }

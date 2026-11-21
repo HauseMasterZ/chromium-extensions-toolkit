@@ -304,37 +304,62 @@
             letter-spacing: 0.2px;
         }
 
-        .display-zoom-select {
+        .display-zoom-box {
+            display: inline-flex;
+            align-items: center;
             background: var(--toggle-bg);
-            color: var(--text-main);
-            border: 1px solid var(--border-color);
             border-radius: 6px;
-            font-size: 12px;
-            font-weight: 600;
-            padding: 3px 6px;
-            outline: none;
-            cursor: pointer;
-            transition: border-color 0.2s, background-color 0.2s, color 0.2s, opacity 0.2s;
+            padding: 2px 6px;
+            border: 1px solid var(--border-color);
+            transition: border-color 0.2s, background-color 0.2s, opacity 0.2s;
+            cursor: text;
         }
 
-        .display-zoom-select:focus {
+        .display-zoom-box:focus-within {
             border-color: var(--accent-color);
             background: #252528;
         }
 
-        .display-zoom-select.is-default {
-            color: var(--text-secondary);
+        .display-zoom-box.is-default {
             border-color: rgba(255, 255, 255, 0.08);
         }
 
-        .display-zoom-select option {
-            background-color: var(--surface-color);
+        .display-zoom-input {
+            width: 38px;
+            background: transparent;
+            border: none;
+            outline: none;
             color: var(--text-main);
+            font-size: 12px;
+            font-weight: 600;
+            text-align: right;
+            padding: 0 2px 0 0;
+            -moz-appearance: textfield;
         }
 
-        .display-zoom-select:disabled {
+        .display-zoom-input::placeholder {
+            color: var(--text-secondary);
+            opacity: 0.6;
+        }
+
+        .display-zoom-input::-webkit-outer-spin-button,
+        .display-zoom-input::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+
+        .display-zoom-input:disabled,
+        .display-zoom-box.disabled,
+        .display-zoom-box:has(.display-zoom-input:disabled) {
             opacity: 0.5;
             cursor: not-allowed;
+        }
+
+        .zoom-unit {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-weight: 500;
+            user-select: none;
         }
     </style>
 </head>
