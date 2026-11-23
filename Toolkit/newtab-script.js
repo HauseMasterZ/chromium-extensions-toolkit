@@ -480,67 +480,33 @@ function syncRgbGainVisibility(container) {
     const root = container || (panelControlsEl ? (panelControlsEl.querySelector('.panel-controls-grid') || panelControlsEl.querySelector('table')) : null);
     if (!root) return;
 
-    // Detect which monitors currently have User / Custom color preset active via indexed map
-    const userModeMonitors = new Set();
-    let hasExternalUserMode = false;
     for (let i = 0; i < latestMonitors.length; i++) {
         const m = latestMonitors[i];
-        if (!m.isInternal) {
-            const sel = panelElementsMap.get(`${m.id}_colorPreset`);
-            if (sel && ColorPresetAdapter.isUserMode(sel.value)) {
-                userModeMonitors.add(m.id);
-                if (m.pnpId) userModeMonitors.add(m.pnpId);
-                hasExternalUserMode = true;
-            }
-        }
-    }
-    if (hasExternalUserMode) {
-        for (let i = 0; i < latestMonitors.length; i++) {
-            const m = latestMonitors[i];
-            if (m.isInternal) {
-                userModeMonitors.add(m.id);
-                if (m.pnpId) userModeMonitors.add(m.pnpId);
-            }
-        }
-    }
+        const mid = m.id;
+        const pnp = m.pnpId;
 
-    // Fast-path guard: avoid DOM reads and writes if active user-mode set is unchanged
-    let userModeKey = '';
-    for (const mid of userModeMonitors) {
-        userModeKey += mid + ';';
-    }
-    if (userModeKey === lastUserModeKey && root._hasRenderedGains) {
-        return;
-    }
-    lastUserModeKey = userModeKey;
-    root._hasRenderedGains = true;
+        const selector = `.panel-cell[data-mid="${mid}"][data-ctrl="gainR"], .panel-cell[data-mid="${mid}"][data-ctrl="gainG"], .panel-cell[data-mid="${mid}"][data-ctrl="gainB"]` +
+            (pnp && pnp !== mid ? `, .panel-cell[data-mid="${pnp}"][data-ctrl="gainR"], .panel-cell[data-mid="${pnp}"][data-ctrl="gainG"], .panel-cell[data-mid="${pnp}"][data-ctrl="gainB"]` : '');
+        const gainCells = root.querySelectorAll(selector);
+        if (!gainCells || gainCells.length === 0) continue;
 
-    const anyUserMode = userModeMonitors.size > 0;
-
-    // Smoothly toggle row visibility without DOM destruction
-    const gainRows = panelGainRows.length > 0 ? panelGainRows : Array.from(root.querySelectorAll('[data-requires-user-mode="true"]'));
-    for (let i = 0; i < gainRows.length; i++) {
-        gainRows[i].style.display = anyUserMode ? '' : 'none';
-    }
-
-    // Toggle per-monitor cell content: editable input when in user mode, N/A indicator when not
-    const gainCells = panelGainCells.length > 0 ? panelGainCells : Array.from(root.querySelectorAll('[data-ctrl="gainR"], [data-ctrl="gainG"], [data-ctrl="gainB"]'));
-    for (let i = 0; i < gainCells.length; i++) {
-        const cell = gainCells[i];
-        if (!cell._mid) {
-            cell._mid = cell.getAttribute('data-mid');
-            cell._inputWrap = cell.querySelector('.gain-input-wrap');
-            cell._naWrap = cell.querySelector('.gain-na-wrap');
-        }
-        const isUser = userModeMonitors.has(cell._mid);
-        if (cell._inputWrap) cell._inputWrap.style.display = isUser ? 'block' : 'none';
-        if (cell._naWrap) cell._naWrap.style.display = isUser ? 'none' : 'block';
-        if (isUser) {
-            cell.classList.remove('panel-cell-na');
-            cell.classList.add('panel-cell-numeric');
+        if (m.isInternal) {
+            // Internal display gains are always available via GPU LUT ramp. Never hide them.
+            gainCells.forEach(cell => {
+                cell.style.display = '';
+            });
         } else {
-            cell.classList.remove('panel-cell-numeric');
-            cell.classList.add('panel-cell-na');
+            // External monitors: gains are available if and only if this specific monitor is in User / Custom mode
+            const sel = panelElementsMap.get(`${mid}_colorPreset`) || 
+                        (pnp ? panelElementsMap.get(`${pnp}_colorPreset`) : null) || 
+                        root.querySelector(`.panel-select[data-mid="${mid}"][data-ctrl="colorPreset"]`) ||
+                        (pnp ? root.querySelector(`.panel-select[data-mid="${pnp}"][data-ctrl="colorPreset"]`) : null);
+            const presetVal = sel ? sel.value : m.colorPreset;
+            const isUserMode = ColorPresetAdapter.isUserMode(presetVal);
+
+            gainCells.forEach(cell => {
+                cell.style.display = isUserMode ? '' : 'none';
+            });
         }
     }
 }
@@ -576,13 +542,27 @@ function renderPanelControls(monitors) {
 
     latestMonitors = sortedMonitors;
 
-    // Topology signature is purely based on monitor IDs (stable across preset changes)
-    const topologySignature = sortedMonitors.map(m => m.id).join(',');
+    const activeMonitors = sortedMonitors.filter(m => {
+        if (!m) return false;
+        if (m.isInternal) return true;
+        return (m.width > 0 && m.height > 0) || m.brightness >= 0 || m.contrast >= 0;
+    });
+
+    // Topology signature includes monitor IDs and support state of optional features so hardware changes re-mount cleanly
+    const topologySignature = activeMonitors.map(m => {
+        const od = (typeof m.overdrive === 'number' && m.overdrive >= 0);
+        const str = (typeof m.strobing === 'number' && m.strobing >= 0);
+        const fs = (typeof m.freeSync === 'number' && m.freeSync >= 0);
+        const inp = (typeof m.inputSource === 'number' && m.inputSource >= 0);
+        const vol = (typeof m.volume === 'number' && m.volume >= 0);
+        const cp = (typeof m.colorPreset === 'number' && m.colorPreset >= 0);
+        return `${m.id}:od=${od}:str=${str}:fs=${fs}:inp=${inp}:vol=${vol}:cp=${cp}`;
+    }).join('|');
     const existingGrid = panelControlsEl.querySelector('.panel-controls-grid') || panelControlsEl.querySelector('table');
 
     // Fine-grained in-place update if grid is already mounted for this topology
     if (existingGrid && currentPanelTopologySignature === topologySignature) {
-        for (const m of sortedMonitors) {
+        for (const m of activeMonitors) {
             const rawFeats = getFeaturesForMonitor(m);
             for (const f of rawFeats) {
                 let el = panelElementsMap.get(`${m.id}_${f.key}`);
@@ -595,30 +575,6 @@ function renderPanelControls(monitors) {
                 // Reconcile incoming hardware telemetry via anti-rubber-banding lease manager
                 let incomingRaw = m[f.key];
                 if (f.key === 'colorPreset') incomingRaw = ColorPresetAdapter.normalize(incomingRaw);
-
-                if (f.type === 'volume') {
-                    const isVolNa = (incomingRaw === -1 || incomingRaw === undefined);
-                    if (!el._volCell && el.closest) {
-                        el._volCell = el.closest('.panel-cell');
-                        if (el._volCell) {
-                            el._volInputWrap = el._volCell.querySelector('.vol-input-wrap');
-                            el._volNaWrap = el._volCell.querySelector('.vol-na-wrap');
-                        }
-                    }
-                    const cell = el._volCell;
-                    if (cell) {
-                        if (el._volInputWrap) el._volInputWrap.style.display = isVolNa ? 'none' : '';
-                        if (el._volNaWrap) el._volNaWrap.style.display = isVolNa ? '' : 'none';
-                        if (isVolNa) {
-                            cell.classList.remove('panel-cell-numeric');
-                            cell.classList.add('panel-cell-na');
-                        } else {
-                            cell.classList.remove('panel-cell-na');
-                            cell.classList.add('panel-cell-numeric');
-                        }
-                    }
-                    if (isVolNa) continue;
-                }
 
                 const { shouldUpdateUI, value } = leaseManager.reconcileIncoming(m.id, f.key, incomingRaw);
                 if (!shouldUpdateUI) continue;
@@ -640,6 +596,7 @@ function renderPanelControls(monitors) {
                 }
             }
         }
+        syncRgbGainVisibility(existingGrid);
         const firstCol = existingGrid.querySelector('.panel-column:first-child');
         if (firstCol && !firstCol.querySelector('#peripheral-dock')) {
             firstCol.insertAdjacentHTML('beforeend', renderPeripheralDockHtml());
@@ -653,15 +610,15 @@ function renderPanelControls(monitors) {
     // Full grid creation (only runs once per hardware topology change)
     currentPanelTopologySignature = topologySignature;
 
-    const numMonitors = sortedMonitors.length;
+    const numMonitors = activeMonitors.length;
     const monitorColWidth = 250;
-    const tableWidth = numMonitors === 3 ? 750 : (numMonitors * monitorColWidth);
+    const tableWidth = numMonitors * monitorColWidth;
 
     let html = `<div class="panel-controls-grid" style="display: flex; justify-content: center; align-items: flex-start; width: ${tableWidth}px; margin: 0 auto; border-top: 1px solid rgba(255, 255, 255, 0.12); font-size: 13px; line-height: 1.35; color: #ccc; text-align: left; font-variant-numeric: tabular-nums; white-space: nowrap;">`;
 
     const seenNewtabNums = new Set();
     for (let mIdx = 0; mIdx < numMonitors; mIdx++) {
-        const m = sortedMonitors[mIdx];
+        const m = activeMonitors[mIdx];
         let displayNum = m.windowsDisplayNumber || (mIdx + 1);
         if (seenNewtabNums.has(displayNum)) {
             displayNum = mIdx + 1;
@@ -670,7 +627,16 @@ function renderPanelControls(monitors) {
         seenNewtabNums.add(displayNum);
 
         const rawFeats = getFeaturesForMonitor(m);
-        const feats = rawFeats.filter(f => ALLOWED_FEATURE_KEYS.includes(f.key));
+        const feats = rawFeats.filter(f => {
+            if (!ALLOWED_FEATURE_KEYS.includes(f.key)) return false;
+            if (f.key === 'brightness' || f.key === 'contrast') return true;
+            if (f.key === 'colorPreset') return !m.isInternal && m.colorPreset !== undefined && m.colorPreset !== -1;
+            if (f.key === 'gainR' || f.key === 'gainG' || f.key === 'gainB') {
+                return true;
+            }
+            const val = m[f.key];
+            return typeof val === 'number' && val >= 0;
+        });
         feats.sort((a, b) => {
             const idxA = ALLOWED_FEATURE_KEYS.indexOf(a.key);
             const idxB = ALLOWED_FEATURE_KEYS.indexOf(b.key);
@@ -686,28 +652,14 @@ function renderPanelControls(monitors) {
 
             let controlContent = '';
             let cellClass = 'panel-cell';
+            let cellStyle = 'padding: 2px 14px;';
 
             if (f.key === 'gainR' || f.key === 'gainG' || f.key === 'gainB') {
                 cellClass += ' panel-cell-numeric';
-                controlContent = `
-                    <div class="gain-input-wrap">
-                        <input type="text" class="panel-input" data-mid="${m.id}" data-ctrl="${f.key}" data-min="${f.min}" data-max="${f.max}" value="${val ?? 50}">
-                    </div>
-                    <div class="gain-na-wrap" style="display: none;">
-                        <span style="color: #666; font-size: 12px; margin-left: 4px;">N/A</span>
-                    </div>
-                `;
-            } else if (f.type === 'volume') {
-                const isVolNa = (val === -1 || val === undefined);
-                cellClass += isVolNa ? ' panel-cell-na' : ' panel-cell-numeric';
-                controlContent = `
-                    <div class="vol-input-wrap" style="${isVolNa ? 'display: none;' : ''}">
-                        <input type="text" class="panel-input" data-mid="${m.id}" data-ctrl="${f.key}" data-min="${f.min}" data-max="${f.max}" value="${!isVolNa ? val : 50}">
-                    </div>
-                    <div class="vol-na-wrap" style="${isVolNa ? '' : 'display: none;'}">
-                        <span style="color: #666; font-size: 12px; margin-left: 4px;">N/A</span>
-                    </div>
-                `;
+                controlContent = `<input type="text" class="panel-input" data-mid="${m.id}" data-ctrl="${f.key}" data-min="${f.min}" data-max="${f.max}" value="${val ?? 50}">`;
+                if (!m.isInternal && !ColorPresetAdapter.isUserMode(m.colorPreset)) {
+                    cellStyle += ' display: none;';
+                }
             } else if (f.type === 'select') {
                 cellClass += ' panel-cell-select';
                 const hasMatch = f.options.some(o => o.value === val);
@@ -719,11 +671,11 @@ function renderPanelControls(monitors) {
                 controlContent = `<input type="text" class="panel-input" data-mid="${m.id}" data-ctrl="${f.key}" data-min="${f.min}" data-max="${f.max}" value="${val ?? 50}">`;
             }
 
-            const isUserModeRequired = f.key === 'gainR' || f.key === 'gainG' || f.key === 'gainB';
+            const isUserModeRequired = !m.isInternal && (f.key === 'gainR' || f.key === 'gainG' || f.key === 'gainB');
             const trAttr = isUserModeRequired ? 'data-requires-user-mode="true"' : '';
 
             html += `
-                <div class="${cellClass}" data-mid="${m.id}" data-ctrl="${f.key}" ${trAttr} style="padding: 2px 14px;">
+                <div class="${cellClass}" data-mid="${m.id}" data-ctrl="${f.key}" ${trAttr} style="${cellStyle}">
                     <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
                         <span style="color: #888; overflow: hidden; text-overflow: ellipsis; padding-right: 8px;">${f.label}</span>
                         <div>${controlContent}</div>
