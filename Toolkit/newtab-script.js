@@ -588,9 +588,18 @@ function renderPanelControls(monitors) {
                 } else if (el.tagName === 'SELECT') {
                     const numVal = Number(value);
                     if (Number(el.value) !== numVal) {
-                        el.value = numVal;
-                        if (f.key === 'colorPreset') {
-                            syncRgbGainVisibility(existingGrid);
+                        let opt = Array.from(el.options).find(o => Number(o.value) === numVal);
+                        if (!opt && !isNaN(numVal) && numVal >= 0) {
+                            opt = document.createElement('option');
+                            opt.value = numVal;
+                            opt.textContent = `Mode ${numVal}`;
+                            el.appendChild(opt);
+                        }
+                        if (opt) {
+                            el.value = numVal;
+                            if (f.key === 'colorPreset') {
+                                syncRgbGainVisibility(existingGrid);
+                            }
                         }
                     }
                 }

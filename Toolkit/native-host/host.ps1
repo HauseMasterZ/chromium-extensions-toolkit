@@ -1022,10 +1022,10 @@ public class MonitorController {
                     item.blackBoost = 50;
                     item.darkBoost = 0;
                     item.blackLevel = 50;
-                    item.overdrive = 0;
-                    item.strobing = 0;
-                    item.mprt = 0;
-                    item.freeSync = 0;
+                    item.overdrive = -1;
+                    item.strobing = -1;
+                    item.mprt = -1;
+                    item.freeSync = -1;
                     item.gameMode = 10;
                     item.superSharpness = 0;
                     item.blueLight = 0;
@@ -1486,9 +1486,6 @@ public class MonitorController {
 
             case "overdrive":
                 ok = WriteVcpWithRetry(ref target, 0xE8, (uint)val);
-                if (!ok) {
-                    ok = WriteVcpWithRetry(ref target, 0xE0, (uint)val);
-                }
                 if (ok && target != null) {
                     lock (SyncLock) {
                         for (int i = 0; i < CurrentMonitors.Count; i++) {
@@ -1710,8 +1707,6 @@ public class MonitorController {
 
             if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xE8, out pvctReply, out vCurReply, out vMaxReply)) {
                 u.od = (int)vCurReply;
-            } else if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xE0, out pvctReply, out vCurReply, out vMaxReply)) {
-                u.od = (int)vCurReply;
             }
 
             if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xE5, out pvctReply, out vCurReply, out vMaxReply)) {
@@ -1822,14 +1817,12 @@ public class MonitorController {
                             break;
                         }
                     }
-                    WakeSignal.Set();
                 }
             } finally {
                 lock (SyncLock) {
                     IsProbing = false;
                     HasProbed = true;
                 }
-                WakeSignal.Set();
             }
         });
         probeThread.IsBackground = true;
@@ -1956,7 +1949,6 @@ public class MonitorController {
                         int probeId = ExtractJsonInt(json, "probeId", 0);
                         bool isRefresh = (action == "refresh_monitors");
                         RequestEmpiricalProbe(probeId, isRefresh);
-                        WakeSignal.Set();
                     }
                 }
             } catch {}
@@ -2236,6 +2228,9 @@ public class MonitorController {
     $nvmlMem = $null
 
     $warmupTicks = 0
+    $isGamingLoad = $false
+    $loadStreak = 0
+    $idleStreak = 0
     while ([MonitorController]::IsRunning) {
         # Instant watchdog check via native kernel handle (locks PID, zero process-table scanning)
         if ($parentObj -and $parentObj.HasExited) {
@@ -2465,10 +2460,34 @@ public class MonitorController {
 
 
         $warmupTicks++
-        # Adaptive Load Cadence: 200ms during initial warm-up or active empirical probe, 800ms under gaming/load, 1800ms when idle on desktop
-        $isIdle = ($cpuPower -le 18.0) -and ($gpuLoad -eq 0) -and ($rawGpuTemp -lt 52.0)
-        $isProbingActive = [MonitorController]::IsProbing -or ([MonitorController]::PendingProbeId -gt [MonitorController]::CompletedProbeId)
-        $sleepInterval = if ($isProbingActive) { 200 } elseif ($warmupTicks -le 2) { 200 } elseif ($isIdle) { 1800 } else { 800 }
+
+        # Dual-Threshold Hysteresis for Load Cadence
+        # Gaming / heavy load: sustained GPU load (>= 20%), active GPU draw (>= 35W), or high CPU power (>= 45W)
+        # Idle return: low GPU load (<= 5%), low GPU draw (<= 20W), and low CPU power (<= 25W)
+        $instantLoad = ($gpuLoad -ge 20) -or ($rawGpuWatt -ge 35.0) -or ($cpuPower -ge 45.0)
+        $instantIdle = ($gpuLoad -le 5) -and ($rawGpuWatt -le 20.0) -and ($cpuPower -le 25.0)
+
+        if ($instantLoad) {
+            $loadStreak++
+            $idleStreak = 0
+            if ($loadStreak -ge 2) {
+                $isGamingLoad = $true
+            }
+        } elseif ($instantIdle) {
+            $idleStreak++
+            $loadStreak = 0
+            if ($idleStreak -ge 3) {
+                $isGamingLoad = $false
+            }
+        } else {
+            # Hysteresis deadband: hold current state to prevent cadence hunting
+            $loadStreak = 0
+            $idleStreak = 0
+        }
+
+        # Warm-up (first 2 ticks on fresh process launch) uses 200ms baseline.
+        # Once warm: 800ms strictly under verified sustained load, 1800ms solid idle cadence on desktop.
+        $sleepInterval = if ($warmupTicks -le 2) { 200 } elseif ($isGamingLoad) { 800 } else { 1800 }
         [MonitorController]::WakeSignal.WaitOne($sleepInterval) | Out-Null
     }
 }
