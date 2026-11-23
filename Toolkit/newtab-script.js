@@ -657,7 +657,7 @@ function renderPanelControls(monitors) {
     const monitorColWidth = 250;
     const tableWidth = numMonitors === 3 ? 750 : (numMonitors * monitorColWidth);
 
-    let html = `<div class="panel-controls-grid" style="display: flex; justify-content: center; width: ${tableWidth}px; margin: 0 auto; border-top: 1px solid rgba(255, 255, 255, 0.12); font-size: 13px; line-height: 1.35; color: #ccc; text-align: left; font-variant-numeric: tabular-nums; white-space: nowrap;">`;
+    let html = `<div class="panel-controls-grid" style="display: flex; justify-content: center; align-items: flex-start; width: ${tableWidth}px; margin: 0 auto; border-top: 1px solid rgba(255, 255, 255, 0.12); font-size: 13px; line-height: 1.35; color: #ccc; text-align: left; font-variant-numeric: tabular-nums; white-space: nowrap;">`;
 
     const seenNewtabNums = new Set();
     for (let mIdx = 0; mIdx < numMonitors; mIdx++) {
@@ -677,7 +677,7 @@ function renderPanelControls(monitors) {
             return (idxA >= 0 ? idxA : 999) - (idxB >= 0 ? idxB : 999);
         });
 
-        html += `<div class="panel-column" style="width: ${monitorColWidth}px; flex: 0 0 ${monitorColWidth}px; box-sizing: border-box;">`;
+        html += `<div class="panel-column" style="width: ${monitorColWidth}px; flex: 0 0 ${monitorColWidth}px; align-self: flex-start; height: fit-content; box-sizing: border-box;">`;
         html += `<div title="${m.name || ''}" style="padding: 2px 14px 3px 14px; font-weight: normal; color: #fff; overflow: hidden; text-overflow: ellipsis;">#${displayNum}</div>`;
 
         for (const f of feats) {

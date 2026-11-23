@@ -773,7 +773,7 @@ public class MonitorController {
         }
     }
 
-    public static void BindPhysicalMonitors(Dictionary<string, string> friendlyNames) {
+    public static void BindPhysicalMonitors(Dictionary<string, string> friendlyNames, bool signalWake = false) {
         if (friendlyNames != null && !object.ReferenceEquals(friendlyNames, SavedFriendlyNames)) {
             if (SavedFriendlyNames == null) SavedFriendlyNames = new Dictionary<string, string>();
             foreach (var kvp in friendlyNames) {
@@ -1081,7 +1081,9 @@ public class MonitorController {
                     UpdateInternalGpuRamp(intGdi);
                 }
             }
-            WakeSignal.Set();
+            if (signalWake) {
+                WakeSignal.Set();
+            }
         } catch {
             var destroyed = new HashSet<PHYSICAL_MONITOR[]>();
             foreach (var set in allocatedSets) {
@@ -1097,7 +1099,7 @@ public class MonitorController {
     public static void ReProbePhysicalMonitors() {
         lock (ProbeLock) {
             try {
-                BindPhysicalMonitors(SavedFriendlyNames);
+                BindPhysicalMonitors(SavedFriendlyNames, false);
             } catch {}
         }
     }
@@ -1799,7 +1801,7 @@ public class MonitorController {
                         if (rebindNow) {
                             lock (ProbeLock) {
                                 if (!IsRunning) break;
-                                BindPhysicalMonitors(friendlyNames ?? SavedFriendlyNames);
+                                BindPhysicalMonitors(friendlyNames ?? SavedFriendlyNames, true);
                             }
                         }
                         if (!IsRunning) break;
@@ -1882,7 +1884,6 @@ public class MonitorController {
                         int b = ExtractJsonInt(json, "gainB", -1);
                         if (b < 0) b = ExtractJsonInt(json, "gain_b", -1);
                         SetInternalDisplayCalibration(c, r, g, b);
-                        WakeSignal.Set();
                     } else if (action == "set_panel_control") {
                         string monId = ExtractJsonString(json, "monitorId");
                         string pnpId = ExtractJsonString(json, "pnpId");
@@ -1894,7 +1895,6 @@ public class MonitorController {
                             if (ApplyControl(monId, control, val, pnpId, gdiDev, isInt)) {
                                 SaveEmpiricalCache();
                             }
-                            WakeSignal.Set();
                         }
                     } else if (action == "set_brightness") {
                         string monId = ExtractJsonString(json, "monitorId");
@@ -1904,7 +1904,6 @@ public class MonitorController {
                         if (ApplyControl(monId, "brightness", val, pnpId, gdiDev)) {
                             SaveEmpiricalCache();
                         }
-                        WakeSignal.Set();
                     } else if (action == "init_cached_monitors") {
                         LoadEmpiricalCache(json);
                         lock (SyncLock) {

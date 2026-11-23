@@ -47,10 +47,17 @@
         .panel-cell {
             padding: 2px 14px;
         }
+        .panel-controls-grid {
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+        }
         .panel-column {
             display: flex;
             flex-direction: column;
             position: relative;
+            align-self: flex-start;
+            height: fit-content;
         }
         .panel-column:not(:first-child) {
             border-left: 1px solid rgba(255, 255, 255, 0.12);
