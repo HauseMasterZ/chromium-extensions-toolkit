@@ -758,7 +758,9 @@ function initPanelControlDelegation() {
         } else if (select) {
             if (select.options.length <= 1) return;
             const direction = -steps;
-            const nextIdx = Math.max(0, Math.min(select.options.length - 1, select.selectedIndex + direction));
+            const len = select.options.length;
+            const currentIdx = select.selectedIndex >= 0 ? select.selectedIndex : 0;
+            const nextIdx = ((currentIdx + direction) % len + len) % len;
             if (nextIdx !== select.selectedIndex) {
                 select.selectedIndex = nextIdx;
                 const numVal = Number(select.value);
