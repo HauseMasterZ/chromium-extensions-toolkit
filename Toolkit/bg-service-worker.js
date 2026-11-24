@@ -1394,6 +1394,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         } catch {}
       });
       return true;
+    case 'stop_telemetry_immediate':
+      cancelHostTeardown();
+      for (const client of telemetryClients) {
+        try { client.disconnect(); } catch {}
+      }
+      telemetryClients.clear();
+      stopNativeTelemetry();
+      sendResponse({ success: true });
+      break;
   }
 });
 
@@ -1743,7 +1752,7 @@ function cancelHostTeardown() {
 }
 
 function scheduleHostTeardown() {
-  if (hostTeardownTimer) return;
+  if (hostTeardownTimer || !nativeTelemetryPort) return;
   hostTeardownTimer = setTimeout(() => {
     if (telemetryClients.size === 0) {
       stopNativeTelemetry();

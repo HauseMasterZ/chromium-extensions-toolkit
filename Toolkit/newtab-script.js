@@ -1313,6 +1313,19 @@ function triggerBlackout() {
     if (isBlackoutActive) return;
     isBlackoutActive = true;
     telemetryWasActiveBeforeBlackout = (infoState === 3);
+
+    // Instantly strip cooldown timer to reset and remove all background daemons
+    lastMouseQueryTime = 0;
+    lastKeyboardQueryTime = 0;
+
+    stopTelemetryStream();
+
+    try {
+        chrome.runtime.sendMessage({ action: 'stop_telemetry_immediate' }, () => {
+            if (chrome.runtime.lastError) return;
+        });
+    } catch {}
+
     if (telemetryWasActiveBeforeBlackout) {
         setInfoState(2);
     }
@@ -1330,6 +1343,11 @@ function undoBlackout() {
     if (blackoutOverlayEl) {
         blackoutOverlayEl.classList.remove('active');
     }
+
+    // Instantly strip cooldown timer on restore
+    lastMouseQueryTime = 0;
+    lastKeyboardQueryTime = 0;
+
     if (telemetryWasActiveBeforeBlackout) {
         setInfoState(3);
     }
