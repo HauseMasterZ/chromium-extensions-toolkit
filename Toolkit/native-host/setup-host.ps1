@@ -14,13 +14,36 @@ $scriptDir = $PSScriptRoot
 if (-not $scriptDir) { $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
 
 $hostBatPath = Join-Path $scriptDir "host.bat"
+$hostCsPath  = Join-Path $scriptDir "host.cs"
+$hostExePath = Join-Path $scriptDir "host.exe"
 $jsonManifestPath = Join-Path $scriptDir "com.gpu.telemetry.json"
 $extensionManifestPath = (Resolve-Path (Join-Path $scriptDir "..\manifest.json")).Path
 
-if (-not (Test-Path $hostBatPath)) {
-    Write-Error "host.bat not found at: $hostBatPath"
+if (-not (Test-Path $hostCsPath) -and -not (Test-Path $hostBatPath)) {
+    Write-Error "Neither host.cs nor host.bat found in: $scriptDir"
     exit 1
 }
+
+if (Test-Path $hostCsPath) {
+    $runtimeDir = [System.Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()
+    $cscPath = Join-Path $runtimeDir "csc.exe"
+    if (-not (Test-Path $cscPath)) {
+        $cscPath = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+    }
+    if (-not (Test-Path $cscPath)) {
+        Write-Error "Built-in .NET C# compiler (csc.exe) not found at: $cscPath"
+        exit 1
+    }
+    Write-Host "[0/3] Compiling Native C# Telemetry Host (x64)..." -ForegroundColor Yellow
+    $compileOut = & $cscPath /nologo /optimize+ /platform:x64 /target:exe /r:System.dll /r:System.Core.dll /r:System.Management.dll /out:"$hostExePath" "$hostCsPath" 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error ("Compilation of host.cs failed:`n" + ($compileOut -join "`n"))
+        exit 1
+    }
+    Write-Host "  Built native host executable: $hostExePath" -ForegroundColor Green
+}
+
+$nativeHostPath = if (Test-Path $hostExePath) { $hostExePath } else { $hostBatPath }
 
 if (-not (Test-Path $extensionManifestPath)) {
     Write-Error "manifest.json not found at: $extensionManifestPath"
@@ -83,14 +106,14 @@ Write-Host "  Paired Extension ID: $extensionId" -ForegroundColor Cyan
 $nativeManifest = [ordered]@{
     name            = "com.gpu.telemetry"
     description     = "GPU Telemetry Native Messaging Host for Unified Toolkit"
-    path            = $hostBatPath
+    path            = $nativeHostPath
     type            = "stdio"
     allowed_origins = @(
         "chrome-extension://$extensionId/"
     )
 }
 
-$nativeManifest | ConvertTo-Json -Depth 5 | Set-Content -Path $jsonManifestPath -Encoding utf8
+[System.IO.File]::WriteAllText($jsonManifestPath, ($nativeManifest | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "  Written host manifest: $jsonManifestPath" -ForegroundColor Gray
 
 Write-Host "[2/3] Registering Native Messaging Host in Windows Registry..." -ForegroundColor Yellow

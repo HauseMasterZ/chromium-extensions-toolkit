@@ -18,3 +18,4 @@ $RECYCLE.BIN/
 *.tmp
 *.log
 Toolkit/native-host/*.dll
+Toolkit/native-host/*.exe
