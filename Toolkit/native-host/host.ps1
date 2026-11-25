@@ -8,42 +8,7 @@ $numPThreads = if ($numThreads -gt 16) { [int]($numThreads * 0.6) } elseif ($num
 $totalRamGB  = 16.0
 $totalPageGB = 16.0
 
-# Asynchronous background initialization of PerformanceCounters for RAPL and Paging
-$perfRs = $null
-$perfPs = $null
-$perfAsync = $null
-try {
-    $perfRs = [runspacefactory]::CreateRunspace()
-    $perfRs.Open()
-    $perfPs = [powershell]::Create()
-    $perfPs.Runspace = $perfRs
-    [void]$perfPs.AddScript({
-        try {
-            $map = @{
-                RaplPkg = New-Object System.Diagnostics.PerformanceCounter("Energy Meter", "Power", "RAPL_Package0_PKG")
-                RaplPp1 = New-Object System.Diagnostics.PerformanceCounter("Energy Meter", "Power", "RAPL_Package0_PP1")
-                PagePct = New-Object System.Diagnostics.PerformanceCounter("Paging File", "% Usage", "_Total")
-            }
-            try { $null = $map.RaplPkg.NextValue() } catch {}
-            try { $null = $map.RaplPp1.NextValue() } catch {}
-            try { $null = $map.PagePct.NextValue() } catch {}
-
-            try {
-                $gpuCat = New-Object System.Diagnostics.PerformanceCounterCategory("GPU Adapter Memory")
-                $shared = $gpuCat.GetInstanceNames() | ForEach-Object {
-                    New-Object System.Diagnostics.PerformanceCounter("GPU Adapter Memory", "Shared Usage", $_)
-                }
-                $shared | ForEach-Object { $null = $_.NextValue() }
-                $map["Shared"] = $shared
-            } catch {}
-
-            return $map
-        } catch {
-            return $null
-        }
-    })
-    $perfAsync = $perfPs.BeginInvoke()
-} catch {}
+# Native C-API Performance Counters (PDH) initialize on background thread after Add-Type (~550ms)
 
 # Kernel handle to parent process for watchdog (populated after native initialization)
 $parentObj = $null
@@ -108,6 +73,7 @@ public class NvmlHost {
 
     public static volatile bool IsReady = false;
     public static IntPtr DeviceHandle = IntPtr.Zero;
+    public static ManualResetEvent ReadyEvent = new ManualResetEvent(false);
 
     public static void StartInitAsync() {
         Thread t = new Thread(() => {
@@ -120,10 +86,143 @@ public class NvmlHost {
                     }
                 }
             } catch {}
+            finally {
+                ReadyEvent.Set();
+            }
         });
         t.IsBackground = true;
         t.Name = "NvmlAsyncInit";
         t.Start();
+    }
+}
+
+public class PdhHost {
+    [DllImport("pdh.dll", CharSet = CharSet.Unicode)]
+    public static extern int PdhOpenQuery(string szDataSource, IntPtr dwUserData, out IntPtr phQuery);
+
+    [DllImport("pdh.dll", CharSet = CharSet.Unicode)]
+    public static extern int PdhAddEnglishCounter(IntPtr hQuery, string szFullCounterPath, IntPtr dwUserData, out IntPtr phCounter);
+
+    [DllImport("pdh.dll")]
+    public static extern int PdhCollectQueryData(IntPtr hQuery);
+
+    [DllImport("pdh.dll")]
+    public static extern int PdhCloseQuery(IntPtr hQuery);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PDH_FMT_COUNTERVALUE {
+        public uint CStatus;
+        public double doubleValue;
+    }
+
+    [DllImport("pdh.dll")]
+    public static extern int PdhGetFormattedCounterValue(IntPtr hCounter, uint dwFormat, IntPtr lpdwType, out PDH_FMT_COUNTERVALUE pValue);
+
+    [DllImport("pdh.dll", CharSet = CharSet.Unicode)]
+    public static extern int PdhExpandWildCardPath(string szDataSource, string szWildCardPath, IntPtr mszExpandedPathList, ref uint pcchPathListLength, uint dwFlags);
+
+    public static volatile bool IsReady = false;
+    public static ManualResetEvent ReadyEvent = new ManualResetEvent(false);
+    private static readonly object PdhLock = new object();
+    private static IntPtr Query = IntPtr.Zero;
+    private static IntPtr cPkg = IntPtr.Zero;
+    private static IntPtr cPp1 = IntPtr.Zero;
+    private static IntPtr cPage = IntPtr.Zero;
+    private static List<IntPtr> cGpuShared = new List<IntPtr>();
+
+    public static void StartInitAsync() {
+        Thread t = new Thread(() => {
+            try {
+                IntPtr q = IntPtr.Zero;
+                if (PdhOpenQuery(null, IntPtr.Zero, out q) == 0) {
+                    IntPtr hPkg = IntPtr.Zero, hPp1 = IntPtr.Zero, hPage = IntPtr.Zero;
+                    if (PdhAddEnglishCounter(q, @"\Energy Meter(RAPL_Package0_PKG)\Power", IntPtr.Zero, out hPkg) != 0) hPkg = IntPtr.Zero;
+                    if (PdhAddEnglishCounter(q, @"\Energy Meter(RAPL_Package0_PP1)\Power", IntPtr.Zero, out hPp1) != 0) hPp1 = IntPtr.Zero;
+                    if (PdhAddEnglishCounter(q, @"\Paging File(_Total)\% Usage", IntPtr.Zero, out hPage) != 0) hPage = IntPtr.Zero;
+
+                    var shList = new List<IntPtr>();
+                    uint bufLen = 0;
+                    PdhExpandWildCardPath(null, @"\GPU Adapter Memory(*)\Shared Usage", IntPtr.Zero, ref bufLen, 0);
+                    if (bufLen > 0) {
+                        IntPtr buf = Marshal.AllocHGlobal((int)(bufLen * 2));
+                        try {
+                            if (PdhExpandWildCardPath(null, @"\GPU Adapter Memory(*)\Shared Usage", buf, ref bufLen, 0) == 0) {
+                                int offset = 0;
+                                while (true) {
+                                    string path = Marshal.PtrToStringUni(IntPtr.Add(buf, offset * 2));
+                                    if (string.IsNullOrEmpty(path)) break;
+                                    offset += path.Length + 1;
+                                    IntPtr ch = IntPtr.Zero;
+                                    if (PdhAddEnglishCounter(q, path, IntPtr.Zero, out ch) == 0) shList.Add(ch);
+                                }
+                            }
+                        } finally {
+                            Marshal.FreeHGlobal(buf);
+                        }
+                    }
+
+                    PdhCollectQueryData(q);
+                    Thread.Sleep(50);
+                    PdhCollectQueryData(q);
+
+                    lock (PdhLock) {
+                        Query = q;
+                        cPkg = hPkg;
+                        cPp1 = hPp1;
+                        cPage = hPage;
+                        cGpuShared = shList;
+                        IsReady = true;
+                    }
+                }
+            } catch {}
+            finally {
+                ReadyEvent.Set();
+            }
+        });
+        t.IsBackground = true;
+        t.Name = "PdhAsyncInit";
+        t.Start();
+    }
+
+    public static void Sample(out double pkgWatts, out double igpuWatts, out double pagePct, out double igpuSharedMB) {
+        pkgWatts = 0.0;
+        igpuWatts = 0.0;
+        pagePct = 0.0;
+        igpuSharedMB = 0.0;
+        lock (PdhLock) {
+            if (!IsReady || Query == IntPtr.Zero) return;
+            try {
+                PdhCollectQueryData(Query);
+                PDH_FMT_COUNTERVALUE v;
+                if (cPkg != IntPtr.Zero && PdhGetFormattedCounterValue(cPkg, 0x200u, IntPtr.Zero, out v) == 0 && v.CStatus == 0) {
+                    pkgWatts = Math.Round(v.doubleValue / 1000.0, 1);
+                }
+                if (cPp1 != IntPtr.Zero && PdhGetFormattedCounterValue(cPp1, 0x200u, IntPtr.Zero, out v) == 0 && v.CStatus == 0) {
+                    igpuWatts = Math.Round(v.doubleValue / 1000.0, 1);
+                }
+                if (cPage != IntPtr.Zero && PdhGetFormattedCounterValue(cPage, 0x200u, IntPtr.Zero, out v) == 0 && v.CStatus == 0) {
+                    pagePct = Math.Round(v.doubleValue, 0);
+                }
+                double maxMb = 0.0;
+                for (int i = 0; i < cGpuShared.Count; i++) {
+                    if (PdhGetFormattedCounterValue(cGpuShared[i], 0x200u, IntPtr.Zero, out v) == 0 && v.CStatus == 0) {
+                        double mb = Math.Round(v.doubleValue / (1024.0 * 1024.0), 0);
+                        if (mb > maxMb) maxMb = mb;
+                    }
+                }
+                igpuSharedMB = maxMb;
+            } catch {}
+        }
+    }
+
+    public static void Shutdown() {
+        lock (PdhLock) {
+            IsReady = false;
+            if (Query != IntPtr.Zero) {
+                try { PdhCloseQuery(Query); } catch {}
+                Query = IntPtr.Zero;
+            }
+        }
     }
 }
 
@@ -904,7 +1003,6 @@ public class MonitorController {
                             } else if (initBright < 0 && !string.IsNullOrEmpty(pnpId) && EmpiricalCache.ContainsKey(pnpId)) {
                                 initBright = EmpiricalCache[pnpId].brightness;
                             }
-                            if (initBright < 0) initBright = 50;
 
                             var bound = new BoundPhysicalMonitor();
                             bound.id = canonicalId;
@@ -1009,26 +1107,26 @@ public class MonitorController {
                     item.blueLight = cached.blueLight;
                 } else {
                     allHaveEmpiricalCache = false;
-                    item.brightness = b.initialBrightness;
-                    item.contrast = b.isInternal ? internalContrast : 50;
-                    item.gainR = b.isInternal ? internalGainR : 50;
-                    item.gainG = b.isInternal ? internalGainG : 50;
-                    item.gainB = b.isInternal ? internalGainB : 50;
+                    item.brightness = b.isInternal ? b.initialBrightness : -1;
+                    item.contrast = b.isInternal ? internalContrast : -1;
+                    item.gainR = b.isInternal ? internalGainR : -1;
+                    item.gainG = b.isInternal ? internalGainG : -1;
+                    item.gainB = b.isInternal ? internalGainB : -1;
                     item.volume = -1;
-                    item.inputSource = 15;
-                    item.colorPreset = 11;
-                    item.powerMode = 1;
+                    item.inputSource = -1;
+                    item.colorPreset = -1;
+                    item.powerMode = -1;
                     item.gamma = -1;
-                    item.blackBoost = 50;
-                    item.darkBoost = 0;
-                    item.blackLevel = 50;
+                    item.blackBoost = -1;
+                    item.darkBoost = -1;
+                    item.blackLevel = -1;
                     item.overdrive = -1;
                     item.strobing = -1;
                     item.mprt = -1;
                     item.freeSync = -1;
-                    item.gameMode = 10;
-                    item.superSharpness = 0;
-                    item.blueLight = 0;
+                    item.gameMode = -1;
+                    item.superSharpness = -1;
+                    item.blueLight = -1;
                 }
                 initialDevList.Add(item);
             }
@@ -1426,9 +1524,23 @@ public class MonitorController {
             case "colorpreset":
                 ok = WriteVcpWithRetry(ref target, 0x14, (uint)val);
                 if (ok && target != null) {
+                    int rG = -1, gG = -1, bG = -1;
+                    if (val == 11 || val == 12) {
+                        uint pv, cur, mx;
+                        IntPtr hp = target.hPhys;
+                        if (GetVCPFeatureAndVCPFeatureReply(hp, 0x16, out pv, out cur, out mx)) rG = (int)cur;
+                        if (GetVCPFeatureAndVCPFeatureReply(hp, 0x18, out pv, out cur, out mx)) gG = (int)cur;
+                        if (GetVCPFeatureAndVCPFeatureReply(hp, 0x1A, out pv, out cur, out mx)) bG = (int)cur;
+                    }
                     lock (SyncLock) {
                         for (int i = 0; i < CurrentMonitors.Count; i++) {
-                            if (CurrentMonitors[i].id == target.id) { CurrentMonitors[i].colorPreset = val; break; }
+                            if (CurrentMonitors[i].id == target.id) {
+                                CurrentMonitors[i].colorPreset = val;
+                                if (rG >= 0) CurrentMonitors[i].gainR = rG;
+                                if (gG >= 0) CurrentMonitors[i].gainG = gG;
+                                if (bG >= 0) CurrentMonitors[i].gainB = bG;
+                                break;
+                            }
                         }
                     }
                 }
@@ -1574,89 +1686,170 @@ public class MonitorController {
         }
 
         var updates = new TelemetryUpdateItem[snapshot.Count];
+        var extThreads = new List<Thread>();
 
-        // --- STAGE 1: Fast Empirical Primary Controls (Brightness, Contrast, Preset, Gains) ---
+        // Unified Parallel Empirical Probe (UI controls only: zero Stage 1/Stage 2 partial reveals)
         for (int i = 0; i < snapshot.Count; i++) {
-            var bound = snapshot[i];
+            int idx = i;
+            var bound = snapshot[idx];
             var u = new TelemetryUpdateItem();
             u.id = bound.id;
-            updates[i] = u;
+            u.isInternal = bound.isInternal;
+            if (bound.isInternal && bound.initialBrightness >= 0) {
+                u.curLcd = (byte)bound.initialBrightness;
+            }
+            updates[idx] = u;
 
             if (bound.isInternal) {
-                u.isInternal = true;
-                byte curLcd = 50;
-                if (QueryLcdBrightness(out curLcd) == 0) {
-                    u.curLcd = curLcd;
-                }
+                Thread intT = new Thread(() => {
+                    byte curLcd = u.curLcd > 0 ? u.curLcd : (byte)50;
+                    if (QueryLcdBrightness(out curLcd) == 0) {
+                        u.curLcd = curLcd;
+                    }
+                });
+                intT.IsBackground = true;
+                intT.Start();
+                extThreads.Add(intT);
                 continue;
             }
 
-            IntPtr hPhys = bound.hPhys;
+            Thread extT = new Thread(() => {
+                IntPtr hPhys = bound.hPhys;
+                uint pvct = 0, vCur = 0, vMax = 0, hlMin = 0, hlCur = 0, hlMax = 0;
+                bool hasBright = false; uint brightCur = 0, brightMax = 0;
+                bool hasContrast = false; uint contrastCur = 0, contrastMax = 0;
+                bool hasPreset = false; uint presetCur = 0, presetMax = 0;
+                bool hasPrev = false; uint prevCur = 0, prevMax = 0;
 
-            // 1. Empirical Brightness
-            uint bMin, bCur, bMax;
-            if (GetMonitorBrightness(hPhys, out bMin, out bCur, out bMax)) {
-                u.brightVal = (int)bCur;
-            } else {
-                uint pvct, vCur, vMax;
+                // 1. Empirical Brightness (Direct VCP 0x10 first for minimal latency, HL fallback)
                 if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x10, out pvct, out vCur, out vMax)) {
                     u.brightVal = (int)vCur;
+                    hasBright = true; brightCur = vCur; brightMax = vMax;
+                    hasPrev = true; prevCur = vCur; prevMax = vMax;
+                } else if (GetMonitorBrightness(hPhys, out hlMin, out hlCur, out hlMax)) {
+                    u.brightVal = (int)hlCur;
+                    hasBright = true; brightCur = hlCur; brightMax = hlMax;
+                    hasPrev = true; prevCur = hlCur; prevMax = hlMax;
                 }
-            }
 
-            // 2. Empirical Contrast
-            uint cMin, cCur, cMax;
-            if (GetMonitorContrast(hPhys, out cMin, out cCur, out cMax)) {
-                u.contrastVal = (int)cCur;
-            } else {
-                uint pvct, vCur, vMax;
+                // 2. Empirical Contrast (Direct VCP 0x12 first, HL fallback)
                 if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x12, out pvct, out vCur, out vMax)) {
                     u.contrastVal = (int)vCur;
+                    hasContrast = true; contrastCur = vCur; contrastMax = vMax;
+                    hasPrev = true; prevCur = vCur; prevMax = vMax;
+                } else if (GetMonitorContrast(hPhys, out hlMin, out hlCur, out hlMax)) {
+                    u.contrastVal = (int)hlCur;
+                    hasContrast = true; contrastCur = hlCur; contrastMax = hlMax;
+                    hasPrev = true; prevCur = hlCur; prevMax = hlMax;
                 }
-            }
 
-            // 3. Empirical Preset
-            uint pvctReply, vCurReply, vMaxReply;
-            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x14, out pvctReply, out vCurReply, out vMaxReply)) {
-                u.preset = (int)vCurReply;
-            }
+                // 3. Empirical Color Preset (VCP 0x14)
+                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x14, out pvct, out vCur, out vMax)) {
+                    u.preset = (int)vCur;
+                    hasPreset = true; presetCur = vCur; presetMax = vMax;
+                    hasPrev = true; prevCur = vCur; prevMax = vMax;
+                }
 
-            // 4. Empirical RGB White Balance Gains (queried when in user mode or if preset query unavailable)
-            bool isUserMode = (u.preset == 11 || u.preset == 12 || u.preset < 0);
-            if (isUserMode) {
-                uint rMin, rCur, rMax;
-                if (GetMonitorRedGreenOrBlueGain(hPhys, 0, out rMin, out rCur, out rMax)) {
-                    u.rGain = (int)rCur;
-                } else {
-                    uint pvct, vCur, vMax;
+                // 4. Empirical RGB Gains when User/Custom mode active (or preset unavailable)
+                if (u.preset == 11 || u.preset == 12 || u.preset < 0) {
                     if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x16, out pvct, out vCur, out vMax)) {
                         u.rGain = (int)vCur;
+                        hasPrev = true; prevCur = vCur; prevMax = vMax;
+                    } else if (GetMonitorRedGreenOrBlueGain(hPhys, 0, out hlMin, out hlCur, out hlMax)) {
+                        u.rGain = (int)hlCur;
+                        hasPrev = true; prevCur = hlCur; prevMax = hlMax;
                     }
-                }
 
-                uint gMin, gCur, gMax;
-                if (GetMonitorRedGreenOrBlueGain(hPhys, 1, out gMin, out gCur, out gMax)) {
-                    u.gGain = (int)gCur;
-                } else {
-                    uint pvct, vCur, vMax;
                     if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x18, out pvct, out vCur, out vMax)) {
                         u.gGain = (int)vCur;
+                        hasPrev = true; prevCur = vCur; prevMax = vMax;
+                    } else if (GetMonitorRedGreenOrBlueGain(hPhys, 1, out hlMin, out hlCur, out hlMax)) {
+                        u.gGain = (int)hlCur;
+                        hasPrev = true; prevCur = hlCur; prevMax = hlMax;
                     }
-                }
 
-                uint blMin, blCur, blMax;
-                if (GetMonitorRedGreenOrBlueGain(hPhys, 2, out blMin, out blCur, out blMax)) {
-                    u.bGain = (int)blCur;
-                } else {
-                    uint pvct, vCur, vMax;
                     if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x1A, out pvct, out vCur, out vMax)) {
                         u.bGain = (int)vCur;
+                        hasPrev = true; prevCur = vCur; prevMax = vMax;
+                    } else if (GetMonitorRedGreenOrBlueGain(hPhys, 2, out hlMin, out hlCur, out hlMax)) {
+                        u.bGain = (int)hlCur;
+                        hasPrev = true; prevCur = hlCur; prevMax = hlMax;
                     }
                 }
-            }
+
+                // Helper to detect firmware leaving the prior DDC reply buffer untouched (e.g. ACR10B0)
+                Func<byte, int> readVerifiedVcp = (code) => {
+                    uint rPvct = 0, rCur = 0, rMax = 0;
+                    if (!GetVCPFeatureAndVCPFeatureReply(hPhys, code, out rPvct, out rCur, out rMax)) {
+                        return -1;
+                    }
+                    if (hasPrev && rCur == prevCur && rMax == prevMax) {
+                        byte probeCode = 0;
+                        if (hasContrast && !(prevCur == contrastCur && prevMax == contrastMax)) {
+                            probeCode = 0x12;
+                        } else if (hasBright && !(prevCur == brightCur && prevMax == brightMax)) {
+                            probeCode = 0x10;
+                        } else if (hasPreset && !(prevCur == presetCur && prevMax == presetMax)) {
+                            probeCode = 0x14;
+                        }
+                        if (probeCode != 0) {
+                            uint pPvct = 0, pCur = 0, pMax = 0;
+                            if (GetVCPFeatureAndVCPFeatureReply(hPhys, probeCode, out pPvct, out pCur, out pMax)) {
+                                uint vPvct = 0, v2Cur = 0, v2Max = 0;
+                                if (!GetVCPFeatureAndVCPFeatureReply(hPhys, code, out vPvct, out v2Cur, out v2Max)) {
+                                    prevCur = pCur; prevMax = pMax;
+                                    return -1;
+                                }
+                                if (v2Cur == pCur && v2Max == pMax) {
+                                    prevCur = pCur; prevMax = pMax;
+                                    return -1;
+                                }
+                                rCur = v2Cur; rMax = v2Max;
+                            }
+                        }
+                    }
+                    hasPrev = true; prevCur = rCur; prevMax = rMax;
+                    return (int)rCur;
+                };
+
+                // 5. UI Secondary Controls (Input Source, Overdrive, Strobing/VRB, FreeSync/VRR)
+                int inputVal = readVerifiedVcp(0x60);
+                if (inputVal >= 0) {
+                    u.input = inputVal;
+                }
+
+                int odVal = readVerifiedVcp(0xE8);
+                if (odVal >= 0) {
+                    u.od = odVal;
+                }
+
+                int strVal = readVerifiedVcp(0xE5);
+                if (strVal < 0) {
+                    strVal = readVerifiedVcp(0xEF);
+                }
+                if (strVal >= 0) {
+                    u.strobing = strVal;
+                    u.mprt = strVal;
+                }
+
+                int fsVal = readVerifiedVcp(0xEA);
+                if (fsVal >= 0) {
+                    u.fs = fsVal;
+                }
+            });
+            extT.IsBackground = true;
+            extT.Start();
+            extThreads.Add(extT);
         }
 
-        // Emit Stage 1 primary empirical values immediately
+        for (int i = 0; i < extThreads.Count; i++) {
+            try { extThreads[i].Join(); } catch {}
+        }
+
+        // Ensure PDH (RAPL/Page/iGPU) and NVML background initializers have settled before marking initial Frame ready
+        try { PdhHost.ReadyEvent.WaitOne(); } catch {}
+        try { NvmlHost.ReadyEvent.WaitOne(); } catch {}
+
         lock (SyncLock) {
             for (int i = 0; i < updates.Length; i++) {
                 var u = updates[i];
@@ -1670,12 +1863,17 @@ public class MonitorController {
                             CurrentMonitors[j].gainG = internalGainG;
                             CurrentMonitors[j].gainB = internalGainB;
                         } else {
-                            if (u.brightVal >= 0) CurrentMonitors[j].brightness = u.brightVal;
-                            if (u.contrastVal >= 0) CurrentMonitors[j].contrast = u.contrastVal;
-                            if (u.rGain >= 0) CurrentMonitors[j].gainR = u.rGain;
-                            if (u.gGain >= 0) CurrentMonitors[j].gainG = u.gGain;
-                            if (u.bGain >= 0) CurrentMonitors[j].gainB = u.bGain;
-                            if (u.preset >= 0) CurrentMonitors[j].colorPreset = u.preset;
+                            CurrentMonitors[j].brightness = u.brightVal;
+                            CurrentMonitors[j].contrast = u.contrastVal;
+                            CurrentMonitors[j].gainR = u.rGain;
+                            CurrentMonitors[j].gainG = u.gGain;
+                            CurrentMonitors[j].gainB = u.bGain;
+                            CurrentMonitors[j].colorPreset = u.preset;
+                            CurrentMonitors[j].inputSource = u.input;
+                            CurrentMonitors[j].overdrive = u.od;
+                            CurrentMonitors[j].strobing = u.strobing;
+                            CurrentMonitors[j].mprt = u.mprt;
+                            CurrentMonitors[j].freeSync = u.fs;
                         }
                         break;
                     }
@@ -1683,82 +1881,6 @@ public class MonitorController {
             }
             if (PendingProbeId > CompletedProbeId) {
                 CompletedProbeId = PendingProbeId;
-            }
-            HasProbed = true;
-        }
-        WakeSignal.Set();
-
-        // --- STAGE 2: Secondary Controls in Background ---
-        for (int i = 0; i < snapshot.Count; i++) {
-            var bound = snapshot[i];
-            if (bound.isInternal) continue;
-            var u = updates[i];
-            if (u == null) continue;
-
-            IntPtr hPhys = bound.hPhys;
-            uint pvctReply, vCurReply, vMaxReply;
-
-            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x62, out pvctReply, out vCurReply, out vMaxReply)) u.vol = (int)vCurReply;
-            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x60, out pvctReply, out vCurReply, out vMaxReply)) u.input = (int)vCurReply;
-            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xD6, out pvctReply, out vCurReply, out vMaxReply)) u.power = (int)vCurReply;
-            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x6C, out pvctReply, out vCurReply, out vMaxReply)) u.blackB = (int)vCurReply;
-            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xF6, out pvctReply, out vCurReply, out vMaxReply)) u.darkB = (int)vCurReply;
-            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x72, out pvctReply, out vCurReply, out vMaxReply)) u.gamma = (int)vCurReply;
-
-            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xE8, out pvctReply, out vCurReply, out vMaxReply)) {
-                u.od = (int)vCurReply;
-            }
-
-            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xE5, out pvctReply, out vCurReply, out vMaxReply)) {
-                u.strobing = (int)vCurReply;
-                u.mprt = (int)vCurReply;
-            } else if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xEF, out pvctReply, out vCurReply, out vMaxReply)) {
-                u.strobing = (int)vCurReply;
-                u.mprt = (int)vCurReply;
-            }
-
-            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xEA, out pvctReply, out vCurReply, out vMaxReply)) {
-                u.fs = (int)vCurReply;
-            } else if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xE0, out pvctReply, out vCurReply, out vMaxReply)) {
-                u.fs = ((vCurReply == 255 || vCurReply > 0) ? 1 : 0);
-            }
-
-            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xE4, out pvctReply, out vCurReply, out vMaxReply)) {
-                u.ss = (vCurReply > 0 ? 1 : 0);
-            }
-            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xE7, out pvctReply, out vCurReply, out vMaxReply)) {
-                u.bl = (vCurReply == 255 ? 0 : (int)vCurReply);
-            }
-            if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xF9, out pvctReply, out vCurReply, out vMaxReply)) {
-                u.gameMode = (int)vCurReply;
-            }
-        }
-
-        lock (SyncLock) {
-            for (int i = 0; i < updates.Length; i++) {
-                var u = updates[i];
-                if (u == null || u.id == null || u.isInternal) continue;
-                for (int j = 0; j < CurrentMonitors.Count; j++) {
-                    if (CurrentMonitors[j].id == u.id) {
-                        CurrentMonitors[j].volume = u.vol;
-                        if (u.input >= 0) CurrentMonitors[j].inputSource = u.input;
-                        if (u.power >= 0) CurrentMonitors[j].powerMode = u.power;
-                        if (u.blackB >= 0) {
-                            CurrentMonitors[j].blackBoost = u.blackB;
-                            CurrentMonitors[j].blackLevel = u.blackB;
-                        }
-                        if (u.gamma >= 0) CurrentMonitors[j].gamma = u.gamma;
-                        if (u.darkB >= 0) CurrentMonitors[j].darkBoost = u.darkB;
-                        if (u.od >= 0) CurrentMonitors[j].overdrive = u.od;
-                        if (u.strobing >= 0) CurrentMonitors[j].strobing = u.strobing;
-                        if (u.mprt >= 0) CurrentMonitors[j].mprt = u.mprt;
-                        if (u.fs >= 0) CurrentMonitors[j].freeSync = u.fs;
-                        if (u.gameMode >= 0) CurrentMonitors[j].gameMode = u.gameMode;
-                        if (u.ss >= 0) CurrentMonitors[j].superSharpness = u.ss;
-                        if (u.bl >= 0) CurrentMonitors[j].blueLight = u.bl;
-                        break;
-                    }
-                }
             }
             HasProbed = true;
             SaveEmpiricalCache();
@@ -1796,7 +1918,7 @@ public class MonitorController {
                         if (rebindNow) {
                             lock (ProbeLock) {
                                 if (!IsRunning) break;
-                                BindPhysicalMonitors(friendlyNames ?? SavedFriendlyNames, true);
+                                BindPhysicalMonitors(friendlyNames ?? SavedFriendlyNames, false);
                             }
                         }
                         if (!IsRunning) break;
@@ -1831,8 +1953,6 @@ public class MonitorController {
     }
 
     public static void StartWorker(Dictionary<string, string> friendlyNames) {
-        RequestEmpiricalProbe(0, false, friendlyNames);
-
         Thread thread = new Thread(() => {
             try {
                 Stream stdin = Console.OpenStandardInput();
@@ -1960,6 +2080,8 @@ public class MonitorController {
         thread.IsBackground = true;
         thread.Name = "MonitorBackgroundWorker";
         thread.Start();
+
+        RequestEmpiricalProbe(0, false, friendlyNames);
     }
 
     public static void AppendEscapedJson(StringBuilder sb, string s) {
@@ -2161,14 +2283,19 @@ public class MonitorController {
 }
 "@
         if (-not ([System.Management.Automation.PSTypeName]'MonitorController').Type) {
-            Add-Type -TypeDefinition $csharpDef -ErrorAction SilentlyContinue
+            Add-Type -TypeDefinition $csharpDef -IgnoreWarnings -ErrorAction SilentlyContinue
         }
     }
+
+    [MonitorController]::GetInstantCpuLoad() | Out-Null
 
     $hasNvmlDll = Test-Path "$env:SystemRoot\System32\nvml.dll"
     if ($hasNvmlDll) {
         [NvmlHost]::StartInitAsync()
+    } else {
+        [NvmlHost]::ReadyEvent.Set() | Out-Null
     }
+    [PdhHost]::StartInitAsync()
 
     $friendlyNames = New-Object 'System.Collections.Generic.Dictionary[string,string]'
     try {
@@ -2188,7 +2315,6 @@ public class MonitorController {
     # Ephemeral runtime: persistent disk cache disabled
 
     [MonitorController]::StartWorker($friendlyNames)
-    [MonitorController]::GetInstantCpuLoad() | Out-Null
 
     # Open persistent kernel handle to parent process for watchdog (0ms native query)
     try {
@@ -2219,11 +2345,6 @@ public class MonitorController {
         }
     }
 
-    $perfCountersReady = $false
-    $pcRaplPkg = $null
-    $pcRaplPp1 = $null
-    $pcPagePct = $null
-    $sharedInstances = $null
     $nvmlUtil = $null
     $nvmlMem = $null
 
@@ -2335,40 +2456,18 @@ public class MonitorController {
             }
         }
 
-        # 3. Check background runspace result if still pending
-        if (-not $perfCountersReady -and $perfAsync -and $perfAsync.IsCompleted) {
-            try {
-                $perfRes = $perfPs.EndInvoke($perfAsync)
-                if ($perfRes -and $perfRes[0]) {
-                    $cMap = $perfRes[0]
-                    $pcRaplPkg       = $cMap["RaplPkg"]
-                    $pcRaplPp1       = $cMap["RaplPp1"]
-                    $pcPagePct       = $cMap["PagePct"]
-                    $sharedInstances = $cMap["Shared"]
-                    $perfCountersReady = $true
-                }
-            } catch {}
-            try { $perfPs.Dispose(); $perfRs.Close() } catch {}
-            $perfAsync = $null
-        }
-
-        if ($perfCountersReady) {
-            try {
-                if ($pcRaplPkg) { $cpuPower  = [math]::Round($pcRaplPkg.NextValue() / 1000, 1) }
-                if ($pcRaplPp1) { $igpuPower = [math]::Round($pcRaplPp1.NextValue() / 1000, 1) }
-                if ($pcPagePct) {
-                    $pagePct    = [math]::Round($pcPagePct.NextValue(), 0)
-                    $pageUsedGB = [math]::Round(($pagePct / 100.0) * $totalPageGB, 1)
-                }
-                if ($sharedInstances) {
-                    $maxSharedMB = 0.0
-                    foreach ($pcSh in $sharedInstances) {
-                        $mb = [math]::Round($pcSh.NextValue() / 1MB, 0)
-                        if ($mb -gt $maxSharedMB) { $maxSharedMB = $mb }
-                    }
-                    $igpuSharedMB = $maxSharedMB
-                }
-            } catch {}
+        # 3. Query native PDH counters (RAPL CPU/iGPU power, Paging %, GPU Shared Memory) in <1ms
+        if ([PdhHost]::IsReady) {
+            [double]$pkgW = 0.0
+            [double]$pp1W = 0.0
+            [double]$pPct = 0.0
+            [double]$shMb = 0.0
+            [PdhHost]::Sample([ref]$pkgW, [ref]$pp1W, [ref]$pPct, [ref]$shMb)
+            if ($pkgW -gt 0.0) { $cpuPower = $pkgW }
+            $igpuPower = $pp1W
+            $pagePct = $pPct
+            $pageUsedGB = [math]::Round(($pagePct / 100.0) * $totalPageGB, 1)
+            if ($shMb -gt 0.0) { $igpuSharedMB = $shMb }
         }
 
         # 4. Memory query via Win32 (sub-microsecond)
@@ -2485,9 +2584,9 @@ public class MonitorController {
             $idleStreak = 0
         }
 
-        # Warm-up (first 2 ticks on fresh process launch) uses 200ms baseline.
-        # Once warm: 800ms strictly under verified sustained load, 1800ms solid idle cadence on desktop.
-        $sleepInterval = if ($warmupTicks -le 2) { 200 } elseif ($isGamingLoad) { 800 } else { 1800 }
+        # While initial unified empirical probe is running, wait cleanly on WakeSignal instead of spamming 200ms ticks.
+        # Once probed, run 800ms under verified sustained load or 1800ms solid desktop idle cadence.
+        $sleepInterval = if (-not [MonitorController]::HasProbed) { 1800 } elseif ($isGamingLoad) { 800 } else { 1800 }
         [MonitorController]::WakeSignal.WaitOne($sleepInterval) | Out-Null
     }
 }
@@ -2497,8 +2596,7 @@ catch {
 finally {
     [MonitorController]::IsRunning = $false
     try { [MonitorController]::ReleaseBoundMonitors() } catch {}
-    if ($perfPs) { try { $perfPs.Dispose() } catch {} }
-    if ($perfRs) { try { $perfRs.Close() } catch {} }
+    try { [PdhHost]::Shutdown() } catch {}
     if ($parentObj) { try { $parentObj.Dispose() } catch {} }
     if ([NvmlHost]::IsReady) {
         try { [NvmlHost]::Shutdown() | Out-Null } catch {}

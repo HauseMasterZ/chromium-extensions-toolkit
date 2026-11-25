@@ -1,2 +1,2 @@
 @echo off
-powershell.exe -ExecutionPolicy Bypass -NoProfile -File "%~dp0host.ps1"
+powershell.exe -ExecutionPolicy Bypass -NoLogo -NoProfile -NonInteractive -File "%~dp0host.ps1"

@@ -548,15 +548,16 @@ function renderPanelControls(monitors) {
         return (m.width > 0 && m.height > 0) || m.brightness >= 0 || m.contrast >= 0;
     });
 
-    // Topology signature includes monitor IDs and support state of optional features so hardware changes re-mount cleanly
+    // Topology signature includes monitor IDs and support state of displayed controls so hardware changes re-mount cleanly
     const topologySignature = activeMonitors.map(m => {
+        const br = (typeof m.brightness === 'number' && m.brightness >= 0);
+        const ct = (typeof m.contrast === 'number' && m.contrast >= 0);
         const od = (typeof m.overdrive === 'number' && m.overdrive >= 0);
         const str = (typeof m.strobing === 'number' && m.strobing >= 0);
         const fs = (typeof m.freeSync === 'number' && m.freeSync >= 0);
         const inp = (typeof m.inputSource === 'number' && m.inputSource >= 0);
-        const vol = (typeof m.volume === 'number' && m.volume >= 0);
         const cp = (typeof m.colorPreset === 'number' && m.colorPreset >= 0);
-        return `${m.id}:od=${od}:str=${str}:fs=${fs}:inp=${inp}:vol=${vol}:cp=${cp}`;
+        return `${m.id}:br=${br}:ct=${ct}:od=${od}:str=${str}:fs=${fs}:inp=${inp}:cp=${cp}`;
     }).join('|');
     const existingGrid = panelControlsEl.querySelector('.panel-controls-grid') || panelControlsEl.querySelector('table');
 
@@ -638,7 +639,8 @@ function renderPanelControls(monitors) {
         const rawFeats = getFeaturesForMonitor(m);
         const feats = rawFeats.filter(f => {
             if (!ALLOWED_FEATURE_KEYS.includes(f.key)) return false;
-            if (f.key === 'brightness' || f.key === 'contrast') return true;
+            if (f.key === 'brightness') return true;
+            if (f.key === 'contrast') return m.isInternal || (typeof m.contrast === 'number' && m.contrast >= 0);
             if (f.key === 'colorPreset') return !m.isInternal && m.colorPreset !== undefined && m.colorPreset !== -1;
             if (f.key === 'gainR' || f.key === 'gainG' || f.key === 'gainB') {
                 return true;
@@ -658,6 +660,7 @@ function renderPanelControls(monitors) {
         for (const f of feats) {
             let val = m[f.key];
             if (f.key === 'colorPreset') val = ColorPresetAdapter.normalize(val);
+            const safeNumVal = (val !== undefined && val !== null && val !== -1) ? val : 50;
 
             let controlContent = '';
             let cellClass = 'panel-cell';
@@ -665,7 +668,7 @@ function renderPanelControls(monitors) {
 
             if (f.key === 'gainR' || f.key === 'gainG' || f.key === 'gainB') {
                 cellClass += ' panel-cell-numeric';
-                controlContent = `<input type="text" class="panel-input" data-mid="${m.id}" data-ctrl="${f.key}" data-min="${f.min}" data-max="${f.max}" value="${val ?? 50}">`;
+                controlContent = `<input type="text" class="panel-input" data-mid="${m.id}" data-ctrl="${f.key}" data-min="${f.min}" data-max="${f.max}" value="${safeNumVal}">`;
                 if (!m.isInternal && !ColorPresetAdapter.isUserMode(m.colorPreset)) {
                     cellStyle += ' display: none;';
                 }
@@ -677,7 +680,7 @@ function renderPanelControls(monitors) {
                 controlContent = `<select class="panel-select" data-mid="${m.id}" data-ctrl="${f.key}">${optsHtml}${fallbackOpt}</select>`;
             } else {
                 cellClass += ' panel-cell-numeric';
-                controlContent = `<input type="text" class="panel-input" data-mid="${m.id}" data-ctrl="${f.key}" data-min="${f.min}" data-max="${f.max}" value="${val ?? 50}">`;
+                controlContent = `<input type="text" class="panel-input" data-mid="${m.id}" data-ctrl="${f.key}" data-min="${f.min}" data-max="${f.max}" value="${safeNumVal}">`;
             }
 
             const isUserModeRequired = !m.isInternal && (f.key === 'gainR' || f.key === 'gainG' || f.key === 'gainB');
@@ -885,6 +888,23 @@ function initPanelControlDelegation() {
 let telemetryCells = null;
 let isStatsSynchronized = false;
 let hasMonitorProbeCompleted = false;
+let isPeripheralInitialSynced = false;
+let peripheralSyncGeneration = 0;
+let activeMouseQueryPromise = null;
+
+function startPeripheralsInitialSync() {
+    isPeripheralInitialSynced = false;
+    const syncGen = ++peripheralSyncGeneration;
+    Promise.allSettled([
+        checkAndQueryAtkMouseOnDemand(false),
+        checkAndQueryKeyboardOnDemand(false)
+    ]).then(() => {
+        if (infoState === 3 && peripheralSyncGeneration === syncGen) {
+            isPeripheralInitialSynced = true;
+            checkAndSynchronizeStatsDisplay();
+        }
+    });
+}
 
 function ensureTelemetryTable() {
     if (telemetryCells && hardwareEl && hardwareEl.querySelector('table')) return;
@@ -985,9 +1005,10 @@ function updateTelemetryCells(response) {
 function checkAndSynchronizeStatsDisplay() {
     if (isStatsSynchronized || infoState !== 3) return;
     const isHwReady = Boolean(latestTelemetry && latestTelemetry.cpuLoad !== undefined && latestTelemetry.cpuClock !== undefined);
-    const isPanelReady = Boolean(hasMonitorProbeCompleted || (latestMonitors && latestMonitors.length > 0));
+    const isPanelReady = Boolean(hasMonitorProbeCompleted && !latestTelemetry?.isProbing && waitingForProbeId === 0);
+    const isPeripheralReady = isPeripheralInitialSynced;
 
-    if (!isHwReady || !isPanelReady) {
+    if (!isHwReady || !isPanelReady || !isPeripheralReady) {
         if (hardwareEl && !hardwareEl.querySelector('table')) {
             hardwareEl.textContent = 'Loading data...';
             hardwareEl.style.display = 'block';
@@ -1068,7 +1089,8 @@ function renderTelemetry(response) {
         }
     }
 
-    if (response.hasProbed === true) {
+    const isProbeInProgress = Boolean(response.isProbing) || waitingForProbeId > 0;
+    if (response.hasProbed === true && !isProbeInProgress) {
         hasMonitorProbeCompleted = true;
         if (Array.isArray(response.monitors) && response.monitors.length > 0) {
             latestMonitors = response.monitors.map(m => ({
@@ -1162,6 +1184,7 @@ function startTelemetryStream() {
             panelControlsEl.style.display = 'none';
             panelControlsEl.innerHTML = '';
         }
+        startPeripheralsInitialSync();
     }
 
     try {
@@ -1175,6 +1198,8 @@ function startTelemetryStream() {
             telemetryPort = null;
             isStatsSynchronized = false;
             hasMonitorProbeCompleted = false;
+            isPeripheralInitialSynced = false;
+            peripheralSyncGeneration++;
             latestTelemetry = null;
             latestMonitors = [];
             currentPanelTopologySignature = null;
@@ -1218,6 +1243,8 @@ function stopTelemetryStream() {
     }
     isStatsSynchronized = false;
     hasMonitorProbeCompleted = false;
+    isPeripheralInitialSynced = false;
+    peripheralSyncGeneration++;
     waitingForProbeId = 0;
     latestTelemetry = null;
     latestMonitors = [];
@@ -1231,6 +1258,8 @@ function stopTelemetryStream() {
 function setInfoState(state) {
     infoState = state;
     if (infoState !== 3) {
+        isPeripheralInitialSynced = false;
+        peripheralSyncGeneration++;
         if (waitingForProbeId > 0) {
             waitingForProbeId = 0;
             if (probeTimeoutId) {
@@ -1273,6 +1302,7 @@ function setInfoState(state) {
 
         isStatsSynchronized = false;
         hasMonitorProbeCompleted = false;
+        isPeripheralInitialSynced = false;
         latestTelemetry = null;
         latestMonitors = [];
 
@@ -1290,6 +1320,7 @@ function setInfoState(state) {
         if (!telemetryPort) {
             startTelemetryStream();
         } else {
+            startPeripheralsInitialSync();
             try {
                 telemetryPort.postMessage({ action: 'wake' });
             } catch (e) {
@@ -1297,10 +1328,6 @@ function setInfoState(state) {
                 startTelemetryStream();
             }
         }
-
-        renderMouseControls();
-        checkAndQueryAtkMouseOnDemand(false);
-        checkAndQueryKeyboardOnDemand(false);
     }
 }
 
@@ -1777,6 +1804,7 @@ async function getPairedKeyboardDevice() {
 }
 
 async function queryAtkMouseState(device, force = false) {
+    if (activeMouseQueryPromise) return activeMouseQueryPromise;
     if (!device || isMouseQuerying || (infoState !== 3 && pendingTargetConfig === null)) return;
     const now = Date.now();
 
@@ -1786,120 +1814,134 @@ async function queryAtkMouseState(device, force = false) {
     }
 
     isMouseQuerying = true;
-    try {
-        if (!device.opened) {
-            await device.open();
-        }
-
-        // 1. Active Config (cmd: 14)
+    activeMouseQueryPromise = (async () => {
+        let gotAnyResponse = false;
         try {
-            const cfgResp = await sendAtkHidCommand(device, 14, 0, 0, null, 150);
-            if (cfgResp && cfgResp.byteLength >= 6) {
-                if (pendingTargetConfig === null) {
-                    mouseState.config = cfgResp.getUint8(5);
-                    try { localStorage.setItem('atkMouseConfig', String(mouseState.config)); } catch {}
-                }
+            if (!device.opened) {
+                await device.open();
             }
-        } catch {}
 
-        // 2. Model & Sensor via CID/MID (cmd: 16)
-        try {
-            const cidResp = await sendAtkHidCommand(device, 16, 0, 0, null, 150);
-            if (cidResp && cidResp.byteLength >= 7) {
-                const cid = cidResp.getUint8(5);
-                const mid = cidResp.getUint8(6);
-                const key = `${cid},${mid}`;
-                mouseState.name = device.productName || 'Wireless Mouse';
-                mouseState.sensor = ATK_SENSOR_MAP[key] || 'Optical Sensor';
-            }
-        } catch {}
-
-        if (!mouseState.name) {
-            mouseState.name = device.productName || 'Wireless Mouse';
-        }
-        if (!mouseState.sensor) {
-            mouseState.sensor = 'Optical Sensor';
-        }
-
-        // 3. Battery Level & Voltage (cmd: 4)
-        try {
-            const batResp = await sendAtkHidCommand(device, 4, 0, 0, null, 150);
-            if (batResp && batResp.byteLength >= 6) {
-                mouseState.battery = batResp.getUint8(5);
-                if (batResp.byteLength >= 9) {
-                    const mv = batResp.getUint16(7);
-                    if (mv > 2000 && mv < 5000) {
-                        mouseState.voltage = (mv / 1000.0).toFixed(2);
+            // 1. Active Config (cmd: 14)
+            try {
+                const cfgResp = await sendAtkHidCommand(device, 14, 0, 0, null, 150);
+                if (cfgResp && cfgResp.byteLength >= 6) {
+                    gotAnyResponse = true;
+                    if (pendingTargetConfig === null) {
+                        mouseState.config = cfgResp.getUint8(5);
+                        try { localStorage.setItem('atkMouseConfig', String(mouseState.config)); } catch {}
                     }
                 }
-            }
-        } catch {}
+            } catch {}
 
-        // 4. Firmware Version (cmd: 18)
-        try {
-            const verResp = await sendAtkHidCommand(device, 18, 0, 0, null, 150);
-            if (verResp && verResp.byteLength >= 7) {
-                const major = verResp.getUint8(5);
-                const minor = verResp.getUint8(6);
-                mouseState.firmware = `v${major}.${minor.toString(16).padStart(2, '0')}`;
-            }
-        } catch {}
+            // 2. Model & Sensor via CID/MID (cmd: 16)
+            try {
+                const cidResp = await sendAtkHidCommand(device, 16, 0, 0, null, 150);
+                if (cidResp && cidResp.byteLength >= 7) {
+                    gotAnyResponse = true;
+                    const cid = cidResp.getUint8(5);
+                    const mid = cidResp.getUint8(6);
+                    const key = `${cid},${mid}`;
+                    mouseState.name = device.productName || 'Wireless Mouse';
+                    mouseState.sensor = ATK_SENSOR_MAP[key] || 'Optical Sensor';
+                }
+            } catch {}
 
-        // 5. Polling Rate & Active DPI Stage from EEPROM addr 0 (cmd: 8)
-        let activeStage = 0;
-        try {
-            const rateResp = await sendAtkHidCommand(device, 8, 0, 10, null, 150);
-            if (rateResp && rateResp.byteLength >= 10) {
-                const rateCode = rateResp.getUint8(5);
-                mouseState.pollingRate = ATK_RATE_MAP[rateCode] || `${rateCode}Hz`;
-                activeStage = rateResp.getUint8(9);
-                const maxDpi = rateResp.getUint8(7);
-                mouseState.stage = `Stage ${activeStage + 1} / ${maxDpi}`;
+            if (!mouseState.name) {
+                mouseState.name = device.productName || 'Wireless Mouse';
             }
-        } catch {}
+            if (!mouseState.sensor) {
+                mouseState.sensor = 'Optical Sensor';
+            }
 
-        // 6. Debounce & MotionSync from EEPROM addr 169 (cmd: 8)
-        try {
-            const debResp = await sendAtkHidCommand(device, 8, 169, 10, null, 150);
-            if (debResp && debResp.byteLength >= 8) {
-                mouseState.debounce = `${debResp.getUint8(5)}ms`;
-                mouseState.motionSync = debResp.getUint8(7) === 1;
-            }
-        } catch {}
+            // 3. Battery Level & Voltage (cmd: 4)
+            try {
+                const batResp = await sendAtkHidCommand(device, 4, 0, 0, null, 150);
+                if (batResp && batResp.byteLength >= 6) {
+                    gotAnyResponse = true;
+                    mouseState.battery = batResp.getUint8(5);
+                    if (batResp.byteLength >= 9) {
+                        const mv = batResp.getUint16(7);
+                        if (mv > 2000 && mv < 5000) {
+                            mouseState.voltage = (mv / 1000.0).toFixed(2);
+                        }
+                    }
+                }
+            } catch {}
 
-        // 7. Exact DPI for active stage from EEPROM (cmd: 8)
-        try {
-            const dpiStr = await fetchAtkDpi(device, activeStage, mouseState.sensor);
-            if (dpiStr) {
-                mouseState.dpi = dpiStr;
+            // If wireless mouse is sleeping/unreachable across config, identity, and battery probes, bail early
+            if (!gotAnyResponse) {
+                return;
             }
-        } catch {}
 
-        if (!mouseState.connection) {
-            if (device.productName && (device.productName.includes('Dongle') || device.productName.includes('Receiver'))) {
-                mouseState.connection = '2.4G Wireless';
-            } else if (device.productName && device.productName.includes('Wireless')) {
-                mouseState.connection = '2.4G Wireless';
-            } else {
-                mouseState.connection = 'USB / 2.4G';
+            // 4. Firmware Version (cmd: 18)
+            try {
+                const verResp = await sendAtkHidCommand(device, 18, 0, 0, null, 150);
+                if (verResp && verResp.byteLength >= 7) {
+                    const major = verResp.getUint8(5);
+                    const minor = verResp.getUint8(6);
+                    mouseState.firmware = `v${major}.${minor.toString(16).padStart(2, '0')}`;
+                }
+            } catch {}
+
+            // 5. Polling Rate & Active DPI Stage from EEPROM addr 0 (cmd: 8)
+            let activeStage = 0;
+            try {
+                const rateResp = await sendAtkHidCommand(device, 8, 0, 10, null, 150);
+                if (rateResp && rateResp.byteLength >= 10) {
+                    const rateCode = rateResp.getUint8(5);
+                    mouseState.pollingRate = ATK_RATE_MAP[rateCode] || `${rateCode}Hz`;
+                    activeStage = rateResp.getUint8(9);
+                    const maxDpi = rateResp.getUint8(7);
+                    mouseState.stage = `Stage ${activeStage + 1} / ${maxDpi}`;
+                }
+            } catch {}
+
+            // 6. Debounce & MotionSync from EEPROM addr 169 (cmd: 8)
+            try {
+                const debResp = await sendAtkHidCommand(device, 8, 169, 10, null, 150);
+                if (debResp && debResp.byteLength >= 8) {
+                    mouseState.debounce = `${debResp.getUint8(5)}ms`;
+                    mouseState.motionSync = debResp.getUint8(7) === 1;
+                }
+            } catch {}
+
+            // 7. Exact DPI for active stage from EEPROM (cmd: 8)
+            try {
+                const dpiStr = await fetchAtkDpi(device, activeStage, mouseState.sensor);
+                if (dpiStr) {
+                    mouseState.dpi = dpiStr;
+                }
+            } catch {}
+
+            if (!mouseState.connection) {
+                if (device.productName && (device.productName.includes('Dongle') || device.productName.includes('Receiver'))) {
+                    mouseState.connection = '2.4G Wireless';
+                } else if (device.productName && device.productName.includes('Wireless')) {
+                    mouseState.connection = '2.4G Wireless';
+                } else {
+                    mouseState.connection = 'USB / 2.4G';
+                }
             }
+
+            mouseState.isPaired = true;
+            lastMouseQueryTime = Date.now();
+        } catch (e) {
+            console.warn('[CToolkit] Mouse WebHID query failed:', e);
+        } finally {
+            if (device && device.opened) {
+                try { await device.close(); } catch {}
+            }
+            isMouseQuerying = false;
+            activeMouseQueryPromise = null;
+            renderMouseControls();
         }
-
-        mouseState.isPaired = true;
-        lastMouseQueryTime = Date.now();
-    } catch (e) {
-        console.warn('[CToolkit] Mouse WebHID query failed:', e);
-    } finally {
-        if (device && device.opened) {
-            try { await device.close(); } catch {}
-        }
-        isMouseQuerying = false;
-        renderMouseControls();
-    }
+    })();
+    return activeMouseQueryPromise;
 }
 
 async function checkAndQueryAtkMouseOnDemand(force = false) {
     if (infoState !== 3 || typeof navigator === 'undefined' || !navigator.hid) return;
+    if (activeMouseQueryPromise) return activeMouseQueryPromise;
     try {
         if (!pairedAtkDevice) {
             pairedAtkDevice = await getPairedAtkCommDevice();
@@ -2210,6 +2252,12 @@ function renderPeripheralDockHtml() {
     `;
 }
 
+function setTextIfChanged(el, nextText) {
+    if (el && el.textContent !== nextText) {
+        el.textContent = nextText;
+    }
+}
+
 function updatePeripheralDockUI(container = document) {
     const dockEl = (container && container.id === 'peripheral-dock')
         ? container
@@ -2218,99 +2266,85 @@ function updatePeripheralDockUI(container = document) {
         || document.querySelector('#peripheral-dock'));
     if (!dockEl) return;
 
-    // Update Keyboard pill & popover
-    const kbPillBatt = dockEl.querySelector('#kb-pill-batt');
-    if (kbPillBatt) {
-        if (keyboardState.isPaired && keyboardState.battery === 'Wired') {
-            kbPillBatt.textContent = 'Wired';
-        } else if (keyboardState.isPaired && keyboardState.battery !== null) {
-            kbPillBatt.textContent = `${keyboardState.battery}%`;
-        } else {
-            kbPillBatt.textContent = '--%';
-        }
+    // Update Keyboard pill & popover (mutate DOM strictly on changed values)
+    let nextKbPillBatt = '--%';
+    if (keyboardState.isPaired && keyboardState.battery === 'Wired') {
+        nextKbPillBatt = 'Wired';
+    } else if (keyboardState.isPaired && keyboardState.battery !== null) {
+        nextKbPillBatt = `${keyboardState.battery}%`;
     }
-    const kbNameEl = dockEl.querySelector('#kb-popover-name');
-    if (kbNameEl) kbNameEl.textContent = keyboardState.name || 'Keyboard';
-    const kbBadgeEl = dockEl.querySelector('#kb-popover-badge');
-    if (kbBadgeEl) kbBadgeEl.textContent = keyboardState.isPaired ? 'Paired' : 'Unpaired';
+    setTextIfChanged(dockEl.querySelector('#kb-pill-batt'), nextKbPillBatt);
+    setTextIfChanged(dockEl.querySelector('#kb-popover-name'), keyboardState.name || 'Keyboard');
+    setTextIfChanged(dockEl.querySelector('#kb-popover-badge'), keyboardState.isPaired ? 'Paired' : 'Unpaired');
 
     const kbBtns = dockEl.querySelectorAll('#kb-popover-configs .peripheral-config-btn');
     kbBtns.forEach(btn => {
         const cfgId = parseInt(btn.getAttribute('data-config-id'), 10);
-        if (cfgId === keyboardState.config) {
+        const shouldBeActive = cfgId === keyboardState.config;
+        if (shouldBeActive && !btn.classList.contains('active')) {
             btn.classList.add('active');
-        } else {
+        } else if (!shouldBeActive && btn.classList.contains('active')) {
             btn.classList.remove('active');
         }
     });
 
-    const kbStatLayout = dockEl.querySelector('#kb-stat-layout');
-    if (kbStatLayout) kbStatLayout.textContent = keyboardState.layout || '--';
-    const kbStatRate = dockEl.querySelector('#kb-stat-rate');
-    if (kbStatRate) kbStatRate.textContent = keyboardState.pollingRate || '--';
-    const kbStatBatt = dockEl.querySelector('#kb-stat-batt');
-    if (kbStatBatt) {
-        if (keyboardState.isPaired && keyboardState.battery === 'Wired') {
-            kbStatBatt.textContent = 'Wired (USB)';
-        } else if (keyboardState.isPaired && keyboardState.battery !== null) {
-            kbStatBatt.textContent = `${keyboardState.battery}%${keyboardState.voltage ? ` (${keyboardState.voltage}V)` : ''}`;
-        } else {
-            kbStatBatt.textContent = '--';
-        }
+    setTextIfChanged(dockEl.querySelector('#kb-stat-layout'), keyboardState.layout || '--');
+    setTextIfChanged(dockEl.querySelector('#kb-stat-rate'), keyboardState.pollingRate || '--');
+    let nextKbStatBatt = '--';
+    if (keyboardState.isPaired && keyboardState.battery === 'Wired') {
+        nextKbStatBatt = 'Wired (USB)';
+    } else if (keyboardState.isPaired && keyboardState.battery !== null) {
+        nextKbStatBatt = `${keyboardState.battery}%${keyboardState.voltage ? ` (${keyboardState.voltage}V)` : ''}`;
     }
-    const kbStatLatency = dockEl.querySelector('#kb-stat-latency');
-    if (kbStatLatency) kbStatLatency.textContent = keyboardState.latency || '--';
-    const kbStatDebounce = dockEl.querySelector('#kb-stat-debounce');
-    if (kbStatDebounce) kbStatDebounce.textContent = keyboardState.debounce || '--';
-    const kbStatFirmware = dockEl.querySelector('#kb-stat-firmware');
-    if (kbStatFirmware) kbStatFirmware.textContent = keyboardState.firmware || '--';
-    const kbStatLink = dockEl.querySelector('#kb-stat-link');
-    if (kbStatLink) kbStatLink.textContent = keyboardState.connection || '--';
-    const kbStatRgb = dockEl.querySelector('#kb-stat-rgb');
-    if (kbStatRgb) kbStatRgb.textContent = keyboardState.rgbMode || '--';
+    setTextIfChanged(dockEl.querySelector('#kb-stat-batt'), nextKbStatBatt);
+    setTextIfChanged(dockEl.querySelector('#kb-stat-latency'), keyboardState.latency || '--');
+    setTextIfChanged(dockEl.querySelector('#kb-stat-debounce'), keyboardState.debounce || '--');
+    setTextIfChanged(dockEl.querySelector('#kb-stat-firmware'), keyboardState.firmware || '--');
+    setTextIfChanged(dockEl.querySelector('#kb-stat-link'), keyboardState.connection || '--');
+    setTextIfChanged(dockEl.querySelector('#kb-stat-rgb'), keyboardState.rgbMode || '--');
 
     // Update Mouse pill & popover
-    const mousePillBatt = dockEl.querySelector('#mouse-pill-batt');
-    if (mousePillBatt) {
-        mousePillBatt.textContent = (mouseState.isPaired && mouseState.battery !== null) ? `${mouseState.battery}%` : '--%';
-    }
-    const mouseNameEl = dockEl.querySelector('#mouse-popover-name');
-    if (mouseNameEl) mouseNameEl.textContent = mouseState.name || (mouseState.isPaired ? 'ATK Mouse' : 'Mouse');
-    const mouseBadgeEl = dockEl.querySelector('#mouse-popover-badge');
-    if (mouseBadgeEl) mouseBadgeEl.textContent = mouseState.isPaired ? 'Paired' : 'Unpaired';
+    setTextIfChanged(
+        dockEl.querySelector('#mouse-pill-batt'),
+        (mouseState.isPaired && mouseState.battery !== null) ? `${mouseState.battery}%` : '--%'
+    );
+    setTextIfChanged(
+        dockEl.querySelector('#mouse-popover-name'),
+        mouseState.name || (mouseState.isPaired ? 'ATK Mouse' : 'Mouse')
+    );
+    setTextIfChanged(
+        dockEl.querySelector('#mouse-popover-badge'),
+        mouseState.isPaired ? 'Paired' : 'Unpaired'
+    );
 
     const mouseBtns = dockEl.querySelectorAll('#mouse-popover-configs .peripheral-config-btn');
     mouseBtns.forEach(btn => {
         const cfgId = parseInt(btn.getAttribute('data-config-id'), 10);
-        if (cfgId === mouseState.config) {
+        const shouldBeActive = cfgId === mouseState.config;
+        if (shouldBeActive && !btn.classList.contains('active')) {
             btn.classList.add('active');
-        } else {
+        } else if (!shouldBeActive && btn.classList.contains('active')) {
             btn.classList.remove('active');
         }
     });
 
-    const mouseStatDpi = dockEl.querySelector('#mouse-stat-dpi');
-    if (mouseStatDpi) mouseStatDpi.textContent = mouseState.dpi || '--';
-    const mouseStatRate = dockEl.querySelector('#mouse-stat-rate');
-    if (mouseStatRate) mouseStatRate.textContent = mouseState.pollingRate || '--';
-    const mouseStatBatt = dockEl.querySelector('#mouse-stat-batt');
-    if (mouseStatBatt) {
-        mouseStatBatt.textContent = (mouseState.isPaired && mouseState.battery !== null)
+    setTextIfChanged(dockEl.querySelector('#mouse-stat-dpi'), mouseState.dpi || '--');
+    setTextIfChanged(dockEl.querySelector('#mouse-stat-rate'), mouseState.pollingRate || '--');
+    setTextIfChanged(
+        dockEl.querySelector('#mouse-stat-batt'),
+        (mouseState.isPaired && mouseState.battery !== null)
             ? `${mouseState.battery}%${mouseState.voltage ? ` (${mouseState.voltage}V)` : ''}`
-            : '--';
-    }
-    const mouseStatSensor = dockEl.querySelector('#mouse-stat-sensor');
-    if (mouseStatSensor) mouseStatSensor.textContent = mouseState.sensor || '--';
-    const mouseStatStage = dockEl.querySelector('#mouse-stat-stage');
-    if (mouseStatStage) mouseStatStage.textContent = mouseState.stage || '--';
-    const mouseStatDebounce = dockEl.querySelector('#mouse-stat-debounce');
-    if (mouseStatDebounce) mouseStatDebounce.textContent = mouseState.debounce || '--';
-    const mouseStatMotionSync = dockEl.querySelector('#mouse-stat-motionsync');
-    if (mouseStatMotionSync) mouseStatMotionSync.textContent = mouseState.motionSync !== null ? (mouseState.motionSync ? 'On' : 'Off') : '--';
-    const mouseStatFirmware = dockEl.querySelector('#mouse-stat-firmware');
-    if (mouseStatFirmware) mouseStatFirmware.textContent = mouseState.firmware || '--';
-    const mouseStatLink = dockEl.querySelector('#mouse-stat-link');
-    if (mouseStatLink) mouseStatLink.textContent = mouseState.connection || '--';
+            : '--'
+    );
+    setTextIfChanged(dockEl.querySelector('#mouse-stat-sensor'), mouseState.sensor || '--');
+    setTextIfChanged(dockEl.querySelector('#mouse-stat-stage'), mouseState.stage || '--');
+    setTextIfChanged(dockEl.querySelector('#mouse-stat-debounce'), mouseState.debounce || '--');
+    setTextIfChanged(
+        dockEl.querySelector('#mouse-stat-motionsync'),
+        mouseState.motionSync !== null ? (mouseState.motionSync ? 'On' : 'Off') : '--'
+    );
+    setTextIfChanged(dockEl.querySelector('#mouse-stat-firmware'), mouseState.firmware || '--');
+    setTextIfChanged(dockEl.querySelector('#mouse-stat-link'), mouseState.connection || '--');
 }
 
 function attachPeripheralDockListeners(container = document) {
