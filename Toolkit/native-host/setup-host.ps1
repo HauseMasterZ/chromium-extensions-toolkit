@@ -1,6 +1,7 @@
 # Setup script for CToolkit GPU Telemetry Native Messaging Host
 param(
-    [switch]$NewKey = $false
+    [switch]$NewKey = $false,
+    [switch]$RebuildCSharp = $false
 )
 
 $ErrorActionPreference = 'Stop'
@@ -19,12 +20,23 @@ $hostExePath = Join-Path $scriptDir "host.exe"
 $jsonManifestPath = Join-Path $scriptDir "com.gpu.telemetry.json"
 $extensionManifestPath = (Resolve-Path (Join-Path $scriptDir "..\manifest.json")).Path
 
-if (-not (Test-Path $hostCsPath) -and -not (Test-Path $hostBatPath)) {
-    Write-Error "Neither host.cs nor host.bat found in: $scriptDir"
+if (-not (Test-Path $hostExePath) -and -not (Test-Path $hostCsPath) -and -not (Test-Path $hostBatPath)) {
+    Write-Error "Neither host.exe, host.cs, nor host.bat found in: $scriptDir"
     exit 1
 }
 
-if (Test-Path $hostCsPath) {
+$preserveNativeBinary = $false
+if ((Test-Path $hostExePath) -and -not $RebuildCSharp) {
+    try {
+        [void][System.Reflection.AssemblyName]::GetAssemblyName($hostExePath)
+    } catch [System.BadImageFormatException] {
+        $preserveNativeBinary = $true
+    } catch {}
+}
+
+if ($preserveNativeBinary) {
+    Write-Host "[0/3] Preserving existing native C++ telemetry host: $hostExePath" -ForegroundColor Green
+} elseif (Test-Path $hostCsPath) {
     $runtimeDir = [System.Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()
     $cscPath = Join-Path $runtimeDir "csc.exe"
     if (-not (Test-Path $cscPath)) {

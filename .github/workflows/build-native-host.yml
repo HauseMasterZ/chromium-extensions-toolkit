@@ -1,0 +1,76 @@
+name: Build Native C++ Telemetry Host
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'Toolkit/native-host/host.cpp'
+      - '.github/workflows/build-native-host.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-native-host
+  cancel-in-progress: false
+
+jobs:
+  build-host:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Compile Static x64 C++ Telemetry Host
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) { throw "vswhere.exe not found" }
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsPath) { throw "Visual Studio C++ x64 build tools not found" }
+          $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
+          if (-not (Test-Path $vcvars)) { throw "vcvars64.bat not found at $vcvars" }
+
+          $compileArgs = "`"$vcvars`" && cl.exe /nologo /O2 /EHsc /MT /std:c++17 /W3 Toolkit\native-host\host.cpp /Fe:Toolkit\native-host\host.exe user32.lib gdi32.lib dxva2.lib setupapi.lib psapi.lib pdh.lib advapi32.lib ole32.lib oleaut32.lib wbemuuid.lib kernel32.lib"
+          & cmd.exe /s /c "`"$compileArgs`""
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          # Smoke check: verify native binary starts and exits cleanly on immediate EOF stdin
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = (Resolve-Path "Toolkit\native-host\host.exe").Path
+          $psi.UseShellExecute = $false
+          $psi.RedirectStandardInput = $true
+          $psi.RedirectStandardOutput = $true
+          $psi.CreateNoWindow = $true
+          $proc = [System.Diagnostics.Process]::Start($psi)
+          $proc.StandardInput.Close()
+          if (-not $proc.WaitForExit(10000)) {
+            $proc.Kill()
+            throw "Smoke check timed out waiting for host.exe EOF exit"
+          }
+          if ($proc.ExitCode -ne 0) {
+            throw "Smoke check failed with exit code $($proc.ExitCode)"
+          }
+          Write-Host "Built and verified native C++ host.exe ($((Get-Item 'Toolkit\native-host\host.exe').Length) bytes)"
+
+      - name: Upload Native Host Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-host-exe
+          path: Toolkit/native-host/host.exe
+          if-no-files-found: error
+
+      - name: Package Toolkit Archive & Publish Native Host Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          if (Test-Path "Toolkit.zip") { Remove-Item "Toolkit.zip" -Force }
+          Compress-Archive -Path "Toolkit" -DestinationPath "Toolkit.zip" -CompressionLevel Optimal
+          $tag = "native-v$([DateTime]::UtcNow.ToString('yyyy.MM.dd-HHmm'))"
+          $notes = 'Prebuilt static x64 Win32 C++ native messaging host (`host.exe`) and packaged Toolkit archive.'
+          gh release create $tag "Toolkit/native-host/host.exe" "Toolkit.zip" `
+            --title "Native C++ Telemetry Host ($tag)" `
+            --notes $notes
