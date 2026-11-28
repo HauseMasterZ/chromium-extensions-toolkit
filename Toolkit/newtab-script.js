@@ -912,6 +912,7 @@ let telemetryCells = null;
 let isStatsSynchronized = false;
 let hasMonitorProbeCompleted = false;
 let isPeripheralInitialSynced = false;
+let showTelemetryLoadingState = false;
 let peripheralSyncGeneration = 0;
 let activeMouseQueryPromise = null;
 
@@ -1032,7 +1033,7 @@ function checkAndSynchronizeStatsDisplay() {
     const isPeripheralReady = isPeripheralInitialSynced;
 
     if (!isHwReady || !isPanelReady || !isPeripheralReady) {
-        if (hardwareEl && !hardwareEl.querySelector('table')) {
+        if (showTelemetryLoadingState && hardwareEl && !hardwareEl.querySelector('table')) {
             hardwareEl.textContent = 'Loading data...';
             hardwareEl.style.display = 'block';
         }
@@ -1077,6 +1078,7 @@ function renderTelemetry(response) {
             const msg = (response && response.message) ? response.message : 'Host Offline';
             if (hardwareEl) {
                 hardwareEl.textContent = `Host Offline (${msg})`;
+                hardwareEl.style.display = 'block';
                 telemetryCells = null;
             }
             if (panelControlsEl) {
@@ -1084,6 +1086,18 @@ function renderTelemetry(response) {
                 if (!hasExistingTable) {
                     panelControlsEl.textContent = `Host Offline (${msg})`;
                 }
+            }
+        }
+        return;
+    }
+
+    if (response.telemetryStatus) {
+        if (infoState !== 3) return;
+        if (response.telemetryStatus === 'cold' && !isStatsSynchronized) {
+            showTelemetryLoadingState = true;
+            if (hardwareEl && !hardwareEl.querySelector('table')) {
+                hardwareEl.textContent = 'Loading data...';
+                hardwareEl.style.display = 'block';
             }
         }
         return;
@@ -1198,9 +1212,10 @@ function startTelemetryStream() {
     if (telemetryPort || document.hidden || infoState !== 3) return;
 
     if (!isStatsSynchronized) {
+        showTelemetryLoadingState = false;
         if (hardwareEl) {
-            hardwareEl.style.display = 'block';
-            hardwareEl.textContent = 'Loading data...';
+            hardwareEl.style.display = 'none';
+            hardwareEl.textContent = '';
             telemetryCells = null;
         }
         if (panelControlsEl) {
@@ -1222,6 +1237,7 @@ function startTelemetryStream() {
             isStatsSynchronized = false;
             hasMonitorProbeCompleted = false;
             isPeripheralInitialSynced = false;
+            showTelemetryLoadingState = false;
             peripheralSyncGeneration++;
             latestTelemetry = null;
             latestMonitors = [];
@@ -1243,7 +1259,10 @@ function startTelemetryStream() {
     } catch (e) {
         telemetryPort = null;
         if (infoState === 3) {
-            if (hardwareEl) hardwareEl.textContent = 'Connection Error';
+            if (hardwareEl) {
+                hardwareEl.textContent = 'Connection Error';
+                hardwareEl.style.display = 'block';
+            }
             if (panelControlsEl) panelControlsEl.style.display = 'none';
         }
     }
@@ -1267,6 +1286,7 @@ function stopTelemetryStream() {
     isStatsSynchronized = false;
     hasMonitorProbeCompleted = false;
     isPeripheralInitialSynced = false;
+    showTelemetryLoadingState = false;
     peripheralSyncGeneration++;
     waitingForProbeId = 0;
     latestTelemetry = null;
@@ -1326,12 +1346,13 @@ function setInfoState(state) {
         isStatsSynchronized = false;
         hasMonitorProbeCompleted = false;
         isPeripheralInitialSynced = false;
+        showTelemetryLoadingState = false;
         latestTelemetry = null;
         latestMonitors = [];
 
         if (hardwareEl) {
-            hardwareEl.style.display = 'block';
-            hardwareEl.textContent = 'Loading data...';
+            hardwareEl.style.display = 'none';
+            hardwareEl.textContent = '';
             telemetryCells = null;
         }
         if (panelControlsEl) {

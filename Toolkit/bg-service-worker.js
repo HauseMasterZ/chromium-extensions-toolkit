@@ -2038,6 +2038,18 @@ chrome.runtime.onConnect.addListener((clientPort) => {
     }
   });
 
+  // Signal whether the native host is already warm and probed (within 10s teardown cooldown)
+  // so clients skip flashing "Loading data..." when live telemetry wakes immediately.
+  const isHostWarmAndProbed = Boolean(
+    nativeTelemetryPort &&
+    lastTelemetryData &&
+    lastTelemetryData.hasProbed === true &&
+    !lastTelemetryData.isProbing
+  );
+  try {
+    clientPort.postMessage({ telemetryStatus: isHostWarmAndProbed ? 'warm' : 'cold' });
+  } catch (e) {}
+
   // If host is active and warm, wake it immediately; otherwise wait for session/local hydration (~1ms on SW boot) before launch
   if (nativeTelemetryPort) {
     dispatchNativeHostMessage({ action: 'wake' });
