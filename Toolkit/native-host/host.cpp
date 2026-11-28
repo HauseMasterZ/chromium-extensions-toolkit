@@ -14,6 +14,9 @@
 #include <lowlevelmonitorconfigurationapi.h>
 #include <psapi.h>
 #include <pdh.h>
+#ifdef GetObject
+#undef GetObject
+#endif
 #include <wbemidl.h>
 
 #include <algorithm>
@@ -1045,10 +1048,6 @@ void SetInternalDisplayCalibration(int contrast, int r, int g, int b) {
     if (targetGdi.empty()) targetGdi = "\\\\.\\DISPLAY1";
     ApplyInternalCalibrationRamp(targetGdi, internalContrast, internalGainR, internalGainG, internalGainB, 100);
 }
-
-#ifdef GetObject
-#undef GetObject
-#endif
 
 bool InvokeWmiSetBrightness(uint8_t val) {
     HRESULT hrCo = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
