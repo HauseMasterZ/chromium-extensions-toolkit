@@ -1844,39 +1844,7 @@ async function queryAtkMouseState(device, force = false) {
                 await device.open();
             }
 
-            // 1. Active Config (cmd: 14)
-            try {
-                const cfgResp = await sendAtkHidCommand(device, 14, 0, 0, null, 150);
-                if (cfgResp && cfgResp.byteLength >= 6) {
-                    gotAnyResponse = true;
-                    if (pendingTargetConfig === null) {
-                        mouseState.config = cfgResp.getUint8(5);
-                        try { localStorage.setItem('atkMouseConfig', String(mouseState.config)); } catch {}
-                    }
-                }
-            } catch {}
-
-            // 2. Model & Sensor via CID/MID (cmd: 16)
-            try {
-                const cidResp = await sendAtkHidCommand(device, 16, 0, 0, null, 150);
-                if (cidResp && cidResp.byteLength >= 7) {
-                    gotAnyResponse = true;
-                    const cid = cidResp.getUint8(5);
-                    const mid = cidResp.getUint8(6);
-                    const key = `${cid},${mid}`;
-                    mouseState.name = device.productName || 'Wireless Mouse';
-                    mouseState.sensor = ATK_SENSOR_MAP[key] || 'Optical Sensor';
-                }
-            } catch {}
-
-            if (!mouseState.name) {
-                mouseState.name = device.productName || 'Wireless Mouse';
-            }
-            if (!mouseState.sensor) {
-                mouseState.sensor = 'Optical Sensor';
-            }
-
-            // 3. Battery Level & Voltage (cmd: 4)
+            // 1. Fail-fast Reachability & Battery Level / Voltage (cmd: 4) before remaining queries
             try {
                 const batResp = await sendAtkHidCommand(device, 4, 0, 0, null, 150);
                 if (batResp && batResp.byteLength >= 6) {
@@ -1891,9 +1859,39 @@ async function queryAtkMouseState(device, force = false) {
                 }
             } catch {}
 
-            // If wireless mouse is sleeping/unreachable across config, identity, and battery probes, bail early
+            // If wireless mouse is sleeping/unreachable on battery probe, bail immediately after 1 timeout
             if (!gotAnyResponse) {
                 return;
+            }
+
+            // 2. Active Config (cmd: 14)
+            try {
+                const cfgResp = await sendAtkHidCommand(device, 14, 0, 0, null, 150);
+                if (cfgResp && cfgResp.byteLength >= 6) {
+                    if (pendingTargetConfig === null) {
+                        mouseState.config = cfgResp.getUint8(5);
+                        try { localStorage.setItem('atkMouseConfig', String(mouseState.config)); } catch {}
+                    }
+                }
+            } catch {}
+
+            // 3. Model & Sensor via CID/MID (cmd: 16)
+            try {
+                const cidResp = await sendAtkHidCommand(device, 16, 0, 0, null, 150);
+                if (cidResp && cidResp.byteLength >= 7) {
+                    const cid = cidResp.getUint8(5);
+                    const mid = cidResp.getUint8(6);
+                    const key = `${cid},${mid}`;
+                    mouseState.name = device.productName || 'Wireless Mouse';
+                    mouseState.sensor = ATK_SENSOR_MAP[key] || 'Optical Sensor';
+                }
+            } catch {}
+
+            if (!mouseState.name) {
+                mouseState.name = device.productName || 'Wireless Mouse';
+            }
+            if (!mouseState.sensor) {
+                mouseState.sensor = 'Optical Sensor';
             }
 
             // 4. Firmware Version (cmd: 18)

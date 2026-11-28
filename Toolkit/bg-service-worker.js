@@ -1140,6 +1140,11 @@ function rehydrateFeatureScripts() {
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
+  vcpFeatureMasks = {};
+  try {
+    chrome.storage?.session?.remove('vcpFeatureMasks')?.catch?.(() => {});
+  } catch {}
+
   try {
     const existing = await chrome.scripting.getRegisteredContentScripts();
     const legacy = existing.map(s => s.id).filter(id => id === 'custom-seek');
@@ -1154,8 +1159,31 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 
+const queuedNativeMessages = [];
+
 function dispatchNativeHostMessage(payload) {
   cancelHostTeardown();
+  if (!isTelemetryStorageHydrated) {
+    if (payload) queuedNativeMessages.push(payload);
+    ensureTelemetryStorageHydrated().then(() => {
+      if (!nativeTelemetryPort) {
+        startNativeTelemetry();
+      } else {
+        while (queuedNativeMessages.length > 0) {
+          const queued = queuedNativeMessages.shift();
+          try {
+            nativeTelemetryPort.postMessage(queued);
+          } catch (e) {
+            console.error('Failed to post message to native host:', e);
+          }
+        }
+      }
+      if (telemetryClients.size === 0) {
+        scheduleHostTeardown();
+      }
+    });
+    return;
+  }
   if (!nativeTelemetryPort) {
     startNativeTelemetry();
   }
@@ -1878,34 +1906,72 @@ const internalDisplaySettings = {
   gainG: 50,
   gainB: 50
 };
+let vcpFeatureMasks = {};
 let isInternalStorageHydrated = false;
+let isVcpCacheHydrated = false;
+let isTelemetryStorageHydrated = false;
+let telemetryStorageReadyPromise = null;
 
-try {
-  chrome.storage.local.get({
-    internalContrast: 50,
-    internalGainR: 50,
-    internalGainG: 50,
-    internalGainB: 50
-  }, (res) => {
-    if (chrome.runtime.lastError) return;
-    if (typeof res?.internalContrast === 'number') internalDisplaySettings.contrast = res.internalContrast;
-    if (typeof res?.internalGainR === 'number') internalDisplaySettings.gainR = res.internalGainR;
-    if (typeof res?.internalGainG === 'number') internalDisplaySettings.gainG = res.internalGainG;
-    if (typeof res?.internalGainB === 'number') internalDisplaySettings.gainB = res.internalGainB;
-    isInternalStorageHydrated = true;
-    if (nativeTelemetryPort) {
-      try {
-        nativeTelemetryPort.postMessage({
-          action: 'init_internal_display',
-          contrast: internalDisplaySettings.contrast,
-          gainR: internalDisplaySettings.gainR,
-          gainG: internalDisplaySettings.gainG,
-          gainB: internalDisplaySettings.gainB
-        });
-      } catch (e) {}
+function ensureTelemetryStorageHydrated() {
+  if (isTelemetryStorageHydrated) return Promise.resolve();
+  if (telemetryStorageReadyPromise) return telemetryStorageReadyPromise;
+
+  const localPromise = new Promise((resolve) => {
+    try {
+      chrome.storage.local.get({
+        internalContrast: 50,
+        internalGainR: 50,
+        internalGainG: 50,
+        internalGainB: 50
+      }, (res) => {
+        if (!chrome.runtime.lastError && res) {
+          if (typeof res.internalContrast === 'number') internalDisplaySettings.contrast = res.internalContrast;
+          if (typeof res.internalGainR === 'number') internalDisplaySettings.gainR = res.internalGainR;
+          if (typeof res.internalGainG === 'number') internalDisplaySettings.gainG = res.internalGainG;
+          if (typeof res.internalGainB === 'number') internalDisplaySettings.gainB = res.internalGainB;
+        }
+        isInternalStorageHydrated = true;
+        resolve();
+      });
+    } catch {
+      isInternalStorageHydrated = true;
+      resolve();
     }
   });
-} catch (e) {}
+
+  const sessionPromise = new Promise((resolve) => {
+    try {
+      if (!chrome.storage?.session?.get) {
+        isVcpCacheHydrated = true;
+        resolve();
+        return;
+      }
+      chrome.storage.session.get({ vcpFeatureMasks: {} }, (res) => {
+        if (!chrome.runtime.lastError && res?.vcpFeatureMasks && typeof res.vcpFeatureMasks === 'object') {
+          const clean = {};
+          for (const [k, v] of Object.entries(res.vcpFeatureMasks)) {
+            if (typeof k === 'string' && typeof v === 'number' && v >= 0) {
+              clean[k] = v;
+            }
+          }
+          vcpFeatureMasks = clean;
+        }
+        isVcpCacheHydrated = true;
+        resolve();
+      });
+    } catch {
+      isVcpCacheHydrated = true;
+      resolve();
+    }
+  });
+
+  telemetryStorageReadyPromise = Promise.all([localPromise, sessionPromise]).then(() => {
+    isTelemetryStorageHydrated = true;
+  });
+  return telemetryStorageReadyPromise;
+}
+
+ensureTelemetryStorageHydrated();
 
 function recordInternalDisplaySetting(msg) {
   if (!msg || msg.action !== 'set_panel_control') return;
@@ -1951,14 +2017,6 @@ chrome.runtime.onConnect.addListener((clientPort) => {
   cancelHostTeardown();
   telemetryClients.add(clientPort);
 
-  // If host is active and warm, wake it immediately for a fresh live tick at 0ms latency
-  if (nativeTelemetryPort) {
-    dispatchNativeHostMessage({ action: 'wake' });
-  } else {
-    // Start single native host instance if not already running
-    startNativeTelemetry();
-  }
-
   clientPort.onMessage.addListener((msg) => {
     cancelHostTeardown();
     if (msg) {
@@ -1979,6 +2037,21 @@ chrome.runtime.onConnect.addListener((clientPort) => {
       scheduleHostTeardown();
     }
   });
+
+  // If host is active and warm, wake it immediately; otherwise wait for session/local hydration (~1ms on SW boot) before launch
+  if (nativeTelemetryPort) {
+    dispatchNativeHostMessage({ action: 'wake' });
+  } else if (isTelemetryStorageHydrated) {
+    startNativeTelemetry();
+  } else {
+    ensureTelemetryStorageHydrated().then(() => {
+      if (telemetryClients.size > 0 && !nativeTelemetryPort) {
+        startNativeTelemetry();
+      } else if (telemetryClients.size > 0 && nativeTelemetryPort) {
+        dispatchNativeHostMessage({ action: 'wake' });
+      }
+    });
+  }
 });
 
 function startNativeTelemetry() {
@@ -1987,21 +2060,44 @@ function startNativeTelemetry() {
   try {
     nativeTelemetryPort = chrome.runtime.connectNative('com.gpu.telemetry');
 
-    if (isInternalStorageHydrated) {
+    try {
+      nativeTelemetryPort.postMessage({
+        action: 'init_internal_display',
+        contrast: internalDisplaySettings.contrast,
+        gainR: internalDisplaySettings.gainR,
+        gainG: internalDisplaySettings.gainG,
+        gainB: internalDisplaySettings.gainB,
+        vcpMasks: vcpFeatureMasks
+      });
+    } catch (e) {}
+
+    while (queuedNativeMessages.length > 0) {
+      const queued = queuedNativeMessages.shift();
       try {
-        nativeTelemetryPort.postMessage({
-          action: 'init_internal_display',
-          contrast: internalDisplaySettings.contrast,
-          gainR: internalDisplaySettings.gainR,
-          gainG: internalDisplaySettings.gainG,
-          gainB: internalDisplaySettings.gainB
-        });
+        nativeTelemetryPort.postMessage(queued);
       } catch (e) {}
     }
 
     nativeTelemetryPort.onMessage.addListener((data) => {
       if (data && !data.error) {
         lastTelemetryData = data;
+        if (data.hasProbed && Array.isArray(data.monitors)) {
+          let maskChanged = false;
+          for (const m of data.monitors) {
+            if (m && typeof m.vcpMask === 'number' && m.vcpMask >= 0) {
+              const key = m.pnpId || m.id;
+              if (key && vcpFeatureMasks[key] !== m.vcpMask) {
+                vcpFeatureMasks[key] = m.vcpMask;
+                maskChanged = true;
+              }
+            }
+          }
+          if (maskChanged) {
+            try {
+              chrome.storage?.session?.set({ vcpFeatureMasks: { ...vcpFeatureMasks } })?.catch?.(() => {});
+            } catch {}
+          }
+        }
       }
 
       // Live dispatches remain immediate at 0ms latency

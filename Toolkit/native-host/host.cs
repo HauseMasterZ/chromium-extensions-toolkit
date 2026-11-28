@@ -1141,6 +1141,7 @@ public static class MonitorController {
         public int strobing;
         public int mprt;
         public int freeSync;
+        public int vcpMask = -1;
     }
 
     public class BoundPhysicalMonitor {
@@ -1167,20 +1168,32 @@ public static class MonitorController {
         public int rGain = -1, gGain = -1, bGain = -1;
         public int preset = -1;
         public int input = -1, strobing = -1, mprt = -1, od = -1, fs = -1;
+        public int vcpMask = -1;
         public string friendlyName;
     }
+
+    public const int VCP_MASK_COLOR_PRESET = 1 << 0;
+    public const int VCP_MASK_RGB_GAINS = 1 << 1;
+    public const int VCP_MASK_INPUT_SOURCE = 1 << 2;
+    public const int VCP_MASK_FREESYNC = 1 << 3;
+    public const int VCP_MASK_VRB_E5 = 1 << 4;
+    public const int VCP_MASK_VRB_EF = 1 << 5;
+    public const int VCP_MASK_OVERDRIVE = 1 << 6;
 
     public static volatile bool IsRunning = true;
     public static volatile bool HasProbed = false;
     public static volatile bool IsProbing = false;
     public static volatile bool ProbePending = false;
     public static volatile bool ForceRebindPending = false;
+    public static volatile bool ForceFullVcpDiscovery = false;
     public static volatile int PendingProbeId = 0;
     public static volatile int CompletedProbeId = 0;
     public static readonly AutoResetEvent WakeSignal = new AutoResetEvent(false);
+    public static readonly ManualResetEvent ProbeReadyEvent = new ManualResetEvent(false);
     public static List<DisplayDeviceItem> CurrentMonitors = new List<DisplayDeviceItem>();
     public static List<BoundPhysicalMonitor> BoundMonitors = new List<BoundPhysicalMonitor>();
     public static Dictionary<string, string> SavedFriendlyNames = new Dictionary<string, string>();
+    public static Dictionary<string, int> SavedVcpMasks = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
     public static string SavedInternalPnpId = null;
     public static object SyncLock = new object();
     public static readonly object ProbeLock = new object();
@@ -1665,7 +1678,7 @@ public static class MonitorController {
         return ddcOk;
     }
 
-    public static void ReadTelemetryFeatures(Dictionary<string, string> friendlyNames) {
+    public static void ReadTelemetryFeatures(Dictionary<string, string> friendlyNames, bool forceFullDiscovery = false) {
         List<BoundPhysicalMonitor> snapshot;
         lock (SyncLock) {
             snapshot = new List<BoundPhysicalMonitor>(BoundMonitors);
@@ -1695,6 +1708,7 @@ public static class MonitorController {
                     if (QueryLcdBrightness(out curLcd) == 0) {
                         u.curLcd = curLcd;
                     }
+                    u.vcpMask = 0;
                 });
                 intT.IsBackground = true;
                 intT.Start();
@@ -1709,8 +1723,9 @@ public static class MonitorController {
                 bool hasContrast = false; uint contrastCur = 0, contrastMax = 0;
                 bool hasPreset = false; uint presetCur = 0, presetMax = 0;
                 bool hasPrev = false; uint prevCur = 0, prevMax = 0;
+                int discoveredMask = 0;
 
-                // 1. Empirical Brightness
+                // 1. Empirical Brightness (always probed first; gives stdin init message time to hydrate VCP mask cache)
                 if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x10, out pvct, out vCur, out vMax)) {
                     u.brightVal = (int)vCur;
                     hasBright = true; brightCur = vCur; brightMax = vMax;
@@ -1721,36 +1736,57 @@ public static class MonitorController {
                     hasPrev = true; prevCur = hlCur; prevMax = hlMax;
                 }
 
+                int cachedMask = -1;
+                if (!forceFullDiscovery) {
+                    lock (SyncLock) {
+                        string cacheKey = !string.IsNullOrEmpty(bound.pnpId) ? bound.pnpId : bound.id;
+                        int foundMask;
+                        if (!string.IsNullOrEmpty(cacheKey) && SavedVcpMasks.TryGetValue(cacheKey, out foundMask) && foundMask >= 0) {
+                            cachedMask = foundMask;
+                        }
+                    }
+                }
+                bool hasMask = (cachedMask >= 0);
+
                 // 2. Empirical Color Preset
-                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x14, out pvct, out vCur, out vMax)) {
-                    u.preset = (int)vCur;
-                    hasPreset = true; presetCur = vCur; presetMax = vMax;
-                    hasPrev = true; prevCur = vCur; prevMax = vMax;
+                if (!hasMask || (cachedMask & VCP_MASK_COLOR_PRESET) != 0) {
+                    if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x14, out pvct, out vCur, out vMax)) {
+                        u.preset = (int)vCur;
+                        discoveredMask |= VCP_MASK_COLOR_PRESET;
+                        hasPreset = true; presetCur = vCur; presetMax = vMax;
+                        hasPrev = true; prevCur = vCur; prevMax = vMax;
+                    }
                 }
 
                 // 3. Empirical RGB Gains when User/Custom mode active (or preset unavailable)
-                if (u.preset == 11 || u.preset == 12 || u.preset < 0) {
+                if ((!hasMask || (cachedMask & VCP_MASK_COLOR_PRESET) != 0) && (u.preset == 11 || u.preset == 12 || u.preset < 0)) {
                     if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x16, out pvct, out vCur, out vMax)) {
                         u.rGain = (int)vCur;
+                        discoveredMask |= VCP_MASK_RGB_GAINS;
                         hasPrev = true; prevCur = vCur; prevMax = vMax;
                     } else if (GetMonitorRedGreenOrBlueGain(hPhys, 0, out hlMin, out hlCur, out hlMax)) {
                         u.rGain = (int)hlCur;
+                        discoveredMask |= VCP_MASK_RGB_GAINS;
                         hasPrev = true; prevCur = hlCur; prevMax = hlMax;
                     }
 
                     if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x18, out pvct, out vCur, out vMax)) {
                         u.gGain = (int)vCur;
+                        discoveredMask |= VCP_MASK_RGB_GAINS;
                         hasPrev = true; prevCur = vCur; prevMax = vMax;
                     } else if (GetMonitorRedGreenOrBlueGain(hPhys, 1, out hlMin, out hlCur, out hlMax)) {
                         u.gGain = (int)hlCur;
+                        discoveredMask |= VCP_MASK_RGB_GAINS;
                         hasPrev = true; prevCur = hlCur; prevMax = hlMax;
                     }
 
                     if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x1A, out pvct, out vCur, out vMax)) {
                         u.bGain = (int)vCur;
+                        discoveredMask |= VCP_MASK_RGB_GAINS;
                         hasPrev = true; prevCur = vCur; prevMax = vMax;
                     } else if (GetMonitorRedGreenOrBlueGain(hPhys, 2, out hlMin, out hlCur, out hlMax)) {
                         u.bGain = (int)hlCur;
+                        discoveredMask |= VCP_MASK_RGB_GAINS;
                         hasPrev = true; prevCur = hlCur; prevMax = hlMax;
                     }
                 }
@@ -1762,22 +1798,28 @@ public static class MonitorController {
 
                 // 4. Input Source (0x60) & FreeSync (0xEA): defer echo disambiguation to the mandatory 0x12 Contrast read
                 bool suspectInput = false;
-                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x60, out pvct, out vCur, out vMax)) {
-                    if (hasPrev && vCur == prevCur && vMax == prevMax) {
-                        suspectInput = true;
-                    } else {
-                        u.input = (int)vCur;
-                        hasPrev = true; prevCur = vCur; prevMax = vMax;
+                if (!hasMask || (cachedMask & VCP_MASK_INPUT_SOURCE) != 0) {
+                    if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0x60, out pvct, out vCur, out vMax)) {
+                        if (hasPrev && vCur == prevCur && vMax == prevMax) {
+                            suspectInput = true;
+                        } else {
+                            u.input = (int)vCur;
+                            discoveredMask |= VCP_MASK_INPUT_SOURCE;
+                            hasPrev = true; prevCur = vCur; prevMax = vMax;
+                        }
                     }
                 }
 
                 bool suspectEa = false;
-                if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xEA, out pvct, out vCur, out vMax)) {
-                    if (hasPrev && vCur == prevCur && vMax == prevMax) {
-                        suspectEa = true;
-                    } else {
-                        u.fs = (int)vCur;
-                        hasPrev = true; prevCur = vCur; prevMax = vMax;
+                if (!hasMask || (cachedMask & VCP_MASK_FREESYNC) != 0) {
+                    if (GetVCPFeatureAndVCPFeatureReply(hPhys, 0xEA, out pvct, out vCur, out vMax)) {
+                        if (hasPrev && vCur == prevCur && vMax == prevMax) {
+                            suspectEa = true;
+                        } else {
+                            u.fs = (int)vCur;
+                            discoveredMask |= VCP_MASK_FREESYNC;
+                            hasPrev = true; prevCur = vCur; prevMax = vMax;
+                        }
                     }
                 }
 
@@ -1795,6 +1837,7 @@ public static class MonitorController {
                 if (suspectInput && hasPrev && GetVCPFeatureAndVCPFeatureReply(hPhys, 0x60, out pvct, out vCur, out vMax)) {
                     if (!(vCur == prevCur && vMax == prevMax)) {
                         u.input = (int)vCur;
+                        discoveredMask |= VCP_MASK_INPUT_SOURCE;
                         prevCur = vCur; prevMax = vMax;
                     }
                 }
@@ -1802,6 +1845,7 @@ public static class MonitorController {
                 if (suspectEa && hasPrev && GetVCPFeatureAndVCPFeatureReply(hPhys, 0xEA, out pvct, out vCur, out vMax)) {
                     if (!(vCur == prevCur && vMax == prevMax)) {
                         u.fs = (int)vCur;
+                        discoveredMask |= VCP_MASK_FREESYNC;
                         prevCur = vCur; prevMax = vMax;
                     }
                 }
@@ -1842,19 +1886,33 @@ public static class MonitorController {
                 };
 
                 // 6. Strobing/VRB (0xE5 or 0xEF) & Overdrive (0xE8)
-                int strVal = readVerifiedVcp(0xE5);
-                if (strVal < 0) {
+                int strVal = -1;
+                if (!hasMask || (cachedMask & VCP_MASK_VRB_E5) != 0) {
+                    strVal = readVerifiedVcp(0xE5);
+                    if (strVal >= 0) {
+                        discoveredMask |= VCP_MASK_VRB_E5;
+                    }
+                }
+                if (strVal < 0 && (!hasMask || (cachedMask & VCP_MASK_VRB_EF) != 0)) {
                     strVal = readVerifiedVcp(0xEF);
+                    if (strVal >= 0) {
+                        discoveredMask |= VCP_MASK_VRB_EF;
+                    }
                 }
                 if (strVal >= 0) {
                     u.strobing = strVal;
                     u.mprt = strVal;
                 }
 
-                int odVal = readVerifiedVcp(0xE8);
-                if (odVal >= 0) {
-                    u.od = odVal;
+                if (!hasMask || (cachedMask & VCP_MASK_OVERDRIVE) != 0) {
+                    int odVal = readVerifiedVcp(0xE8);
+                    if (odVal >= 0) {
+                        u.od = odVal;
+                        discoveredMask |= VCP_MASK_OVERDRIVE;
+                    }
                 }
+
+                u.vcpMask = discoveredMask;
             });
             extT.IsBackground = true;
             extT.Start();
@@ -1878,6 +1936,15 @@ public static class MonitorController {
                             CurrentMonitors[j].name = u.friendlyName;
                             if (!string.IsNullOrEmpty(CurrentMonitors[j].pnpId)) {
                                 SavedFriendlyNames[CurrentMonitors[j].pnpId] = u.friendlyName;
+                            }
+                        }
+                        if (u.vcpMask >= 0) {
+                            CurrentMonitors[j].vcpMask = u.vcpMask;
+                            if (!u.isInternal) {
+                                string cacheKey = !string.IsNullOrEmpty(CurrentMonitors[j].pnpId) ? CurrentMonitors[j].pnpId : CurrentMonitors[j].id;
+                                if (!string.IsNullOrEmpty(cacheKey)) {
+                                    SavedVcpMasks[cacheKey] = u.vcpMask;
+                                }
                             }
                         }
                         if (u.isInternal) {
@@ -1908,13 +1975,17 @@ public static class MonitorController {
             }
             HasProbed = true;
         }
+        ProbeReadyEvent.Set();
         WakeSignal.Set();
     }
 
     public static void RequestEmpiricalProbe(int probeId = 0, bool forceRebind = false, Dictionary<string, string> friendlyNames = null) {
         lock (SyncLock) {
             if (probeId > PendingProbeId) PendingProbeId = probeId;
-            if (forceRebind) ForceRebindPending = true;
+            if (forceRebind) {
+                ForceRebindPending = true;
+                ForceFullVcpDiscovery = true;
+            }
             if (IsProbing) {
                 ProbePending = true;
                 return;
@@ -1926,11 +1997,14 @@ public static class MonitorController {
             try {
                 while (IsRunning) {
                     bool rebindNow = false;
+                    bool fullDiscoveryNow = false;
                     int targetProbeId = 0;
                     lock (SyncLock) {
                         ProbePending = false;
                         rebindNow = ForceRebindPending || (BoundMonitors.Count == 0);
+                        fullDiscoveryNow = ForceFullVcpDiscovery;
                         ForceRebindPending = false;
+                        ForceFullVcpDiscovery = false;
                         targetProbeId = PendingProbeId;
                     }
                     try {
@@ -1941,7 +2015,7 @@ public static class MonitorController {
                             }
                         }
                         if (!IsRunning) break;
-                        ReadTelemetryFeatures(friendlyNames ?? SavedFriendlyNames);
+                        ReadTelemetryFeatures(friendlyNames ?? SavedFriendlyNames, fullDiscoveryNow);
                     } catch {}
 
                     lock (SyncLock) {
@@ -1964,6 +2038,7 @@ public static class MonitorController {
                     IsProbing = false;
                     HasProbed = true;
                 }
+                ProbeReadyEvent.Set();
             }
         });
         probeThread.IsBackground = true;
@@ -2007,15 +2082,18 @@ public static class MonitorController {
                     string json = Encoding.UTF8.GetString(jsonBuf);
 
                     string action = ExtractJsonString(json, "action");
-                    if (action == "init_internal_display" || action == "set_internal_calibration") {
-                        int c = ExtractJsonInt(json, "contrast", -1);
-                        int r = ExtractJsonInt(json, "gainR", -1);
-                        if (r < 0) r = ExtractJsonInt(json, "gain_r", -1);
-                        int g = ExtractJsonInt(json, "gainG", -1);
-                        if (g < 0) g = ExtractJsonInt(json, "gain_g", -1);
-                        int b = ExtractJsonInt(json, "gainB", -1);
-                        if (b < 0) b = ExtractJsonInt(json, "gain_b", -1);
-                        SetInternalDisplayCalibration(c, r, g, b);
+                    if (action == "init_internal_display" || action == "set_internal_calibration" || action == "set_vcp_cache") {
+                        ApplyVcpMasksFromJson(json);
+                        if (action != "set_vcp_cache") {
+                            int c = ExtractJsonInt(json, "contrast", -1);
+                            int r = ExtractJsonInt(json, "gainR", -1);
+                            if (r < 0) r = ExtractJsonInt(json, "gain_r", -1);
+                            int g = ExtractJsonInt(json, "gainG", -1);
+                            if (g < 0) g = ExtractJsonInt(json, "gain_g", -1);
+                            int b = ExtractJsonInt(json, "gainB", -1);
+                            if (b < 0) b = ExtractJsonInt(json, "gain_b", -1);
+                            SetInternalDisplayCalibration(c, r, g, b);
+                        }
                     } else if (action == "set_panel_control") {
                         string monId = ExtractJsonString(json, "monitorId");
                         string pnpId = ExtractJsonString(json, "pnpId");
@@ -2035,6 +2113,7 @@ public static class MonitorController {
                     } else if (action == "wake" || action == "poll_now") {
                         WakeSignal.Set();
                     } else if (action == "probe_monitors" || action == "refresh_monitors" || action == "fetch_empirical") {
+                        ApplyVcpMasksFromJson(json);
                         int c = ExtractJsonInt(json, "contrast", -1);
                         int r = ExtractJsonInt(json, "gainR", -1);
                         if (r < 0) r = ExtractJsonInt(json, "gain_r", -1);
@@ -2053,6 +2132,7 @@ public static class MonitorController {
             } catch {}
             finally {
                 IsRunning = false;
+                ProbeReadyEvent.Set();
                 WakeSignal.Set();
             }
         });
@@ -2179,6 +2259,45 @@ public static class MonitorController {
         return defaultVal;
     }
 
+    public static void ApplyVcpMasksFromJson(string json) {
+        if (string.IsNullOrEmpty(json)) return;
+        string search = "\"vcpMasks\"";
+        int idx = json.IndexOf(search);
+        if (idx < 0) return;
+        int braceStart = json.IndexOf('{', idx + search.Length);
+        if (braceStart < 0) return;
+        int braceEnd = json.IndexOf('}', braceStart + 1);
+        if (braceEnd <= braceStart) return;
+        string body = json.Substring(braceStart + 1, braceEnd - braceStart - 1);
+        var parsed = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        int i = 0;
+        while (i < body.Length) {
+            int q1 = body.IndexOf('"', i);
+            if (q1 < 0) break;
+            int q2 = body.IndexOf('"', q1 + 1);
+            if (q2 < 0) break;
+            string mapKey = body.Substring(q1 + 1, q2 - q1 - 1).Trim();
+            int colon = body.IndexOf(':', q2 + 1);
+            if (colon < 0) break;
+            int valStart = colon + 1;
+            while (valStart < body.Length && (body[valStart] == ' ' || body[valStart] == '\t' || body[valStart] == '\r' || body[valStart] == '\n')) valStart++;
+            int valEnd = valStart;
+            while (valEnd < body.Length && (char.IsDigit(body[valEnd]) || body[valEnd] == '-')) valEnd++;
+            int v;
+            if (!string.IsNullOrEmpty(mapKey) && valEnd > valStart && int.TryParse(body.Substring(valStart, valEnd - valStart), out v) && v >= 0) {
+                parsed[mapKey] = v;
+            }
+            i = (valEnd > q2) ? valEnd : (q2 + 1);
+        }
+        if (parsed.Count > 0) {
+            lock (SyncLock) {
+                foreach (var kvp in parsed) {
+                    SavedVcpMasks[kvp.Key] = kvp.Value;
+                }
+            }
+        }
+    }
+
     public static string BuildTelemetryJson(
         string timestamp, int cpuClock, int cpuLoad, string peClock, double cpuPower, int cpuTemp,
         double igpuPower, string igpuRam, int cpuLimit, string ramUsed, string pageUsed, string commitUsed,
@@ -2248,7 +2367,8 @@ public static class MonitorController {
                     sb.Append("\"freeSync\":").Append(m.freeSync).Append(',');
                     sb.Append("\"gameMode\":-1,");
                     sb.Append("\"superSharpness\":-1,");
-                    sb.Append("\"blueLight\":-1");
+                    sb.Append("\"blueLight\":-1,");
+                    sb.Append("\"vcpMask\":").Append(m.vcpMask);
                     sb.Append('}');
                 }
             }
@@ -2375,6 +2495,8 @@ public class Program {
         bool emiFallbackChecked = false;
 
         try {
+            MonitorController.ProbeReadyEvent.WaitOne();
+            MonitorController.WakeSignal.Reset();
             while (MonitorController.IsRunning) {
                 if (parentObj != null && parentObj.HasExited) {
                     MonitorController.IsRunning = false;
