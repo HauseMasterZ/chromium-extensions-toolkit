@@ -33,8 +33,15 @@ jobs:
           $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
           if (-not (Test-Path $vcvars)) { throw "vcvars64.bat not found at $vcvars" }
 
-          $compileArgs = "`"$vcvars`" && cl.exe /nologo /O2 /EHsc /MT /std:c++17 /W3 Toolkit\native-host\host.cpp /Fe:Toolkit\native-host\host.exe user32.lib gdi32.lib dxva2.lib setupapi.lib psapi.lib pdh.lib advapi32.lib ole32.lib oleaut32.lib wbemuuid.lib kernel32.lib"
-          & cmd.exe /s /c "`"$compileArgs`""
+          $buildCmd = Join-Path $env:RUNNER_TEMP "build_host.cmd"
+          $objPath = Join-Path $env:RUNNER_TEMP "host.obj"
+          @(
+            "@echo off"
+            "call `"$vcvars`""
+            "if errorlevel 1 exit /b %errorlevel%"
+            "cl.exe /nologo /O2 /EHsc /MT /std:c++17 /W3 Toolkit\native-host\host.cpp `"/Fo:$objPath`" /Fe:Toolkit\native-host\host.exe user32.lib gdi32.lib dxva2.lib setupapi.lib psapi.lib pdh.lib advapi32.lib ole32.lib oleaut32.lib wbemuuid.lib kernel32.lib"
+          ) | Set-Content -Path $buildCmd -Encoding ASCII
+          & cmd.exe /c $buildCmd
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           # Smoke check: verify native binary starts and exits cleanly on immediate EOF stdin
