@@ -1,13 +1,36 @@
 (() => {
-const openTabs = (urls, updateFirst = false) => {
-    if (updateFirst) chrome.tabs.update({ url: urls[0] });
-    else chrome.tabs.create({ url: urls[0] });
-    urls.slice(1).forEach(url => chrome.tabs.create({ url }));
+const openTabGroup = (focusUrl, tabs) => {
+    chrome.runtime.sendMessage(
+        { action: 'open_tab_group', focusUrl, tabs },
+        () => {
+            if (chrome.runtime.lastError) return;
+        }
+    );
 };
 
-document.getElementById('link-l').addEventListener('click', () => openTabs(['https://discord.com/channels/@me', 'https://music.youtube.com/', 'https://photos.google.com/u/1/?pli=1']));
-document.getElementById('link-m').addEventListener('click', () => openTabs(['https://mail.google.com/mail/u/0/#inbox', 'https://reddit.com', 'https://app.notesnook.com/notes'], true));
-document.getElementById('link-r').addEventListener('click', () => openTabs(['https://web.whatsapp.com', 'https://gemini.google.com/u/1/app?pageId=none'], true));
+document.getElementById('link-l').addEventListener('click', () => openTabGroup(
+    'https://music.hausemaster.tech/',
+    [
+        { url: 'https://discord.com/channels/@me', sleep: true },
+        { url: 'https://app.notesnook.com/notes', sleep: true },
+        { url: 'https://web.whatsapp.com/', sleep: true },
+        { url: 'https://web.telegram.org/', sleep: true }
+    ]
+));
+document.getElementById('link-m').addEventListener('click', () => openTabGroup(
+    'https://mail.google.com/mail/u/0/#inbox',
+    [
+        { url: 'https://mail.google.com/mail/u/2/#inbox', sleep: false },
+        { url: 'https://github.com/HauseMasterZ?tab=repositories', sleep: true }
+    ]
+));
+document.getElementById('link-r').addEventListener('click', () => openTabGroup(
+    'https://antigravity.google.com/',
+    [
+        { url: 'https://gemini.google.com/', sleep: true },
+        { url: 'https://chatgpt.com/', sleep: true }
+    ]
+));
 
 // Time and Weather Logic
 const timeEl = document.getElementById('time');

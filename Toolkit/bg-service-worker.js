@@ -1394,6 +1394,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         } catch {}
       });
       return true;
+    case 'open_tab_group':
+      openTabGroup(msg, sender)
+        .then(() => {
+          try { sendResponse({ success: true }); } catch {}
+        })
+        .catch(() => {
+          try { sendResponse({ success: false }); } catch {}
+        });
+      return true;
     case 'stop_telemetry_immediate':
       cancelHostTeardown();
       for (const client of telemetryClients) {
@@ -1404,6 +1413,80 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ success: true });
       break;
   }
+});
+
+// Track newly created background tabs awaiting URL commit before immediate discard
+const pendingSleepTabIds = new Set();
+
+function isCommittedSleepCandidate(tab) {
+  return (
+    Boolean(tab) &&
+    !tab.active &&
+    !tab.discarded &&
+    !tab.pendingUrl &&
+    typeof tab.url === 'string' &&
+    /^https?:\/\//i.test(tab.url)
+  );
+}
+
+async function openTabGroup(message, sender) {
+  const focusUrl = typeof message?.focusUrl === 'string' ? message.focusUrl : '';
+  const entries = Array.isArray(message?.tabs) ? message.tabs : [];
+  const senderTab = sender && sender.tab && sender.tab.id != null ? sender.tab : null;
+  const baseIndex = senderTab && typeof senderTab.index === 'number' ? senderTab.index : null;
+  const windowId = senderTab && senderTab.windowId != null ? senderTab.windowId : undefined;
+
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (!entry || typeof entry.url !== 'string' || !entry.url) continue;
+    const createProps = { url: entry.url, active: false };
+    if (windowId !== undefined) createProps.windowId = windowId;
+    if (baseIndex !== null) createProps.index = baseIndex + 1 + i;
+
+    const created = await chrome.tabs.create(createProps);
+    if (entry.sleep && created && created.id != null) {
+      pendingSleepTabIds.add(created.id);
+      const latest = await chrome.tabs.get(created.id).catch(() => created);
+      if (isCommittedSleepCandidate(latest)) {
+        pendingSleepTabIds.delete(created.id);
+        chrome.tabs.discard(created.id).catch(() => {});
+      }
+    }
+  }
+
+  if (focusUrl) {
+    if (senderTab) {
+      await chrome.tabs.update(senderTab.id, { url: focusUrl, active: true });
+    } else {
+      await chrome.tabs.create({ url: focusUrl, active: true });
+    }
+  }
+}
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (!pendingSleepTabIds.has(tabId)) return;
+  if (tab && tab.active) {
+    pendingSleepTabIds.delete(tabId);
+    return;
+  }
+  if (isCommittedSleepCandidate(tab)) {
+    pendingSleepTabIds.delete(tabId);
+    chrome.tabs.discard(tabId).catch(() => {});
+    return;
+  }
+  if (changeInfo && changeInfo.status === 'complete') {
+    pendingSleepTabIds.delete(tabId);
+  }
+});
+
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  if (activeInfo && activeInfo.tabId != null) {
+    pendingSleepTabIds.delete(activeInfo.tabId);
+  }
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  pendingSleepTabIds.delete(tabId);
 });
 
 const GATEWAY_PARAM_NAMES = ['q', 'url', 'dest', 'destination', 'target', 'u', 'redirect_uri', 'r', 'z', 'link'];
