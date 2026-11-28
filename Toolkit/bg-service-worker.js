@@ -1432,33 +1432,50 @@ function isCommittedSleepCandidate(tab) {
 async function openTabGroup(message, sender) {
   const focusUrl = typeof message?.focusUrl === 'string' ? message.focusUrl : '';
   const entries = Array.isArray(message?.tabs) ? message.tabs : [];
-  const senderTab = sender && sender.tab && sender.tab.id != null ? sender.tab : null;
-  const baseIndex = senderTab && typeof senderTab.index === 'number' ? senderTab.index : null;
+  const senderTabId = sender && sender.tab && sender.tab.id != null ? sender.tab.id : null;
+  const senderTab = senderTabId != null
+    ? await chrome.tabs.get(senderTabId).catch(() => sender.tab)
+    : null;
   const windowId = senderTab && senderTab.windowId != null ? senderTab.windowId : undefined;
+  let fallbackIndex = senderTab && typeof senderTab.index === 'number' ? senderTab.index : null;
 
+  const plannedTabs = [];
+  if (focusUrl) {
+    plannedTabs.push({ url: focusUrl, active: true, sleep: false });
+  }
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
     if (!entry || typeof entry.url !== 'string' || !entry.url) continue;
-    const createProps = { url: entry.url, active: false };
+    plannedTabs.push({
+      url: entry.url,
+      active: false,
+      sleep: Boolean(entry.sleep)
+    });
+  }
+
+  for (let i = 0; i < plannedTabs.length; i++) {
+    const item = plannedTabs[i];
+    const createProps = { url: item.url, active: item.active };
     if (windowId !== undefined) createProps.windowId = windowId;
-    if (baseIndex !== null) createProps.index = baseIndex + 1 + i;
+    if (senderTabId != null) {
+      const currentSender = await chrome.tabs.get(senderTabId).catch(() => null);
+      if (currentSender && typeof currentSender.index === 'number') {
+        createProps.index = currentSender.index;
+        fallbackIndex = currentSender.index + 1;
+      } else if (fallbackIndex !== null) {
+        createProps.index = fallbackIndex;
+        fallbackIndex += 1;
+      }
+    }
 
     const created = await chrome.tabs.create(createProps);
-    if (entry.sleep && created && created.id != null) {
+    if (item.sleep && created && created.id != null) {
       pendingSleepTabIds.add(created.id);
       const latest = await chrome.tabs.get(created.id).catch(() => created);
       if (isCommittedSleepCandidate(latest)) {
         pendingSleepTabIds.delete(created.id);
         chrome.tabs.discard(created.id).catch(() => {});
       }
-    }
-  }
-
-  if (focusUrl) {
-    if (senderTab) {
-      await chrome.tabs.update(senderTab.id, { url: focusUrl, active: true });
-    } else {
-      await chrome.tabs.create({ url: focusUrl, active: true });
     }
   }
 }
