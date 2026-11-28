@@ -28,6 +28,6 @@ Into single bundle
 To enable hardware telemetry and DDC/CI monitor panel controls on the New Tab page:
 
 1. Navigate to `Toolkit/native-host/`.
-2. Run `install-host.bat` (or execute `setup-host.ps1` in PowerShell).
+2. Execute `setup-host.ps1` in PowerShell (`powershell -ExecutionPolicy Bypass -File .\setup-host.ps1`).
 
 The installer will automatically pair your extension ID, configure the native host manifest with your local path, and register the native messaging host in the Windows Registry for Google Chrome and Chromium.
