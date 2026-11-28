@@ -41,8 +41,15 @@ jobs:
             "if errorlevel 1 exit /b %errorlevel%"
             "cl.exe /nologo /O2 /EHsc /MT /std:c++17 /W3 Toolkit\native-host\host.cpp `"/Fo:$objPath`" /Fe:Toolkit\native-host\host.exe user32.lib gdi32.lib dxva2.lib setupapi.lib psapi.lib pdh.lib advapi32.lib ole32.lib oleaut32.lib wbemuuid.lib kernel32.lib"
           ) | Set-Content -Path $buildCmd -Encoding ASCII
-          & cmd.exe /c $buildCmd
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $buildOut = & cmd.exe /c $buildCmd 2>&1
+          $exitCode = $LASTEXITCODE
+          $buildOut | ForEach-Object {
+            Write-Host $_
+            if ($_ -match 'error\s+[A-Z]+\d+:') {
+              Write-Host "::error::$_"
+            }
+          }
+          if ($exitCode -ne 0) { exit $exitCode }
 
           # Smoke check: verify native binary starts and exits cleanly on immediate EOF stdin
           $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -55,9 +62,11 @@ jobs:
           $proc.StandardInput.Close()
           if (-not $proc.WaitForExit(10000)) {
             $proc.Kill()
+            Write-Host "::error::Smoke check timed out waiting for host.exe EOF exit"
             throw "Smoke check timed out waiting for host.exe EOF exit"
           }
           if ($proc.ExitCode -ne 0) {
+            Write-Host "::error::Smoke check failed with exit code $($proc.ExitCode)"
             throw "Smoke check failed with exit code $($proc.ExitCode)"
           }
           Write-Host "Built and verified native C++ host.exe ($((Get-Item 'Toolkit\native-host\host.exe').Length) bytes)"

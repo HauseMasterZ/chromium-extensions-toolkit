@@ -1,7 +1,13 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
+#define _CRT_SECURE_NO_WARNINGS
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0A00
+#endif
 
 #include <windows.h>
+#include <objbase.h>
+#include <oleauto.h>
 #include <setupapi.h>
 #include <physicalmonitorenumerationapi.h>
 #include <highlevelmonitorconfigurationapi.h>
@@ -265,10 +271,11 @@ NvmlGetThrottleFn GetClocksThrottleReasons = nullptr;
 std::atomic<bool> IsReady{false};
 void* DeviceHandle = nullptr;
 HANDLE ReadyEvent = nullptr;
+std::thread InitThread;
 
 void StartInitAsync() {
     if (!ReadyEvent) ReadyEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    std::thread([]() {
+    InitThread = std::thread([]() {
         HMODULE hMod = LoadLibraryW(L"nvml.dll");
         if (hMod) {
             auto pInit = (NvmlInitFn)GetProcAddress(hMod, "nvmlInit_v2");
@@ -292,7 +299,11 @@ void StartInitAsync() {
             }
         }
         SetEvent(ReadyEvent);
-    }).detach();
+    });
+}
+
+void WaitShutdown() {
+    if (InitThread.joinable()) InitThread.join();
 }
 
 } // namespace NvmlHost
@@ -320,10 +331,11 @@ uint64_t PrevPkgEnergy = 0;
 uint64_t PrevPkgTime = 0;
 uint64_t PrevPp1Energy = 0;
 uint64_t PrevPp1Time = 0;
+std::thread InitThread;
 
 void StartInitAsync() {
     if (!ReadyEvent) ReadyEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    std::thread([]() {
+    InitThread = std::thread([]() {
         GUID emiGuid = { 0x45BD8344, 0x7ED6, 0x49CF, { 0xA4, 0x40, 0xC2, 0x76, 0xC9, 0x33, 0xB0, 0x53 } };
         HDEVINFO devInfo = SetupDiGetClassDevsW(&emiGuid, nullptr, nullptr, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
         if (devInfo != INVALID_HANDLE_VALUE) {
@@ -404,7 +416,7 @@ void StartInitAsync() {
             SetupDiDestroyDeviceInfoList(devInfo);
         }
         SetEvent(ReadyEvent);
-    }).detach();
+    });
 }
 
 bool Sample(double& pkgWatts, double& igpuWatts) {
@@ -441,6 +453,7 @@ bool Sample(double& pkgWatts, double& igpuWatts) {
 }
 
 void Shutdown() {
+    if (InitThread.joinable()) InitThread.join();
     std::lock_guard<std::mutex> lock(EmiMutex);
     IsReady.store(false);
     if (DeviceHandle != INVALID_HANDLE_VALUE) {
@@ -825,6 +838,8 @@ std::unordered_map<std::string, std::string> EdidNameCache;
 std::string SavedInternalPnpId;
 std::mutex SyncMutex;
 std::mutex ProbeMutex;
+std::thread ProbeThread;
+std::thread StdinThread;
 
 int internalContrast = 50;
 int internalGainR = 50;
@@ -1808,7 +1823,9 @@ void RequestEmpiricalProbe(int probeId = 0, bool forceRebind = false) {
         IsProbing.store(true);
     }
 
-    std::thread([]() {
+    if (ProbeThread.joinable()) ProbeThread.join();
+
+    ProbeThread = std::thread([]() {
         while (IsRunning.load()) {
             bool rebindNow = false;
             bool fullDiscNow = false;
@@ -1850,7 +1867,7 @@ void RequestEmpiricalProbe(int probeId = 0, bool forceRebind = false) {
             HasProbed.store(true);
         }
         if (ProbeReadyEvent) SetEvent(ProbeReadyEvent);
-    }).detach();
+    });
 }
 
 void ApplyVcpMasksFromJson(const std::string& json) {
@@ -1907,7 +1924,7 @@ bool ReadExactStdin(HANDLE hIn, void* buf, DWORD count) {
 }
 
 void StartWorker() {
-    std::thread([]() {
+    StdinThread = std::thread([]() {
         HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
         uint8_t lenBuf[4]{};
         bool isFirstPacket = true;
@@ -1977,9 +1994,19 @@ void StartWorker() {
         IsRunning.store(false);
         if (ProbeReadyEvent) SetEvent(ProbeReadyEvent);
         if (WakeSignal) SetEvent(WakeSignal);
-    }).detach();
+    });
 
     RequestEmpiricalProbe(0, false);
+}
+
+void JoinWorkerThreads() {
+    if (StdinThread.joinable()) {
+        CancelSynchronousIo(reinterpret_cast<HANDLE>(StdinThread.native_handle()));
+        StdinThread.join();
+    }
+    if (ProbeThread.joinable()) {
+        ProbeThread.join();
+    }
 }
 
 struct CT_PROCESSOR_POWER_INFORMATION {
@@ -2258,7 +2285,7 @@ int main() {
     }
     EmiHost::StartInitAsync();
 
-    std::thread([]() { D3dKmtHost::Init(); }).detach();
+    std::thread d3dInitThread([]() { D3dKmtHost::Init(); });
 
     HANDLE hParent = nullptr;
     int parentPid = MonitorController::GetParentProcessId();
@@ -2518,6 +2545,8 @@ int main() {
     }
 
     MonitorController::IsRunning.store(false);
+    if (d3dInitThread.joinable()) d3dInitThread.join();
+    MonitorController::JoinWorkerThreads();
     {
         std::lock_guard<std::mutex> lock(MonitorController::SyncMutex);
         MonitorController::ReleaseBoundMonitorsLocked();
@@ -2525,6 +2554,7 @@ int main() {
     EmiHost::Shutdown();
     D3dKmtHost::Shutdown();
     PdhHost::Shutdown();
+    NvmlHost::WaitShutdown();
     if (hParent) CloseHandle(hParent);
     if (NvmlHost::IsReady.load() && NvmlHost::Shutdown) NvmlHost::Shutdown();
     if (MonitorController::WakeSignal) CloseHandle(MonitorController::WakeSignal);
