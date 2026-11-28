@@ -8,17 +8,25 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: update-deps
+  cancel-in-progress: false
+
 jobs:
   update-deps:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Fetch Latest DarkReader
         run: |
           echo "Fetching latest darkreader.min.js from jsDelivr..."
-          curl -sSL "https://cdn.jsdelivr.net/npm/darkreader/darkreader.min.js" -o Toolkit/darkreader.js.new
+          rm -f Toolkit/darkreader.js.new
+          if ! curl -fsSL "https://cdn.jsdelivr.net/npm/darkreader/darkreader.min.js" -o Toolkit/darkreader.js.new || grep -qiE '^[[:space:]]*(<!doctype|<html)' Toolkit/darkreader.js.new; then
+            echo "Warning: DarkReader download failed or returned HTML; skipping update."
+            rm -f Toolkit/darkreader.js.new
+          fi
           if [ -s Toolkit/darkreader.js.new ]; then
             mv Toolkit/darkreader.js.new Toolkit/darkreader.js
             python3 .github/scripts/sanitize-darkreader.py Toolkit/darkreader.js
@@ -30,7 +38,11 @@ jobs:
       - name: Fetch Latest ClearURLs Rules
         run: |
           echo "Fetching latest ClearURLs rules..."
-          curl -sSL "https://rules2.clearurls.xyz/data.minify.json" -o Toolkit/clearurls-rules.json.new
+          rm -f Toolkit/clearurls-rules.json.new
+          if ! curl -fsSL "https://rules2.clearurls.xyz/data.minify.json" -o Toolkit/clearurls-rules.json.new || ! python3 -c "import json, sys; data = json.load(open(sys.argv[1], 'r', encoding='utf-8')); sys.exit(0 if isinstance(data, dict) and isinstance(data.get('providers'), dict) and len(data['providers']) > 0 else 1)" Toolkit/clearurls-rules.json.new; then
+            echo "Warning: ClearURLs rules download failed or produced invalid JSON; skipping update."
+            rm -f Toolkit/clearurls-rules.json.new
+          fi
           if [ -s Toolkit/clearurls-rules.json.new ]; then
             mv Toolkit/clearurls-rules.json.new Toolkit/clearurls-rules.json
           else
@@ -41,8 +53,8 @@ jobs:
       - name: Fetch Latest Shorteners & Clickthrough Lists
         run: |
           echo "Fetching latest shorteners from HaGeZi & AdGuard CNAME clickthroughs..."
-          curl -sSL "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/urlshortener-onlydomains.txt" -o hagezi_raw.txt
-          curl -sSL "https://raw.githubusercontent.com/AdguardTeam/cname-trackers/master/data/combined_disguised_clickthroughs.txt" -o adguard_raw.txt
+          curl -fsSL "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/urlshortener-onlydomains.txt" -o hagezi_raw.txt
+          curl -fsSL "https://raw.githubusercontent.com/AdguardTeam/cname-trackers/master/data/combined_disguised_clickthroughs.txt" -o adguard_raw.txt
           python3 -c "
           import json, re, os
           domains = set()
@@ -70,18 +82,33 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Clean up any accidental root-level duplicates if present
+
+          # Clean up any accidental root-level duplicates or staging remnants if present
           git rm -f darkreader.js clearurls-rules.json shorteners-rules.json 2>/dev/null || true
-          
+          rm -f hagezi_raw.txt adguard_raw.txt Toolkit/darkreader.js.new Toolkit/clearurls-rules.json.new
+
+          target_branch="${GITHUB_REF_NAME:-main}"
           git add Toolkit/darkreader.js Toolkit/clearurls-rules.json Toolkit/shorteners-rules.json
           if git diff --staged --quiet; then
             echo "No updates detected. Repository is already up-to-date."
-            echo "has_updates=false" >> $GITHUB_OUTPUT
+            echo "has_updates=false" >> "$GITHUB_OUTPUT"
           else
             git commit -m "chore(deps): auto-update upstream dependencies [skip ci]"
-            git push
-            echo "has_updates=true" >> $GITHUB_OUTPUT
+            pushed_updates=true
+            if ! git push origin "HEAD:${target_branch}"; then
+              echo "Initial push failed; syncing with origin/${target_branch} and retrying push..."
+              if [ -f .git/shallow ]; then
+                git fetch --unshallow origin
+              fi
+              git -c rebase.autoStash=true pull --rebase origin "${target_branch}"
+              if git diff --quiet "origin/${target_branch}" HEAD; then
+                echo "Remote already contained identical dependency updates after rebase."
+                pushed_updates=false
+              else
+                git push origin "HEAD:${target_branch}"
+              fi
+            fi
+            echo "has_updates=${pushed_updates}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Package Extension & Create GitHub Release
