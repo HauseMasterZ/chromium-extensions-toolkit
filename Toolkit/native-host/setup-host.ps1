@@ -1,7 +1,6 @@
 # Setup script for CToolkit GPU Telemetry Native Messaging Host
 param(
-    [switch]$NewKey = $false,
-    [switch]$RebuildCSharp = $false
+    [switch]$NewKey = $false
 )
 
 $ErrorActionPreference = 'Stop'
@@ -14,48 +13,18 @@ Write-Host ""
 $scriptDir = $PSScriptRoot
 if (-not $scriptDir) { $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
 
-$hostBatPath = Join-Path $scriptDir "host.bat"
-$hostCsPath  = Join-Path $scriptDir "host.cs"
 $hostExePath = Join-Path $scriptDir "host.exe"
 $jsonManifestPath = Join-Path $scriptDir "com.gpu.telemetry.json"
 $extensionManifestPath = (Resolve-Path (Join-Path $scriptDir "..\manifest.json")).Path
 
-if (-not (Test-Path $hostExePath) -and -not (Test-Path $hostCsPath) -and -not (Test-Path $hostBatPath)) {
-    Write-Error "Neither host.exe, host.cs, nor host.bat found in: $scriptDir"
+if (-not (Test-Path $hostExePath)) {
+    Write-Error "Native host binary not found at: $hostExePath. Download Toolkit.zip or host.exe from GitHub Releases and place host.exe in Toolkit\native-host\."
     exit 1
 }
 
-$preserveNativeBinary = $false
-if ((Test-Path $hostExePath) -and -not $RebuildCSharp) {
-    try {
-        [void][System.Reflection.AssemblyName]::GetAssemblyName($hostExePath)
-    } catch [System.BadImageFormatException] {
-        $preserveNativeBinary = $true
-    } catch {}
-}
+Write-Host "[0/3] Using native telemetry host: $hostExePath" -ForegroundColor Green
 
-if ($preserveNativeBinary) {
-    Write-Host "[0/3] Preserving existing native C++ telemetry host: $hostExePath" -ForegroundColor Green
-} elseif (Test-Path $hostCsPath) {
-    $runtimeDir = [System.Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()
-    $cscPath = Join-Path $runtimeDir "csc.exe"
-    if (-not (Test-Path $cscPath)) {
-        $cscPath = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-    }
-    if (-not (Test-Path $cscPath)) {
-        Write-Error "Built-in .NET C# compiler (csc.exe) not found at: $cscPath"
-        exit 1
-    }
-    Write-Host "[0/3] Compiling Native C# Telemetry Host (x64)..." -ForegroundColor Yellow
-    $compileOut = & $cscPath /nologo /optimize+ /platform:x64 /target:exe /r:System.dll /r:System.Core.dll /r:System.Management.dll /out:"$hostExePath" "$hostCsPath" 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error ("Compilation of host.cs failed:`n" + ($compileOut -join "`n"))
-        exit 1
-    }
-    Write-Host "  Built native host executable: $hostExePath" -ForegroundColor Green
-}
-
-$nativeHostPath = if (Test-Path $hostExePath) { $hostExePath } else { $hostBatPath }
+$nativeHostPath = $hostExePath
 
 if (-not (Test-Path $extensionManifestPath)) {
     Write-Error "manifest.json not found at: $extensionManifestPath"

@@ -17,7 +17,7 @@
 - Never use LaTeX math notation for non-mathematical text arrows, state transitions, or UI flows.
 
 ## 5. Architectural & Feature Design Decisions (Intentional Features)
-- CPU Temperature Estimation: In `Toolkit/native-host/host.ps1`, the lumped-parameter continuous thermal observer is intentional. Do not modify or flag as unauthorized.
+- CPU Temperature Estimation: In `Toolkit/native-host/host.cpp`, the lumped-parameter continuous thermal observer is intentional. Do not modify or flag as unauthorized.
 - Remote Rules Syncing: In `Toolkit/bg-service-worker.js`, bundled fallbacks with remote GitHub sync (`syncRemoteClearUrlsRules`, `syncRemoteShortenersList`) and the daily 24-hour sync alarm are intentional.
 - Domain Exclusions: In `Toolkit/bg-service-worker.js`, hardcoded domains in `DEFAULT_PERSISTED_ORIGINS` are intentional to safeguard critical logins and personal services from data clearing.
 - Display Auto-Zoom: Display management must remain strictly resolution-agnostic by dynamically enumerating all monitors via `chrome.system.display.getInfo()`. Never hardcode display dimensions. Monitor zoom settings are managed per-display via `popup.html`, and lifecycle hooks in `Toolkit/display-zoom.js` must remain debounced and throttled.
